@@ -1,0 +1,8 @@
+{
+  "short_name": "VEND88",
+  "name": "VEND88 Dashboard",
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#1a1a2e",
+  "background_color": "#ffffff"
+}

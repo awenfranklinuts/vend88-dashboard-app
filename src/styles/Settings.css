@@ -1,0 +1,32 @@
+.settings-page h2 {
+  margin-bottom: 1rem;
+  font-size: 1.1rem;
+}
+
+.settings-list {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #e9ecef;
+}
+
+.settings-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid #eee;
+  font-size: 0.9rem;
+}
+
+.settings-item:last-child {
+  border-bottom: none;
+}
+
+.settings-value {
+  color: #888;
+}
+
+.settings-value.status-ok {
+  color: #28a745;
+  font-weight: 600;
+}

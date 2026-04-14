@@ -1,0 +1,32 @@
+=======================================
+  VEND88 Dashboard - Startup Commands
+=======================================
+
+--- FIRST TIME SETUP (run once) ---
+
+1. Install frontend dependencies:
+   npm install
+
+2. Create backend virtual environment:
+   cd backend
+   python -m venv venv
+
+3. Install backend dependencies:
+   cd backend
+   venv\Scripts\activate
+   pip install -r requirements.txt
+
+--- RUN THE APP (every time) ---
+
+Terminal 1 - Backend:
+   cd backend
+   venv\Scripts\activate
+   uvicorn main:app --reload
+
+Terminal 2 - Frontend:
+   npm start
+
+--- URLs ---
+Frontend:  http://localhost:3000
+Backend:   http://localhost:8000
+API Docs:  http://localhost:8000/docs
