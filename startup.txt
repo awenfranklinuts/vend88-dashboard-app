@@ -30,3 +30,34 @@ Terminal 2 - Frontend:
 Frontend:  http://localhost:3000
 Backend:   http://localhost:8000
 API Docs:  http://localhost:8000/docs
+
+--- RUN MOBILE APP WITH EXPO GO ---
+
+Terminal 3 - Mobile:
+   cd mobile
+   npm install
+   npx expo start --lan
+
+On iPhone (Expo Go):
+   1. Install Expo Go from App Store
+   2. Scan the QR code from terminal
+
+On Android (Expo Go):
+   1. Install Expo Go from Play Store
+   2. Scan the QR code from terminal
+
+--- MOBILE API CONFIG ---
+
+1. Find your PC LAN IP (example: 192.168.1.55)
+2. Start backend with host binding:
+   uvicorn main:app --reload --host 0.0.0.0 --port 8000
+3. In mobile terminal, set API URL before start:
+   set EXPO_PUBLIC_API_BASE_URL=http://192.168.1.55:8000/api/v1
+   npx expo start --lan
+
+Note:
+   - localhost does not work from phone unless using tunnel/proxy mode.
+   - LAN mode is recommended first for stability and speed.
+   - If LAN cannot connect, use fallback:
+     npx expo start --tunnel
+   - Login currently supports demo mode if backend auth endpoint is not available.

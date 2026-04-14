@@ -1,7 +1,15 @@
 import React from "react";
+import { useNavigate } from "react-router-dom";
 import "../styles/Settings.css";
 
 function Settings() {
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    localStorage.removeItem("authToken");
+    navigate("/login");
+  };
+
   return (
     <div className="settings-page">
       <h2>Settings</h2>
@@ -19,6 +27,10 @@ function Settings() {
           <span className="settings-value">0.1.0</span>
         </div>
       </div>
+
+      <button className="logout-button" onClick={handleLogout}>
+        Sign Out
+      </button>
     </div>
   );
 }
