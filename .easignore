@@ -1,0 +1,33 @@
+# Python virtual environments
+.venv/
+backend/venv/
+backend/__pycache__/
+backend/app/__pycache__/
+
+# Web app (not needed for mobile build)
+src/
+public/
+node_modules/
+
+# Build artifacts & caches
+.expo/
+dist/
+web-build/
+*.tsbuildinfo
+
+# Secrets & env
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+
+# Misc
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+npm-debug.*

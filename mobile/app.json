@@ -10,7 +10,10 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.vend88.dashboard"
+      "bundleIdentifier": "com.vend88.dashboard",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.vend88.dashboard",
@@ -42,10 +45,22 @@
         }
       ]
     ],
+    "updates": {
+      "url": "https://u.expo.dev/48d2236a-2993-4b6f-938b-42f2babd0776"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
-    "owner": "awen633"
+    "owner": "awen633",
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "48d2236a-2993-4b6f-938b-42f2babd0776"
+      }
+    }
   }
 }

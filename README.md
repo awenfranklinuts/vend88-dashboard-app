@@ -6,21 +6,22 @@ POS Dashboard App for Mobile — React frontend + FastAPI backend.
 
 ```
 vend88-dashboard-app/
-├── public/               # Static assets
-├── src/                  # React app (mobile-first UI)
-│   ├── components/       # Shared components (Layout, BottomNav)
-│   ├── pages/            # Page components (Dashboard, Sales, Products, Settings)
-│   ├── services/         # API client (axios)
-│   └── styles/           # CSS files
-├── backend/              # FastAPI server
+├── frontend/          # React app (mobile-first UI)
+│   ├── public/
+│   ├── src/
+│   │   ├── components/   # Shared components (Layout, BottomNav)
+│   │   ├── pages/        # Page components (Dashboard, Sales, Products, Settings)
+│   │   ├── services/     # API client (axios)
+│   │   └── styles/       # CSS files
+│   ├── .env
+│   └── package.json
+├── backend/           # FastAPI server
 │   ├── app/
 │   │   ├── routers/      # API route handlers
 │   │   └── config.py     # App settings
 │   ├── main.py
 │   ├── .env
 │   └── requirements.txt
-├── .env
-├── package.json
 └── README.md
 ```
 
@@ -42,6 +43,7 @@ API runs at **http://localhost:8000**. Docs at **http://localhost:8000/docs**.
 ### Frontend (React)
 
 ```bash
+cd frontend
 npm install
 npm start
 ```
