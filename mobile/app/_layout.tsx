@@ -9,10 +9,16 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={DefaultTheme}>
       <AuthProvider>
-        <Stack>
-          <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="login" options={{ headerShown: false }} />
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            animation: "fade",
+            animationDuration: 140,
+          }}
+        >
+          <Stack.Screen name="index" />
+          <Stack.Screen name="login" />
+          <Stack.Screen name="(tabs)" />
         </Stack>
       </AuthProvider>
       <StatusBar style="dark" />

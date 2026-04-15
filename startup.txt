@@ -25,7 +25,7 @@ Terminal 1 - Backend:
 
 Terminal 2 - Frontend:
    npm start
-
+.
 --- URLs ---
 Frontend:  http://localhost:3000
 Backend:   http://localhost:8000
@@ -61,3 +61,8 @@ Note:
    - If LAN cannot connect, use fallback:
      npx expo start --tunnel
    - Login currently supports demo mode if backend auth endpoint is not available.
+
+
+
+   demo@vend88.com 
+   vend8800
