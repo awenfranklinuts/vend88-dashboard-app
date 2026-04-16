@@ -1,0 +1,20 @@
+# Node / Expo outputs
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Local app env
+.env
+.env.*
+!.env.example
+
+# Native build artifacts
+android/
+ios/
+
+# IDE and misc
+.vscode/
+*.orig.*
+*.log
+*.tmp
