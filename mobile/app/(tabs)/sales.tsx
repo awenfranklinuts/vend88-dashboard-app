@@ -9,7 +9,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { api } from "@/src/services/api";
+import { api } from "../../src/services/api";
 
 type Sale = {
   id: number;

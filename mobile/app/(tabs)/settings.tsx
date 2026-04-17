@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useAuth } from "@/src/context/AuthContext";
-import { API_BASE_URL } from "@/src/services/api";
+import { useAuth } from "../../src/context/AuthContext";
+import { API_BASE_URL } from "../../src/services/api";
 
 export default function SettingsScreen() {
   const { signOut } = useAuth();

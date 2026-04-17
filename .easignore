@@ -7,9 +7,13 @@ backend/
 .github/
 
 # Web app (not needed for mobile build)
-src/
-public/
-node_modules/
+/src/
+/public/
+/node_modules/
+!/mobile/src/
+!/mobile/src/**
+!/mobile/app/
+!/mobile/app/**
 
 # Build artifacts & caches
 .expo/

@@ -7,7 +7,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { api } from "@/src/services/api";
+import { api } from "../../src/services/api";
 
 type Product = {
   id: number;

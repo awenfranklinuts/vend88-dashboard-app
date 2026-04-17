@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import * as SecureStore from "expo-secure-store";
-import { loginWithEmail } from "@/src/services/authService";
+import { loginWithEmail } from "../services/authService";
 
 const AUTH_TOKEN_KEY = "vend88-auth-token";
 

@@ -20,7 +20,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as LocalAuthentication from "expo-local-authentication";
 import { Accelerometer } from "expo-sensors";
-import { useAuth } from "@/src/context/AuthContext";
+import { useAuth } from "../src/context/AuthContext";
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
 
