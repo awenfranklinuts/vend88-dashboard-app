@@ -19,13 +19,13 @@ def get_dashboard_summary():
 @router.get("/dashboard/revenue-chart")
 def get_revenue_chart():
     return [
-        {"day": "Mon", "revenue": 980},
-        {"day": "Tue", "revenue": 1240},
-        {"day": "Wed", "revenue": 860},
-        {"day": "Thu", "revenue": 1520},
-        {"day": "Fri", "revenue": 1890},
-        {"day": "Sat", "revenue": 2100},
-        {"day": "Sun", "revenue": 1640},
+        {"day": "Mon", "revenue": 64},
+        {"day": "Tue", "revenue": 60},
+        {"day": "Wed", "revenue": 64},
+        {"day": "Thu", "revenue": 53},
+        {"day": "Fri", "revenue": 71},
+        {"day": "Sat", "revenue": 86},
+        {"day": "Sun", "revenue": 66},
     ]
 
 

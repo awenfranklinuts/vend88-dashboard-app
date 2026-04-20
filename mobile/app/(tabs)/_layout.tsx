@@ -1,23 +1,37 @@
 import React from "react";
-import { ActivityIndicator, View } from "react-native";
+import { View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Redirect, Tabs } from "expo-router";
-import { useAuth } from "../../src/context/AuthContext";
+import { BottomTabBarButtonProps } from "@react-navigation/bottom-tabs";
+import { PlatformPressable } from "@react-navigation/elements";
+import { useAuth } from "@/src/context/AuthContext";
+import { Skeleton } from "@/src/components/Skeleton";
+import { haptic } from "@/src/utils/haptics";
+import { BG, CARD_BORDER, GOLD, TEXT_FAINT } from "@/src/theme/tokens";
+
+function HapticTabButton(props: BottomTabBarButtonProps) {
+  return (
+    <PlatformPressable
+      {...props}
+      onPressIn={(ev) => {
+        haptic.selection();
+        props.onPressIn?.(ev);
+      }}
+    />
+  );
+}
 
 export default function TabLayout() {
   const { token, loading } = useAuth();
 
   if (loading) {
     return (
-      <View
-        style={{
-          flex: 1,
-          justifyContent: "center",
-          alignItems: "center",
-          backgroundColor: "#f4f6fb",
-        }}
-      >
-        <ActivityIndicator size="large" color="#0f4cc9" />
+      <View style={{ flex: 1, backgroundColor: BG, padding: 20, paddingTop: 80 }}>
+        <Skeleton height={28} width="40%" />
+        <View style={{ height: 16 }} />
+        <Skeleton height={90} radius={18} />
+        <View style={{ height: 10 }} />
+        <Skeleton height={90} radius={18} />
       </View>
     );
   }
@@ -30,20 +44,22 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: "#0f4cc9",
-        tabBarInactiveTintColor: "#9ca3af",
+        tabBarActiveTintColor: GOLD,
+        tabBarInactiveTintColor: TEXT_FAINT,
+        tabBarButton: (props) => <HapticTabButton {...props} />,
         tabBarStyle: {
-          height: 64,
-          paddingTop: 6,
-          paddingBottom: 10,
-          backgroundColor: "#ffffff",
+          height: 72,
+          paddingTop: 10,
+          paddingBottom: 16,
+          backgroundColor: BG,
           borderTopWidth: 1,
-          borderTopColor: "#e5e7eb",
+          borderTopColor: CARD_BORDER,
+          elevation: 0,
         },
         tabBarLabelStyle: {
           fontSize: 10,
           fontWeight: "700",
-          letterSpacing: 0.2,
+          letterSpacing: 0.3,
         },
       }}
     >
@@ -51,8 +67,8 @@ export default function TabLayout() {
         name="index"
         options={{
           title: "Dashboard",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="grid-outline" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "grid" : "grid-outline"} size={size} color={color} />
           ),
         }}
       />
@@ -60,8 +76,8 @@ export default function TabLayout() {
         name="sales"
         options={{
           title: "Sales",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="bar-chart-outline" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "bar-chart" : "bar-chart-outline"} size={size} color={color} />
           ),
         }}
       />
@@ -69,8 +85,8 @@ export default function TabLayout() {
         name="products"
         options={{
           title: "Products",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="cube-outline" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "cube" : "cube-outline"} size={size} color={color} />
           ),
         }}
       />
@@ -78,8 +94,8 @@ export default function TabLayout() {
         name="explore"
         options={{
           title: "Modules",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="apps-outline" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "apps" : "apps-outline"} size={size} color={color} />
           ),
         }}
       />
@@ -87,8 +103,8 @@ export default function TabLayout() {
         name="settings"
         options={{
           title: "Settings",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings-outline" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "settings" : "settings-outline"} size={size} color={color} />
           ),
         }}
       />

@@ -38,9 +38,9 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#181e38",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#181e38"
           }
         }
       ]
@@ -48,9 +48,7 @@
     "updates": {
       "url": "https://u.expo.dev/48d2236a-2993-4b6f-938b-42f2babd0776"
     },
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
+    "runtimeVersion": "1.0.0",
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
