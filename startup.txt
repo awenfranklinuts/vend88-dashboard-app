@@ -73,3 +73,6 @@ Note:
 
    demo@vend88.com 
    vend8800
+
+
+   npx eas build -p android --profile preview
