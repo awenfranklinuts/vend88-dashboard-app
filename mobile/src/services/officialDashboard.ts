@@ -308,7 +308,7 @@ export async function fetchOfficialMonthRevenueData(): Promise<{
   }
 
   if (!businessId) {
-    businessId = await discoverBusinessId(email, token);
+     businessId = (await discoverBusinessId(email, token)) ?? undefined;
   }
 
   if (!businessId) {

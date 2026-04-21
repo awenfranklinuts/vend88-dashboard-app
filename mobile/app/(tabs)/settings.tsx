@@ -192,7 +192,6 @@ export default function SettingsScreen() {
     haptic.selection();
     if (value && LocalAuth) {
       const result = await LocalAuth.authenticateAsync({
-        promptMessage: "Enable biometric lock",
         promptMessage: t("settings_enable_biometric"),
         disableDeviceFallback: false,
       });
