@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useI18n } from "@/src/context/I18nContext";
 import { api } from "@/src/services/api";
 import { PulsingDot } from "@/src/components/PulsingDot";
 import { Skeleton } from "@/src/components/Skeleton";
@@ -50,21 +51,27 @@ const MODULE_COLORS: Record<string, string> = {
   reports: "#06b6d4",
 };
 
-const MODULE_DESC: Record<string, string> = {
-  pos: "Point of Sale — walk-in sales & receipts",
-  kds: "Kitchen Display — manage order flow",
-  vending: "Vending Machine — unattended retail",
-  kiosk: "Self-Service Kiosk — customer ordering",
-  loyalty: "Loyalty Program — points & rewards",
-  reports: "Reports & Analytics — trends & insights",
-};
+function moduleDescription(id: string, t: (key: any) => string) {
+  const map: Record<string, string> = {
+    pos: "module_desc_pos",
+    kds: "module_desc_kds",
+    vending: "module_desc_vending",
+    kiosk: "module_desc_kiosk",
+    loyalty: "module_desc_loyalty",
+    reports: "module_desc_reports",
+  };
+  const key = map[id];
+  return key ? t(key as any) : "";
+}
 
 function ModuleCard({
   module,
   onToggle,
+  t,
 }: {
   module: Module;
   onToggle: (id: string, current: "online" | "offline") => void;
+  t: (key: any, params?: Record<string, string | number>) => string;
 }) {
   const color = MODULE_COLORS[module.id] ?? "#6b7280";
   const icon = MODULE_ICONS[module.id] ?? "apps-outline";
@@ -74,7 +81,7 @@ function ModuleCard({
     <View
       style={styles.card}
       accessible
-      accessibilityLabel={`${module.name}, ${module.status}, ${module.today_txn} transactions today`}
+      accessibilityLabel={`${module.name}, ${module.status}, ${t("modules_txns_today", { count: module.today_txn })}`}
     >
       <View style={[styles.cardIcon, { backgroundColor: color + "18" }]}>
         <Ionicons name={icon} size={24} color={color} />
@@ -86,10 +93,10 @@ function ModuleCard({
       <View style={styles.cardBody}>
         <Text style={styles.cardName}>{module.name}</Text>
         <Text style={styles.cardDesc} numberOfLines={2}>
-          {MODULE_DESC[module.id] ?? ""}
+          {moduleDescription(module.id, t)}
         </Text>
         <View style={styles.cardMeta}>
-          <Text style={styles.metaText}>{module.today_txn} txns today</Text>
+          <Text style={styles.metaText}>{t("modules_txns_today", { count: module.today_txn })}</Text>
           <Text style={[styles.metaText, { marginLeft: 12 }]}>
             ${(module.today_revenue ?? 0).toLocaleString()}
           </Text>
@@ -97,7 +104,10 @@ function ModuleCard({
       </View>
 
       <TouchableOpacity
-        accessibilityLabel={`Toggle ${module.name} ${isOnline ? "offline" : "online"}`}
+        accessibilityLabel={t("modules_toggle", {
+          name: module.name,
+          status: isOnline ? t("modules_offline_status") : t("modules_online"),
+        })}
         style={[
           styles.toggleBtn,
           {
@@ -117,7 +127,7 @@ function ModuleCard({
             { color: isOnline ? SUCCESS : "rgba(255,255,255,0.45)" },
           ]}
         >
-          {isOnline ? "Online" : "Offline"}
+          {isOnline ? t("modules_online") : t("modules_offline_status")}
         </Text>
       </TouchableOpacity>
     </View>
@@ -125,6 +135,7 @@ function ModuleCard({
 }
 
 export default function ModulesScreen() {
+  const { t } = useI18n();
   const [modules, setModules] = useState<Module[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -165,9 +176,11 @@ export default function ModulesScreen() {
 
       <View style={styles.header}>
         <View>
-          <Text style={styles.headerTitle}>Modules</Text>
+          <Text style={styles.headerTitle}>{t("modules_title")}</Text>
           <Text style={styles.headerSub}>
-            {loading ? "Loading…" : `${online.length} active · ${offline.length} offline`}
+            {loading
+              ? t("common_loading")
+              : t("modules_active_offline_summary", { active: online.length, offline: offline.length })}
           </Text>
         </View>
         <View style={styles.headerBadge}>
@@ -194,10 +207,10 @@ export default function ModulesScreen() {
             <>
               <View style={styles.sectionHeader}>
                 <PulsingDot color={SUCCESS} size={8} active />
-                <Text style={styles.sectionTitle}>Active</Text>
+                <Text style={styles.sectionTitle}>{t("modules_active")}</Text>
               </View>
               {online.map((m) => (
-                <ModuleCard key={m.id} module={m} onToggle={handleToggle} />
+                <ModuleCard key={m.id} module={m} onToggle={handleToggle} t={t} />
               ))}
             </>
           )}
@@ -206,10 +219,10 @@ export default function ModulesScreen() {
             <>
               <View style={[styles.sectionHeader, { marginTop: 20 }]}>
                 <View style={[styles.sectionDot, { backgroundColor: "#6b7280" }]} />
-                <Text style={styles.sectionTitle}>Offline</Text>
+                <Text style={styles.sectionTitle}>{t("modules_offline")}</Text>
               </View>
               {offline.map((m) => (
-                <ModuleCard key={m.id} module={m} onToggle={handleToggle} />
+                <ModuleCard key={m.id} module={m} onToggle={handleToggle} t={t} />
               ))}
             </>
           )}
@@ -217,7 +230,7 @@ export default function ModulesScreen() {
           {modules.length === 0 && (
             <View style={styles.empty}>
               <Ionicons name="apps-outline" size={48} color={TEXT_DIM} />
-              <Text style={styles.emptyText}>No modules found</Text>
+              <Text style={styles.emptyText}>{t("modules_no_modules")}</Text>
             </View>
           )}
         </ScrollView>

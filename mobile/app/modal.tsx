@@ -3,13 +3,16 @@ import { StyleSheet } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { useI18n } from '@/src/context/I18nContext';
 
 export default function ModalScreen() {
+  const { t } = useI18n();
+
   return (
     <ThemedView style={styles.container}>
-      <ThemedText type="title">This is a modal</ThemedText>
+      <ThemedText type="title">{t('modal_title')}</ThemedText>
       <Link href="/" dismissTo style={styles.link}>
-        <ThemedText type="link">Go to home screen</ThemedText>
+        <ThemedText type="link">{t('modal_link')}</ThemedText>
       </Link>
     </ThemedView>
   );

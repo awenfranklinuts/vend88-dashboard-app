@@ -5,6 +5,7 @@ import { Redirect, Tabs } from "expo-router";
 import { BottomTabBarButtonProps } from "@react-navigation/bottom-tabs";
 import { PlatformPressable } from "@react-navigation/elements";
 import { useAuth } from "@/src/context/AuthContext";
+import { useI18n } from "@/src/context/I18nContext";
 import { Skeleton } from "@/src/components/Skeleton";
 import { haptic } from "@/src/utils/haptics";
 import { BG, CARD_BORDER, GOLD, TEXT_FAINT } from "@/src/theme/tokens";
@@ -23,6 +24,7 @@ function HapticTabButton(props: BottomTabBarButtonProps) {
 
 export default function TabLayout() {
   const { token, loading } = useAuth();
+  const { t } = useI18n();
 
   if (loading) {
     return (
@@ -66,7 +68,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Dashboard",
+          title: t("tab_dashboard"),
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons name={focused ? "grid" : "grid-outline"} size={size} color={color} />
           ),
@@ -75,7 +77,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="sales"
         options={{
-          title: "Sales",
+          title: t("tab_sales"),
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons name={focused ? "bar-chart" : "bar-chart-outline"} size={size} color={color} />
           ),
@@ -84,7 +86,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="products"
         options={{
-          title: "Products",
+          title: t("tab_products"),
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons name={focused ? "cube" : "cube-outline"} size={size} color={color} />
           ),
@@ -93,7 +95,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="explore"
         options={{
-          title: "Modules",
+          title: t("tab_modules"),
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons name={focused ? "apps" : "apps-outline"} size={size} color={color} />
           ),
@@ -102,7 +104,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="settings"
         options={{
-          title: "Settings",
+          title: t("tab_settings"),
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons name={focused ? "settings" : "settings-outline"} size={size} color={color} />
           ),

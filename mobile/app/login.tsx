@@ -16,11 +16,26 @@ import {
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import * as SecureStore from "expo-secure-store";
 import { useAuth } from "@/src/context/AuthContext";
+import { useI18n } from "@/src/context/I18nContext";
+
+type LocalAuthModule = typeof import("expo-local-authentication");
+let LocalAuth: LocalAuthModule | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  LocalAuth = require("expo-local-authentication");
+} catch {
+  LocalAuth = null;
+}
+
+const AUTH_TOKEN_KEY = "vend88-auth-token";
+const BIOMETRIC_KEY = "vend88-biometric-enabled";
 
 export default function LoginScreen() {
   const router = useRouter();
   const { token, signIn } = useAuth();
+  const { t } = useI18n();
   const passwordRef = useRef<TextInput>(null);
 
   const [email, setEmail] = useState("");
@@ -31,6 +46,7 @@ export default function LoginScreen() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [skipAutoRedirect, setSkipAutoRedirect] = useState(false);
+  const [biometricAvailable, setBiometricAvailable] = useState(false);
 
   // Animated label positions
   const emailAnim = useRef(new Animated.Value(0)).current;
@@ -72,6 +88,47 @@ export default function LoginScreen() {
     }
   }, [token, skipAutoRedirect, router]);
 
+  useEffect(() => {
+    (async () => {
+      const compatible = LocalAuth ? await LocalAuth.hasHardwareAsync() : false;
+      const enrolled = LocalAuth ? await LocalAuth.isEnrolledAsync() : false;
+      const hasStoredToken = !!(await SecureStore.getItemAsync(AUTH_TOKEN_KEY));
+      const userEnabled = (await SecureStore.getItemAsync(BIOMETRIC_KEY)) === "1";
+      setBiometricAvailable(compatible && enrolled && hasStoredToken && userEnabled);
+    })();
+  }, []);
+
+  const handleBiometric = async () => {
+    if (!LocalAuth) {
+      triggerError(t("login_biometric_unavailable"));
+      return;
+    }
+
+    if (!biometricAvailable) {
+      triggerError(t("login_enable_biometric_first"));
+      return;
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const result = await LocalAuth.authenticateAsync({
+      promptMessage: t("login_prompt_sign_in"),
+      fallbackLabel: t("login_use_password"),
+      cancelLabel: t("common_cancel"),
+      disableDeviceFallback: false,
+    });
+    if (!result.success) return;
+
+    const storedToken = await SecureStore.getItemAsync(AUTH_TOKEN_KEY);
+    if (!storedToken) {
+      triggerError(t("login_session_expired"));
+      return;
+    }
+    Animated.timing(screenOpacity, {
+      toValue: 0,
+      duration: 140,
+      useNativeDriver: true,
+    }).start(() => router.replace("/(tabs)"));
+  };
+
   const triggerError = (msg: string) => {
     setError(msg);
     triggerShake();
@@ -82,12 +139,12 @@ export default function LoginScreen() {
     setError("");
 
     if (!email || !password) {
-      triggerError("Please fill in all fields.");
+      triggerError(t("login_fill_fields"));
       return;
     }
 
     if (!/^\S+@\S+\.\S+$/.test(email)) {
-      triggerError("Please enter a valid email address.");
+      triggerError(t("login_invalid_email"));
       return;
     }
 
@@ -99,7 +156,7 @@ export default function LoginScreen() {
 
     if (!result.ok) {
       setSkipAutoRedirect(false);
-      triggerError(result.message ?? "Sign in failed.");
+      triggerError(result.message ?? t("login_sign_in_failed"));
       return;
     }
 
@@ -137,13 +194,13 @@ export default function LoginScreen() {
                 <Text style={styles.brandVend}>VEND</Text>
                 <Text style={styles.brand88}>88</Text>
               </View>
-              <Text style={styles.brandSubtitle}>DASHBOARD</Text>
+              <Text style={styles.brandSubtitle}>{t("login_brand_subtitle")}</Text>
             </View>
 
             <Animated.View
               style={[styles.card, { transform: [{ translateX: shakeAnim }] }]}
             >
-              <Text style={styles.welcome}>WELCOME BACK.</Text>
+              <Text style={styles.welcome}>{t("login_welcome_back")}</Text>
 
               {/* Email */}
               <View style={styles.inputGroup}>
@@ -173,7 +230,9 @@ export default function LoginScreen() {
                   }}
                 />
                 <Animated.Text style={[styles.floatingLabel, labelInterp(emailAnim)]}>
-                  {emailFocused || email.length > 0 ? "EMAIL ADDRESS" : "Email Address"}
+                  {emailFocused || email.length > 0
+                    ? t("login_email_address_caps")
+                    : t("login_email_address")}
                 </Animated.Text>
               </View>
 
@@ -206,7 +265,9 @@ export default function LoginScreen() {
                   }}
                 />
                 <Animated.Text style={[styles.floatingLabel, labelInterp(passwordAnim)]}>
-                  {passwordFocused || password.length > 0 ? "PASSWORD" : "Password"}
+                  {passwordFocused || password.length > 0
+                    ? t("login_password_caps")
+                    : t("login_password")}
                 </Animated.Text>
 
                 <View style={styles.passwordActions}>
@@ -219,7 +280,7 @@ export default function LoginScreen() {
                   </Pressable>
                   <View style={styles.passwordDivider} />
                   <Pressable hitSlop={10}>
-                    <Text style={styles.forgotText}>Forgot?</Text>
+                    <Text style={styles.forgotText}>{t("login_forgot")}</Text>
                   </Pressable>
                 </View>
               </View>
@@ -244,10 +305,10 @@ export default function LoginScreen() {
                   {loading ? (
                     <View style={styles.buttonLoadingRow}>
                       <ActivityIndicator color="#181e38" size="small" />
-                      <Text style={styles.buttonText}>Authenticating</Text>
+                      <Text style={styles.buttonText}>{t("login_authenticating")}</Text>
                     </View>
                   ) : (
-                    <Text style={styles.buttonText}>SIGN IN</Text>
+                    <Text style={styles.buttonText}>{t("login_sign_in")}</Text>
                   )}
                 </Pressable>
 
@@ -255,17 +316,23 @@ export default function LoginScreen() {
                   style={({ pressed }) => [
                     styles.faceButton,
                     pressed && styles.faceButtonPressed,
+                    !biometricAvailable && styles.faceButtonDimmed,
                   ]}
+                  onPress={handleBiometric}
                 >
-                  <Ionicons name="scan-outline" size={22} color="#9ca3af" />
+                  <Ionicons
+                    name="scan-outline"
+                    size={22}
+                    color={biometricAvailable ? "#d4af37" : "#9ca3af"}
+                  />
                 </Pressable>
               </View>
             </Animated.View>
 
             <View style={styles.footer}>
-              <Text style={styles.footerText}>Don't have an account? </Text>
+              <Text style={styles.footerText}>{t("login_no_account")}</Text>
               <Pressable hitSlop={8}>
-                <Text style={styles.footerLink}>Request Access</Text>
+                <Text style={styles.footerLink}>{t("login_request_access")}</Text>
               </Pressable>
             </View>
           </Animated.View>
@@ -475,6 +542,9 @@ const styles = StyleSheet.create({
     borderColor: "rgba(212,175,55,0.4)",
     backgroundColor: "rgba(212,175,55,0.07)",
     transform: [{ scale: 0.94 }],
+  },
+  faceButtonDimmed: {
+    opacity: 0.45,
   },
   footer: {
     marginTop: 24,

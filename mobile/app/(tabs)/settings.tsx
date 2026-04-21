@@ -26,7 +26,8 @@ try {
 }
 import Constants from "expo-constants";
 import { useAuth } from "@/src/context/AuthContext";
-import { API_BASE_URL } from "@/src/services/api";
+import { Language, useI18n } from "@/src/context/I18nContext";
+import { API_BASE_URL, api } from "@/src/services/api";
 import { haptic } from "@/src/utils/haptics";
 import {
   BG,
@@ -41,6 +42,44 @@ import {
 
 const BIOMETRIC_KEY = "vend88-biometric-enabled";
 const NOTIFY_KEY = "vend88-notifications-enabled";
+const AUTH_TOKEN_KEY = "vend88-auth-token";
+const AUTH_EMAIL_KEY = "vend88-auth-email";
+
+type AdminProfileResponse = {
+  status_code?: number;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+};
+
+function toDisplayName(email: string, fallbackName: string, firstName?: string, lastName?: string): string {
+  const fullName = [firstName, lastName]
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter(Boolean)
+    .join(" ");
+
+  if (fullName) {
+    return fullName;
+  }
+
+  const localPart = email.split("@")[0] ?? "";
+  if (!localPart) {
+    return fallbackName;
+  }
+
+  return localPart
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function toInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "V8";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+}
 
 type RowProps = {
   icon: keyof typeof Ionicons.glyphMap;
@@ -88,29 +127,73 @@ function Row({ icon, iconColor = GOLD, label, hint, right, onPress, destructive 
 
 export default function SettingsScreen() {
   const { signOut } = useAuth();
+  const { language, languageLabel, setLanguage, t } = useI18n();
+  const defaultProfileName = t("settings_app_name");
   const [biometric, setBiometric] = useState(false);
   const [notifications, setNotifications] = useState(true);
   const [biometricSupported, setBiometricSupported] = useState(false);
+  const [profileName, setProfileName] = useState(defaultProfileName);
+  const [profileEmail, setProfileEmail] = useState("admin@vend88.app");
 
   useEffect(() => {
     (async () => {
-      const [compat, enrolled, bio, notif] = await Promise.all([
+      const [compat, enrolled, bio, notif, storedEmail, storedToken] = await Promise.all([
         LocalAuth ? LocalAuth.hasHardwareAsync() : Promise.resolve(false),
         LocalAuth ? LocalAuth.isEnrolledAsync() : Promise.resolve(false),
         SecureStore.getItemAsync(BIOMETRIC_KEY),
         SecureStore.getItemAsync(NOTIFY_KEY),
+        SecureStore.getItemAsync(AUTH_EMAIL_KEY),
+        SecureStore.getItemAsync(AUTH_TOKEN_KEY),
       ]);
+
       setBiometricSupported(Boolean(compat && enrolled));
       setBiometric(bio === "1");
       if (notif !== null) setNotifications(notif === "1");
+
+      const email = storedEmail?.trim();
+      if (email) {
+        setProfileEmail(email);
+        setProfileName(toDisplayName(email, defaultProfileName));
+      }
+
+      if (!storedToken) {
+        return;
+      }
+
+      try {
+        const response = await api.post<AdminProfileResponse>("/admin/profile", {
+          token: storedToken,
+        });
+        const data = response.data;
+        if (data?.status_code !== 200) {
+          return;
+        }
+
+        const nextEmail = (data.email ?? email ?? "").trim();
+        if (nextEmail) {
+          setProfileEmail(nextEmail);
+        }
+        setProfileName(
+          toDisplayName(nextEmail || "", defaultProfileName, data.first_name, data.last_name)
+        );
+      } catch {
+        // Keep fallback profile values from local session data.
+      }
     })();
-  }, []);
+  }, [defaultProfileName]);
+
+  useEffect(() => {
+    if (!profileEmail || profileEmail === "admin@vend88.app") {
+      setProfileName(defaultProfileName);
+    }
+  }, [defaultProfileName, profileEmail]);
 
   const toggleBiometric = async (value: boolean) => {
     haptic.selection();
     if (value && LocalAuth) {
       const result = await LocalAuth.authenticateAsync({
         promptMessage: "Enable biometric lock",
+        promptMessage: t("settings_enable_biometric"),
         disableDeviceFallback: false,
       });
       if (!result.success) {
@@ -131,10 +214,10 @@ export default function SettingsScreen() {
 
   const confirmSignOut = () => {
     haptic.warning();
-    Alert.alert("Sign out", "Are you sure you want to sign out?", [
-      { text: "Cancel", style: "cancel" },
+    Alert.alert(t("settings_sign_out_title"), t("settings_sign_out_confirm"), [
+      { text: t("common_cancel"), style: "cancel" },
       {
-        text: "Sign out",
+        text: t("settings_sign_out"),
         style: "destructive",
         onPress: async () => {
           haptic.success();
@@ -142,6 +225,28 @@ export default function SettingsScreen() {
         },
       },
     ]);
+  };
+
+  const selectLanguage = () => {
+    const options: { lang: Language; label: string }[] = [
+      { lang: "en", label: languageLabel("en") },
+      { lang: "zh", label: languageLabel("zh") },
+      { lang: "id", label: languageLabel("id") },
+    ];
+
+    Alert.alert(
+      t("settings_language"),
+      t("settings_choose_language"),
+      [
+        ...options.map((option) => ({
+          text: option.lang === language ? `${option.label} ✓` : option.label,
+          onPress: () => {
+            void setLanguage(option.lang);
+          },
+        })),
+        { text: t("common_cancel"), style: "cancel" as const },
+      ]
+    );
   };
 
   const version =
@@ -152,20 +257,20 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>Settings</Text>
-        <Text style={styles.subtitle}>Preferences & account</Text>
+        <Text style={styles.title}>{t("settings_title")}</Text>
+        <Text style={styles.subtitle}>{t("settings_subtitle")}</Text>
 
         {/* Profile */}
         <View style={styles.profileCard}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>V8</Text>
+            <Text style={styles.avatarText}>{toInitials(profileName)}</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.profileName}>VEND 88 Operator</Text>
-            <Text style={styles.profileEmail}>admin@vend88.app</Text>
+            <Text style={styles.profileName}>{profileName}</Text>
+            <Text style={styles.profileEmail}>{profileEmail}</Text>
           </View>
           <Pressable
-            accessibilityLabel="Edit profile"
+            accessibilityLabel={t("settings_edit_profile")}
             onPress={() => haptic.selection()}
             style={({ pressed }) => [styles.editBtn, pressed && { opacity: 0.8 }]}
           >
@@ -174,15 +279,15 @@ export default function SettingsScreen() {
         </View>
 
         {/* Security */}
-        <Text style={styles.sectionLabel}>Security</Text>
+        <Text style={styles.sectionLabel}>{t("settings_security")}</Text>
         <View style={styles.group}>
           <Row
             icon="finger-print-outline"
-            label="Biometric lock"
+            label={t("settings_biometric_lock")}
             hint={
               biometricSupported
-                ? "Require Face ID / fingerprint"
-                : "Not available on this device"
+                ? t("settings_require_biometric")
+                : t("settings_biometric_unavailable")
             }
             right={
               <Switch
@@ -197,19 +302,19 @@ export default function SettingsScreen() {
           <View style={styles.divider} />
           <Row
             icon="key-outline"
-            label="Change password"
-            hint="Update your account password"
-            onPress={() => Alert.alert("Coming soon", "Password management is not available yet.")}
+            label={t("settings_change_password")}
+            hint={t("settings_update_password")}
+            onPress={() => Alert.alert(t("common_coming_soon"), t("settings_password_unavailable"))}
           />
         </View>
 
         {/* Preferences */}
-        <Text style={styles.sectionLabel}>Preferences</Text>
+        <Text style={styles.sectionLabel}>{t("settings_preferences")}</Text>
         <View style={styles.group}>
           <Row
             icon="notifications-outline"
-            label="Notifications"
-            hint="Push alerts for orders & system events"
+            label={t("settings_notifications")}
+            hint={t("settings_push_alerts")}
             right={
               <Switch
                 value={notifications}
@@ -222,35 +327,35 @@ export default function SettingsScreen() {
           <View style={styles.divider} />
           <Row
             icon="moon-outline"
-            label="Appearance"
-            hint="Dark (default)"
-            onPress={() => Alert.alert("Appearance", "Only dark mode is available right now.")}
+            label={t("settings_appearance")}
+            hint={t("settings_dark_default")}
+            onPress={() => Alert.alert(t("settings_appearance"), t("settings_dark_only"))}
           />
           <View style={styles.divider} />
           <Row
             icon="language-outline"
-            label="Language"
-            hint="English"
-            onPress={() => Alert.alert("Language", "Additional languages coming soon.")}
+            label={t("settings_language")}
+            hint={languageLabel()}
+            onPress={selectLanguage}
           />
         </View>
 
         {/* About */}
-        <Text style={styles.sectionLabel}>About</Text>
+        <Text style={styles.sectionLabel}>{t("settings_about")}</Text>
         <View style={styles.group}>
-          <Row icon="information-circle-outline" label="App" hint="VEND88 Dashboard Mobile" />
+          <Row icon="information-circle-outline" label={t("settings_app")} hint={t("settings_app_name")} />
           <View style={styles.divider} />
-          <Row icon="git-branch-outline" label="Version" hint={version} />
+          <Row icon="git-branch-outline" label={t("settings_version")} hint={version} />
           <View style={styles.divider} />
           <Row
             icon="link-outline"
-            label="API endpoint"
+            label={t("settings_api_endpoint")}
             hint={API_BASE_URL}
           />
           <View style={styles.divider} />
           <Row
             icon="help-circle-outline"
-            label="Help & support"
+            label={t("settings_help_support")}
             onPress={() => Linking.openURL("mailto:support@vend88.app").catch(() => {})}
           />
         </View>
@@ -259,13 +364,13 @@ export default function SettingsScreen() {
         <View style={styles.group}>
           <Row
             icon="log-out-outline"
-            label="Sign out"
+            label={t("settings_sign_out")}
             destructive
             onPress={confirmSignOut}
           />
         </View>
 
-        <Text style={styles.footer}>VEND 88 · Made with ♥</Text>
+        <Text style={styles.footer}>{t("settings_footer")}</Text>
       </ScrollView>
     </SafeAreaView>
   );

@@ -3,11 +3,11 @@ import * as SecureStore from "expo-secure-store";
 import { loginWithEmail } from "../services/authService";
 
 const AUTH_TOKEN_KEY = "vend88-auth-token";
+const AUTH_EMAIL_KEY = "vend88-auth-email";
 
 type SignInResult = {
   ok: boolean;
   message?: string;
-  demo?: boolean;
 };
 
 type AuthContextType = {
@@ -50,8 +50,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const result = await loginWithEmail(email, password);
       setToken(result.token);
-      await SecureStore.setItemAsync(AUTH_TOKEN_KEY, result.token);
-      return { ok: true, demo: result.demo };
+      await Promise.all([
+        SecureStore.setItemAsync(AUTH_TOKEN_KEY, result.token),
+        SecureStore.setItemAsync(AUTH_EMAIL_KEY, email),
+      ]);
+      return { ok: true };
     } catch (error) {
       return {
         ok: false,
@@ -62,7 +65,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     setToken(null);
-    await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
+    await Promise.all([
+      SecureStore.deleteItemAsync(AUTH_TOKEN_KEY),
+      SecureStore.deleteItemAsync(AUTH_EMAIL_KEY),
+    ]);
   };
 
   const value = useMemo(

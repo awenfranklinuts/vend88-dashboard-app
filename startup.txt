@@ -25,6 +25,9 @@ Terminal 1 - Backend:
 
 Terminal 2 - Frontend:
    npm start
+   # API target switch (optional):
+   # export REACT_APP_API_TARGET=official
+   # export REACT_APP_API_TARGET=custom
 .
 --- URLs ---
 Frontend:  http://localhost:3000
@@ -48,11 +51,15 @@ On Android (Expo Go):
 
 --- MOBILE API CONFIG ---
 
-1. Find your PC LAN IP (example: 192.168.1.55)
-2. Start backend with host binding:
+1. Choose API target:
+   export EXPO_PUBLIC_API_TARGET=official
+   # or
+   export EXPO_PUBLIC_API_TARGET=custom
+2. If using custom backend, set custom API base URL:
+   export EXPO_PUBLIC_CUSTOM_API_BASE_URL=http://192.168.1.55:8000/api/v1
+3. Start backend with host binding:
    uvicorn main:app --reload --host 0.0.0.0 --port 8000
-3. In mobile terminal, set API URL before start:
-   set EXPO_PUBLIC_API_BASE_URL=http://192.168.1.55:8000/api/v1
+4. In mobile terminal, start Expo:
    npx expo start --lan
 
 Note:

@@ -1,7 +1,9 @@
 import axios from "axios";
 import Constants from "expo-constants";
 
+const DEFAULT_OFFICIAL_API_BASE_URL = "https://dev.vend88.com";
 const FALLBACK_API_BASE_URL = "http://127.0.0.1:8000/api/v1";
+export const API_TARGET = (process.env.EXPO_PUBLIC_API_TARGET ?? "custom").toLowerCase();
 
 function getExpoHostUri(): string | undefined {
   const configHostUri = Constants.expoConfig?.hostUri;
@@ -34,10 +36,20 @@ function getAutoDetectedApiBaseUrl(): string | undefined {
   return `http://${host}:8000/api/v1`;
 }
 
+function getCustomApiBaseUrl(): string {
+  return (
+    process.env.EXPO_PUBLIC_CUSTOM_API_BASE_URL ??
+    process.env.EXPO_PUBLIC_API_BASE_URL ??
+    getAutoDetectedApiBaseUrl() ??
+    FALLBACK_API_BASE_URL
+  );
+}
+
 export const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL ??
-  getAutoDetectedApiBaseUrl() ??
-  FALLBACK_API_BASE_URL;
+  API_TARGET === "official"
+    ? process.env.EXPO_PUBLIC_OFFICIAL_API_BASE_URL ??
+      DEFAULT_OFFICIAL_API_BASE_URL
+    : getCustomApiBaseUrl();
 
 export const api = axios.create({
   baseURL: API_BASE_URL,

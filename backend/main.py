@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.routers import dashboard, sales, products
+from app.routers import dashboard, sales, products, admin
 
 app = FastAPI(
     title="VEND88 Dashboard API",
@@ -17,6 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin.router)
 app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(sales.router, prefix="/api/v1")
 app.include_router(products.router, prefix="/api/v1")

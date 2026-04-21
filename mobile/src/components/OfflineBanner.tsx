@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { isAxiosError } from "axios";
 import { api } from "../services/api";
+import { useI18n } from "../context/I18nContext";
 import { DANGER, DANGER_DIM } from "../theme/tokens";
 
 // Lightweight health ping — surfaces a banner when the API is unreachable.
 // We intentionally avoid NetInfo to keep dependencies minimal.
 export function OfflineBanner() {
   const [offline, setOffline] = useState(false);
+  const { t } = useI18n();
 
   useEffect(() => {
     let cancelled = false;
@@ -19,8 +22,16 @@ export function OfflineBanner() {
         if (cancelled) return;
         consecutiveFailures = 0;
         setOffline(false);
-      } catch {
+      } catch (error) {
         if (cancelled) return;
+
+        // If we got an HTTP response, the server is reachable.
+        if (isAxiosError(error) && error.response) {
+          consecutiveFailures = 0;
+          setOffline(false);
+          return;
+        }
+
         consecutiveFailures += 1;
         // Only flip to offline after two failures to avoid flicker on slow nets.
         if (consecutiveFailures >= 2) setOffline(true);
@@ -40,7 +51,7 @@ export function OfflineBanner() {
   return (
     <View style={styles.banner} pointerEvents="none" accessibilityRole="alert">
       <Ionicons name="cloud-offline-outline" size={14} color={DANGER} />
-      <Text style={styles.text}>Offline — showing cached data</Text>
+      <Text style={styles.text}>{t("common_offline_cached")}</Text>
     </View>
   );
 }

@@ -31,20 +31,42 @@ npx expo start --tunnel
 
 ## API URL Configuration
 
-Default behavior:
-1. The app auto-detects your PC LAN IP from the Expo host.
-2. It builds API URL as http://YOUR_PC_IP:8000/api/v1 automatically.
-
-Optional override (only if needed):
+Switch target using `.env`:
 
 ```bash
-set EXPO_PUBLIC_API_BASE_URL=http://192.168.1.55:8000/api/v1
+EXPO_PUBLIC_API_TARGET=official
+# EXPO_PUBLIC_API_TARGET=custom
+
+EXPO_PUBLIC_OFFICIAL_API_BASE_URL=https://dev.vend88.com
+# Optional: app will auto-discover via /search/business_search when possible
+EXPO_PUBLIC_OFFICIAL_BUSINESS_ID=69927553f830b9f210001917
+# Optional fallback only (runtime login session is preferred)
+EXPO_PUBLIC_OFFICIAL_EMAIL=your-admin-email
+EXPO_PUBLIC_OFFICIAL_TOKEN=your-official-token
+EXPO_PUBLIC_CUSTOM_API_BASE_URL=http://192.168.1.55:8000/api/v1
+```
+
+`EXPO_PUBLIC_OFFICIAL_BUSINESS_ID` is optional if auto-discovery succeeds.
+The app first tries `/meta/get_meta` (uses `meta.BUSINESS_SELECTION`) and then falls back to `/search/business_search`.
+For security, email/token should come from login at runtime (SecureStore). Keep env email/token only for temporary testing.
+
+Quick terminal switch examples:
+
+```bash
+# Official API
+export EXPO_PUBLIC_API_TARGET=official
+
+# Custom backend API
+export EXPO_PUBLIC_API_TARGET=custom
+export EXPO_PUBLIC_CUSTOM_API_BASE_URL=http://192.168.1.55:8000/api/v1
+
 npx expo start --lan
 ```
 
 Important:
 1. Use your computer LAN IP, not localhost.
-2. Start backend with host binding from backend folder:
+2. Keep `EXPO_PUBLIC_API_TARGET=custom` when using local backend.
+3. Start backend with host binding from backend folder:
 
 ```bash
 uvicorn main:app --reload --host 0.0.0.0 --port 8000

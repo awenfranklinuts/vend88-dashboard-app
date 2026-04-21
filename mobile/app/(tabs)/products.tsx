@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useI18n } from "@/src/context/I18nContext";
 import { api } from "@/src/services/api";
 import { AnimatedNumber } from "@/src/components/AnimatedNumber";
 import { Skeleton } from "@/src/components/Skeleton";
@@ -64,9 +65,24 @@ function parseMoney(v: string | number | undefined): number {
   return Number(String(v).replace(/[^0-9.-]/g, "")) || 0;
 }
 
+function categoryLabel(category: string, t: (key: any, params?: Record<string, string | number>) => string) {
+  const map: Record<string, string> = {
+    All: "products_all",
+    Beverages: "products_beverages",
+    Bakery: "products_bakery",
+    Food: "products_food",
+    Snacks: "products_snacks",
+    Desserts: "products_desserts",
+    Other: "products_other",
+  };
+  const key = map[category];
+  return key ? t(key as any) : category;
+}
+
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function ProductsScreen() {
+  const { t } = useI18n();
   const [items, setItems] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -126,16 +142,20 @@ export default function ProductsScreen() {
       {/* Top bar */}
       <View style={styles.topBar}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.eyebrow}>CATALOG</Text>
-          <Text style={styles.title}>Products</Text>
+          <Text style={styles.eyebrow}>{t("products_catalog")}</Text>
+          <Text style={styles.title}>{t("products_title")}</Text>
           <Text style={styles.subtitle}>
             {loading
-              ? "Loading…"
-              : `${filtered.length} of ${totalCount} ${totalCount === 1 ? "item" : "items"}`}
+              ? t("common_loading")
+              : t("products_items_summary", {
+                  filtered: filtered.length,
+                  total: totalCount,
+                  noun: totalCount === 1 ? t("products_item_one") : t("products_item_other"),
+                })}
           </Text>
         </View>
         <Pressable
-          accessibilityLabel="Add product"
+          accessibilityLabel={t("products_add_product")}
           onPress={() => haptic.medium()}
           style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
         >
@@ -153,21 +173,21 @@ export default function ProductsScreen() {
               <Ionicons name="cube" size={14} color={GOLD} />
             </View>
             <AnimatedNumber value={totalCount} style={styles.statValue} />
-            <Text style={styles.statLabel}>Products</Text>
+            <Text style={styles.statLabel}>{t("products_products")}</Text>
           </View>
           <View style={styles.statCard}>
             <View style={[styles.statIcon, { backgroundColor: "rgba(64,100,220,0.18)" }]}>
               <Ionicons name="grid" size={14} color={ACCENT} />
             </View>
             <AnimatedNumber value={categories.length - 1} style={styles.statValue} />
-            <Text style={styles.statLabel}>Categories</Text>
+            <Text style={styles.statLabel}>{t("products_categories")}</Text>
           </View>
           <View style={styles.statCard}>
             <View style={[styles.statIcon, { backgroundColor: "rgba(16,185,129,0.15)" }]}>
               <Ionicons name="pricetag" size={14} color={SUCCESS} />
             </View>
             <AnimatedNumber value={avgPrice} prefix="$" decimals={2} style={styles.statValue} />
-            <Text style={styles.statLabel}>Avg price</Text>
+            <Text style={styles.statLabel}>{t("products_avg_price")}</Text>
           </View>
         </View>
       )}
@@ -177,8 +197,8 @@ export default function ProductsScreen() {
         <View style={styles.searchRow}>
           <Ionicons name="search" size={14} color={TEXT_DIM} />
           <TextInput
-            accessibilityLabel="Search products"
-            placeholder="Search by name or category…"
+            accessibilityLabel={t("products_search_products")}
+            placeholder={t("products_search_placeholder")}
             placeholderTextColor={TEXT_DIM}
             value={search}
             onChangeText={setSearch}
@@ -187,7 +207,7 @@ export default function ProductsScreen() {
           />
           {search ? (
             <Pressable
-              accessibilityLabel="Clear search"
+              accessibilityLabel={t("sales_clear_search")}
               onPress={() => {
                 haptic.selection();
                 setSearch("");
@@ -200,7 +220,7 @@ export default function ProductsScreen() {
 
         <View style={styles.viewToggle}>
           <Pressable
-            accessibilityLabel="Grid view"
+            accessibilityLabel={t("products_grid_view")}
             onPress={() => {
               haptic.selection();
               setViewMode("grid");
@@ -214,7 +234,7 @@ export default function ProductsScreen() {
             />
           </Pressable>
           <Pressable
-            accessibilityLabel="List view"
+            accessibilityLabel={t("products_list_view")}
             onPress={() => {
               haptic.selection();
               setViewMode("list");
@@ -243,14 +263,14 @@ export default function ProductsScreen() {
             return (
               <Pressable
                 key={c}
-                accessibilityLabel={`Filter by ${c}`}
+                accessibilityLabel={t("products_filter_by", { name: categoryLabel(c, t) })}
                 onPress={() => {
                   haptic.selection();
                   setCategory(c);
                 }}
                 style={[styles.chip, active && styles.chipActive]}
               >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{c}</Text>
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>{categoryLabel(c, t)}</Text>
                 <View style={[styles.chipCount, active && styles.chipCountActive]}>
                   <Text
                     style={[
@@ -295,7 +315,7 @@ export default function ProductsScreen() {
           </Pressable>
         </View>
         <View style={[styles.gridTag, { backgroundColor: meta.color + "1a" }]}>
-          <Text style={[styles.gridTagText, { color: meta.color }]}>{item.category}</Text>
+          <Text style={[styles.gridTagText, { color: meta.color }]}>{categoryLabel(item.category, t)}</Text>
         </View>
         <Text style={styles.gridName} numberOfLines={2}>
           {item.name}
@@ -304,7 +324,7 @@ export default function ProductsScreen() {
           <Text style={styles.gridPrice}>${item.price}</Text>
           <View style={styles.gridStatus}>
             <View style={[styles.gridStatusDot, { backgroundColor: SUCCESS }]} />
-            <Text style={styles.gridStatusText}>In stock</Text>
+            <Text style={styles.gridStatusText}>{t("products_in_stock")}</Text>
           </View>
         </View>
       </Pressable>
@@ -328,10 +348,10 @@ export default function ProductsScreen() {
           </Text>
           <View style={styles.listMetaRow}>
             <View style={[styles.miniTag, { backgroundColor: meta.color + "1a" }]}>
-              <Text style={[styles.miniTagText, { color: meta.color }]}>{item.category}</Text>
+              <Text style={[styles.miniTagText, { color: meta.color }]}>{categoryLabel(item.category, t)}</Text>
             </View>
             <View style={styles.metaDot} />
-            <Text style={styles.listMeta}>In stock</Text>
+            <Text style={styles.listMeta}>{t("products_in_stock")}</Text>
           </View>
         </View>
         <View style={{ alignItems: "flex-end", gap: 4 }}>
@@ -347,11 +367,11 @@ export default function ProductsScreen() {
       <View style={styles.emptyIcon}>
         <Ionicons name="cube-outline" size={28} color={TEXT_DIM} />
       </View>
-      <Text style={styles.emptyTitle}>No products</Text>
+      <Text style={styles.emptyTitle}>{t("products_no_products")}</Text>
       <Text style={styles.emptyBody}>
         {search || category !== "All"
-          ? "No items match your filters."
-          : "Your catalog is empty. Add your first product to get started."}
+          ? t("products_no_filter_match")
+          : t("products_empty_catalog")}
       </Text>
       {search || category !== "All" ? (
         <Pressable
@@ -362,7 +382,7 @@ export default function ProductsScreen() {
           }}
           style={styles.emptyBtn}
         >
-          <Text style={styles.emptyBtnText}>Clear filters</Text>
+          <Text style={styles.emptyBtnText}>{t("common_clear_filters")}</Text>
         </Pressable>
       ) : (
         <Pressable
@@ -370,7 +390,7 @@ export default function ProductsScreen() {
           style={[styles.emptyBtn, { flexDirection: "row", gap: 6 }]}
         >
           <Ionicons name="add" size={14} color="#181e38" />
-          <Text style={styles.emptyBtnText}>Add product</Text>
+          <Text style={styles.emptyBtnText}>{t("products_add_product")}</Text>
         </Pressable>
       )}
     </View>
