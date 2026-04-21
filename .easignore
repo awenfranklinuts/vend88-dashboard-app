@@ -3,21 +3,14 @@
 backend/venv/
 backend/__pycache__/
 backend/app/__pycache__/
-backend/
-.github/
 
 # Web app (not needed for mobile build)
-/src/
-/public/
-/node_modules/
-!/mobile/src/
-!/mobile/src/**
-!/mobile/app/
-!/mobile/app/**
+src/
+public/
+node_modules/
 
 # Build artifacts & caches
 .expo/
-**/.expo/
 dist/
 web-build/
 *.tsbuildinfo
@@ -29,7 +22,6 @@ web-build/
 
 # IDE
 .vscode/
-**/.vscode/
 
 # Misc
 *.jks
