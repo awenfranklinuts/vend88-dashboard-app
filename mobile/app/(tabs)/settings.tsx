@@ -38,7 +38,9 @@ import {
   GOLD,
   TEXT,
   TEXT_DIM,
+  SCREEN_PADDING,
 } from "@/src/theme/tokens";
+import { ScreenHeader } from "@/src/components/ScreenHeader";
 
 const BIOMETRIC_KEY = "vend88-biometric-enabled";
 const NOTIFY_KEY = "vend88-notifications-enabled";
@@ -256,8 +258,11 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>{t("settings_title")}</Text>
-        <Text style={styles.subtitle}>{t("settings_subtitle")}</Text>
+        <ScreenHeader
+          eyebrow="ACCOUNT"
+          title={t("settings_title")}
+          subtitle={t("settings_subtitle")}
+        />
 
         {/* Profile */}
         <View style={styles.profileCard}>
@@ -377,9 +382,7 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   safeContainer: { flex: 1, backgroundColor: BG },
-  content: { padding: 16, paddingBottom: 32, gap: 12 },
-  title: { fontSize: 26, fontWeight: "800", color: TEXT },
-  subtitle: { color: TEXT_DIM, fontSize: 13, marginTop: 2, marginBottom: 4 },
+  content: { padding: SCREEN_PADDING, paddingBottom: 120, gap: 12 },
 
   profileCard: {
     flexDirection: "row",

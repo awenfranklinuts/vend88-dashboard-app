@@ -23,7 +23,10 @@ import {
   SUCCESS,
   TEXT,
   TEXT_DIM,
+  SCREEN_PADDING,
 } from "@/src/theme/tokens";
+import { ScreenHeader } from "@/src/components/ScreenHeader";
+import { SectionLabel } from "@/src/components/SectionLabel";
 
 interface Module {
   id: string;
@@ -174,18 +177,24 @@ export default function ModulesScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <StatusBar barStyle="light-content" backgroundColor={BG} />
 
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>{t("modules_title")}</Text>
-          <Text style={styles.headerSub}>
-            {loading
+      <View style={styles.headerWrap}>
+        <ScreenHeader
+          eyebrow="SYSTEMS"
+          title={t("modules_title")}
+          subtitle={
+            loading
               ? t("common_loading")
-              : t("modules_active_offline_summary", { active: online.length, offline: offline.length })}
-          </Text>
-        </View>
-        <View style={styles.headerBadge}>
-          <Text style={styles.headerBadgeText}>{modules.length}</Text>
-        </View>
+              : t("modules_active_offline_summary", {
+                  active: online.length,
+                  offline: offline.length,
+                })
+          }
+          right={
+            <View style={styles.headerBadge}>
+              <Text style={styles.headerBadgeText}>{modules.length}</Text>
+            </View>
+          }
+        />
       </View>
 
       {loading ? (
@@ -205,10 +214,10 @@ export default function ModulesScreen() {
         >
           {online.length > 0 && (
             <>
-              <View style={styles.sectionHeader}>
-                <PulsingDot color={SUCCESS} size={8} active />
-                <Text style={styles.sectionTitle}>{t("modules_active")}</Text>
-              </View>
+              <SectionLabel
+                label={t("modules_active")}
+                leading={<PulsingDot color={SUCCESS} size={8} active />}
+              />
               {online.map((m) => (
                 <ModuleCard key={m.id} module={m} onToggle={handleToggle} t={t} />
               ))}
@@ -217,10 +226,12 @@ export default function ModulesScreen() {
 
           {offline.length > 0 && (
             <>
-              <View style={[styles.sectionHeader, { marginTop: 20 }]}>
-                <View style={[styles.sectionDot, { backgroundColor: "#6b7280" }]} />
-                <Text style={styles.sectionTitle}>{t("modules_offline")}</Text>
-              </View>
+              <SectionLabel
+                label={t("modules_offline")}
+                leading={
+                  <View style={[styles.sectionDot, { backgroundColor: "#6b7280" }]} />
+                }
+              />
               {offline.map((m) => (
                 <ModuleCard key={m.id} module={m} onToggle={handleToggle} t={t} />
               ))}
@@ -241,16 +252,10 @@ export default function ModulesScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: BG },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
+  headerWrap: {
+    paddingHorizontal: SCREEN_PADDING,
     paddingTop: 8,
-    paddingBottom: 16,
   },
-  headerTitle: { fontSize: 26, fontWeight: "800", color: TEXT, letterSpacing: -0.5 },
-  headerSub: { fontSize: 13, color: TEXT_DIM, marginTop: 2 },
   headerBadge: {
     width: 36,
     height: 36,
@@ -263,16 +268,8 @@ const styles = StyleSheet.create({
   },
   headerBadgeText: { color: GOLD, fontWeight: "700", fontSize: 14 },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 16, paddingBottom: 32 },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 10,
-    marginTop: 4,
-    gap: 8,
-  },
+  scrollContent: { paddingHorizontal: SCREEN_PADDING, paddingBottom: 120 },
   sectionDot: { width: 8, height: 8, borderRadius: 4 },
-  sectionTitle: { fontSize: 12, color: TEXT_DIM, fontWeight: "800", letterSpacing: 1.5, textTransform: "uppercase" },
 
   card: {
     flexDirection: "row",

@@ -32,7 +32,9 @@ import {
   TEXT_FAINT,
   WARNING,
   WARNING_DIM,
+  SCREEN_PADDING,
 } from "@/src/theme/tokens";
+import { ScreenHeader } from "@/src/components/ScreenHeader";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -602,32 +604,45 @@ export default function SalesScreen() {
         ListHeaderComponent={
           <>
             {/* Top bar */}
-            <View style={styles.topBar}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.title}>Sales</Text>
-                <Text style={styles.dateSubtitle}>
-                  {period === "today"
-                    ? formatFullDate(selectedDate, locale)
-                    : period === "this_week"
-                    ? formatWeekPill(selectedWeekStart, locale)
-                    : formatMonth(selectedMonthStart, locale)}
-                </Text>
-              </View>
-              <Pressable
-                accessibilityLabel={t("sales_export_report")}
-                onPress={() => haptic.selection()}
-                style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
-              >
-                <Ionicons name="arrow-down-outline" size={18} color={TEXT_DIM} />
-              </Pressable>
-              <Pressable
-                accessibilityLabel={t("sales_filters")}
-                onPress={() => haptic.selection()}
-                style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
-              >
-                <Ionicons name="options-outline" size={18} color={TEXT_DIM} />
-              </Pressable>
-            </View>
+            <ScreenHeader
+              eyebrow="REVENUE"
+              title={t("tab_sales") || "Sales"}
+              subtitle={
+                period === "today"
+                  ? formatFullDate(selectedDate, locale)
+                  : period === "this_week"
+                  ? formatWeekPill(selectedWeekStart, locale)
+                  : formatMonth(selectedMonthStart, locale)
+              }
+              right={
+                <>
+                  <Pressable
+                    accessibilityLabel={t("sales_export_report")}
+                    onPress={() => haptic.selection()}
+                    style={({ pressed }) => [
+                      styles.iconBtn,
+                      pressed && { opacity: 0.6 },
+                    ]}
+                  >
+                    <Ionicons
+                      name="arrow-down-outline"
+                      size={18}
+                      color={TEXT_DIM}
+                    />
+                  </Pressable>
+                  <Pressable
+                    accessibilityLabel={t("sales_filters")}
+                    onPress={() => haptic.selection()}
+                    style={({ pressed }) => [
+                      styles.iconBtn,
+                      pressed && { opacity: 0.6 },
+                    ]}
+                  >
+                    <Ionicons name="options-outline" size={18} color={TEXT_DIM} />
+                  </Pressable>
+                </>
+              }
+            />
 
             {/* Period segmented */}
             <View style={styles.periodRow}>
@@ -1194,7 +1209,7 @@ export default function SalesScreen() {
 const styles = StyleSheet.create({
   safeContainer: { flex: 1, backgroundColor: BG },
   container: { flex: 1, backgroundColor: "transparent" },
-  content: { padding: 20, paddingBottom: 48, gap: 20 },
+  content: { padding: SCREEN_PADDING, paddingBottom: 128, gap: 20 },
 
   // Top bar — clean, no eyebrow, subtle icons
   topBar: {

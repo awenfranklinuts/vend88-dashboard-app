@@ -26,7 +26,9 @@ import {
   TEXT,
   TEXT_DIM,
   TEXT_FAINT,
+  SCREEN_PADDING,
 } from "@/src/theme/tokens";
+import { ScreenHeader } from "@/src/components/ScreenHeader";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -140,28 +142,31 @@ export default function ProductsScreen() {
   const Header = (
     <>
       {/* Top bar */}
-      <View style={styles.topBar}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.eyebrow}>{t("products_catalog")}</Text>
-          <Text style={styles.title}>{t("products_title")}</Text>
-          <Text style={styles.subtitle}>
-            {loading
-              ? t("common_loading")
-              : t("products_items_summary", {
-                  filtered: filtered.length,
-                  total: totalCount,
-                  noun: totalCount === 1 ? t("products_item_one") : t("products_item_other"),
-                })}
-          </Text>
-        </View>
-        <Pressable
-          accessibilityLabel={t("products_add_product")}
-          onPress={() => haptic.medium()}
-          style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
-        >
-          <Ionicons name="add" size={20} color="#181e38" />
-        </Pressable>
-      </View>
+      <ScreenHeader
+        eyebrow={t("products_catalog")}
+        title={t("products_title")}
+        subtitle={
+          loading
+            ? t("common_loading")
+            : t("products_items_summary", {
+                filtered: filtered.length,
+                total: totalCount,
+                noun:
+                  totalCount === 1
+                    ? t("products_item_one")
+                    : t("products_item_other"),
+              })
+        }
+        right={
+          <Pressable
+            accessibilityLabel={t("products_add_product")}
+            onPress={() => haptic.medium()}
+            style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
+          >
+            <Ionicons name="add" size={20} color="#181e38" />
+          </Pressable>
+        }
+      />
 
       {/* Stats strip */}
       {loading ? (
@@ -440,7 +445,7 @@ export default function ProductsScreen() {
 const styles = StyleSheet.create({
   safeContainer: { flex: 1, backgroundColor: BG },
   container: { flex: 1, backgroundColor: "transparent" },
-  content: { padding: 16, paddingBottom: 40, gap: 18 },
+  content: { padding: SCREEN_PADDING, paddingBottom: 120, gap: 18 },
 
   glow: {
     position: "absolute",
