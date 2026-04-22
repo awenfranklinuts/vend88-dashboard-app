@@ -50,3 +50,24 @@ def get_modules():
         {"id": "loyalty", "name": "Loyalty",           "icon": "star-outline",          "color": "#db2777", "status": "online",  "today_txn": 8},
         {"id": "reports", "name": "Reports",           "icon": "bar-chart-outline",     "color": "#0891b2", "status": "online",  "today_txn": 0},
     ]
+
+
+@router.get("/dashboard/top-products")
+def get_top_products():
+    return [
+        {"id": 1, "name": "Espresso",   "category": "Beverages", "units": 42, "revenue": "189.00", "change_pct":  18.2},
+        {"id": 2, "name": "Croissant",  "category": "Bakery",    "units": 28, "revenue": "89.60",  "change_pct":   7.4},
+        {"id": 3, "name": "Sandwich",   "category": "Food",      "units": 19, "revenue": "169.10", "change_pct":  -3.1},
+        {"id": 4, "name": "Latte",      "category": "Beverages", "units": 17, "revenue": "76.50",  "change_pct":  12.9},
+        {"id": 5, "name": "Muffin",     "category": "Bakery",    "units": 12, "revenue": "38.40",  "change_pct":   2.0},
+    ]
+
+
+@router.get("/dashboard/stores")
+def get_stores():
+    return [
+        {"id": "all",      "name": "All stores", "today_revenue": "1,250.00", "orders": 42, "status": "online",  "is_aggregate": True},
+        {"id": "downtown", "name": "Downtown",   "today_revenue": "720.40",   "orders": 24, "status": "online",  "is_aggregate": False},
+        {"id": "mall",     "name": "Mall",       "today_revenue": "412.60",   "orders": 14, "status": "online",  "is_aggregate": False},
+        {"id": "airport",  "name": "Airport",    "today_revenue": "117.00",   "orders": 4,  "status": "offline", "is_aggregate": False},
+    ]

@@ -30,9 +30,9 @@ export default function TabLayout() {
   return (
     <Tabs
       tabBar={(props) => <IslandTabBar {...props} />}
-      sceneContainerStyle={{ backgroundColor: BG }}
       screenOptions={{
         headerShown: false,
+        sceneStyle: { backgroundColor: BG },
       }}
     >
       <Tabs.Screen name="index" options={{ title: t("tab_dashboard") }} />

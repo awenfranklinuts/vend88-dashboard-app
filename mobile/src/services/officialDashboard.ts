@@ -25,6 +25,11 @@ export type DashboardRecentOrder = {
   time: string;
 };
 
+type AuthOverride = {
+  email?: string | null;
+  token?: string | null;
+};
+
 export type OfficialSaleRecord = {
   id: string | number;
   date: string;
@@ -64,6 +69,11 @@ type MetaResponse = {
     BUSINESS_SELECTION?: unknown;
     STORE_SELECTION?: unknown;
   };
+};
+
+type AdminProfileResponse = {
+  status_code?: number;
+  email?: string;
 };
 
 type OrderSearchItem = {
@@ -138,11 +148,35 @@ function getWeeklyRange(now = new Date()) {
   };
 }
 
+function getTodayRange(now = new Date()) {
+  const start = new Date(now);
+  const end = new Date(now);
+  return {
+    startDate: formatBusinessDate(start, false),
+    endDate: formatBusinessDate(end, true),
+  };
+}
+
+export type TopItemsPeriod = "today" | "week" | "month";
+
+function getRangeForPeriod(period: TopItemsPeriod) {
+  if (period === "today") return getTodayRange();
+  if (period === "week") return getWeeklyRange();
+  return getMonthRange();
+}
+
+function toLocalDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 function buildLastSevenDayKeys(now = new Date()): string[] {
   return Array.from({ length: 7 }, (_, index) => {
     const d = new Date(now);
     d.setDate(d.getDate() - (6 - index));
-    return d.toISOString().slice(0, 10);
+    return toLocalDateKey(d);
   });
 }
 
@@ -266,6 +300,30 @@ async function discoverBusinessIdFromMeta(
   email: string,
   token: string
 ): Promise<string | null> {
+  const selections = await discoverSelectionsFromMeta(email, token);
+  return selections.businessId;
+}
+
+function extractSelectionId(value: unknown): string | null {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const candidate = value as Record<string, unknown>;
+    for (const key of ["_id", "id", "business_id", "store_id", "shop_id", "value"]) {
+      const raw = candidate[key];
+      if (typeof raw === "string" && raw.trim().length > 0) {
+        return raw;
+      }
+    }
+  }
+  return null;
+}
+
+async function discoverSelectionsFromMeta(
+  email: string,
+  token: string
+): Promise<{ businessId: string | null; storeId: string | null }> {
   const payloads = [
     { id: email, token },
     { id: email },
@@ -279,76 +337,443 @@ async function discoverBusinessIdFromMeta(
       }
 
       const businessSelection = response.data.meta?.BUSINESS_SELECTION;
-      if (typeof businessSelection === "string" && businessSelection.trim().length > 0) {
-        return businessSelection;
-      }
+      const storeSelection = response.data.meta?.STORE_SELECTION;
+      return {
+        businessId: extractSelectionId(businessSelection),
+        storeId: extractSelectionId(storeSelection),
+      };
     } catch {
       // Try the next payload variation.
+    }
+  }
+
+  return { businessId: null, storeId: null };
+}
+
+async function resolveOfficialAuth(auth?: AuthOverride): Promise<{
+  email: string | null;
+  token: string | null;
+}> {
+  const [storedEmail, storedToken] = await Promise.all([
+    SecureStore.getItemAsync(AUTH_EMAIL_KEY),
+    SecureStore.getItemAsync(AUTH_TOKEN_KEY),
+  ]);
+
+  const token = auth?.token ?? storedToken ?? process.env.EXPO_PUBLIC_OFFICIAL_TOKEN ?? null;
+  let email = auth?.email ?? storedEmail ?? process.env.EXPO_PUBLIC_OFFICIAL_EMAIL ?? null;
+
+  if (token) {
+    try {
+      const response = await api.post<AdminProfileResponse>("/admin/profile", { token });
+      const profileEmail = response.data?.email?.trim();
+      if (response.data?.status_code === 200 && profileEmail) {
+        email = profileEmail;
+      }
+    } catch {
+      // Fall back to passed or stored email if profile lookup fails.
+    }
+  }
+
+  return { email, token };
+}
+
+async function discoverShopIdFromBusiness(
+  businessId: string,
+  token: string
+): Promise<string | null> {
+  const payloads: Array<Record<string, unknown>> = [
+    // Variant A: query object with business_id
+    {
+      query: { key: "business_id", value: businessId },
+      detail: true,
+      ignore_pagination: true,
+      token,
+    },
+    // Variant B: top-level business_id
+    { business_id: businessId, detail: true, ignore_pagination: true, token },
+    // Variant C: filter object
+    { filter: { business_id: businessId }, detail: true, token },
+    // Variant D: no filter — list all, then filter client-side
+    { detail: true, ignore_pagination: true, token },
+  ];
+
+  for (const body of payloads) {
+    try {
+      const response = await api.post<Record<string, unknown>>(
+        "/search/shop_search",
+        body
+      );
+      const data = response.data ?? {};
+      const statusCode = data.status_code;
+      const candidates: Array<Record<string, unknown>> = [];
+      for (const key of ["shops", "shop", "data", "stores", "results"]) {
+        const value = data[key];
+        if (Array.isArray(value)) {
+          for (const entry of value) {
+            if (entry && typeof entry === "object") {
+              candidates.push(entry as Record<string, unknown>);
+            }
+          }
+        }
+      }
+      console.log(
+        "[top-items] shop_search status:",
+        statusCode,
+        "payloadKeys:",
+        Object.keys(data),
+        "candidates:",
+        candidates.length,
+        "sample:",
+        candidates[0] ? Object.keys(candidates[0]).slice(0, 10) : null
+      );
+
+      if (statusCode !== 200 || candidates.length === 0) continue;
+
+      const idKeys = ["_id", "id", "shop_id", "store_id"];
+      const biz = businessId;
+      const matches = candidates.filter((shop) => {
+        for (const bKey of ["business_id", "business", "biz_id"]) {
+          const v = shop[bKey];
+          if (typeof v === "string" && v === biz) return true;
+        }
+        return false;
+      });
+
+      const pool = matches.length > 0 ? matches : candidates;
+      for (const shop of pool) {
+        for (const key of idKeys) {
+          const raw = shop[key];
+          if (typeof raw === "string" && raw.trim().length > 0) {
+            return raw;
+          }
+        }
+      }
+    } catch (err) {
+      console.log("[top-items] shop_search error:", err);
     }
   }
 
   return null;
 }
 
-export async function fetchOfficialMonthRevenueData(): Promise<{
+function buildScopedQueries(
+  baseQuery: Record<string, unknown>,
+  businessId: string | null,
+  storeId: string | null
+): Array<Record<string, unknown>> {
+  const queries: Array<Record<string, unknown>> = [];
+
+  if (storeId && businessId) {
+    queries.push({ ...baseQuery, business_id: businessId, shop_id: storeId });
+    queries.push({ ...baseQuery, business_id: businessId, store_id: storeId });
+  }
+  if (storeId) {
+    queries.push({ ...baseQuery, shop_id: storeId });
+    queries.push({ ...baseQuery, store_id: storeId });
+  }
+  if (businessId) {
+    queries.push({ ...baseQuery, business_id: businessId });
+  }
+
+  return queries;
+}
+
+async function requestScopedOrders(
+  token: string,
+  baseQuery: Record<string, unknown>,
+  businessId: string | null,
+  storeId: string | null
+): Promise<Array<OrderSearchItem | string>> {
+  for (const query of buildScopedQueries(baseQuery, businessId, storeId)) {
+    const payloads: Array<Record<string, unknown>> = [
+      {
+        detail: true,
+        ignore_pagination: false,
+        page: 0,
+        query,
+        token,
+      },
+      {
+        detail: true,
+        ignore_pagination: true,
+        query,
+        token,
+      },
+    ];
+
+    for (const payload of payloads) {
+      try {
+        const response = await api.post<OrderSearchResponse>(
+          "/search/order_search",
+          payload
+        );
+        if (Array.isArray(response.data?.orders) && response.data.orders.length > 0) {
+          return response.data.orders;
+        }
+      } catch {
+        // Try the next scoped query variation.
+      }
+    }
+  }
+
+  return [];
+}
+
+export type DashboardTopItem = {
+  id: string;
+  name: string;
+  units: number;
+  revenue: string;
+  image?: string;
+};
+
+type PosDashboardResponse = {
+  status_code?: number;
+  sales_by_item?: Record<string, number>;
+  sales_by_category?: Record<string, number>;
+};
+
+type ProductRecord = Record<string, unknown>;
+
+type ProductSearchResponse = {
+  status_code?: number;
+  products?: ProductRecord[];
+  product?: ProductRecord[];
+  data?: ProductRecord[];
+  results?: ProductRecord[];
+};
+
+function pickString(obj: ProductRecord, keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim().length > 0) return v;
+  }
+  return undefined;
+}
+
+function pickImage(obj: ProductRecord): string | undefined {
+  const direct = pickString(obj, ["image", "image_url", "imageUrl", "photo", "cover"]);
+  if (direct) return direct;
+  for (const k of ["image_urls", "images", "photos", "pictures"]) {
+    const v = obj[k];
+    if (Array.isArray(v) && v.length > 0) {
+      const first = v[0];
+      if (typeof first === "string" && first.trim()) return first;
+      if (first && typeof first === "object") {
+        const inner = pickString(first as ProductRecord, ["url", "src", "image", "path"]);
+        if (inner) return inner;
+      }
+    }
+  }
+  return undefined;
+}
+
+async function resolveProductDetails(
+  ids: string[],
+  shopId: string,
+  businessId: string,
+  token: string
+): Promise<Record<string, { name: string; image?: string }>> {
+  if (ids.length === 0) return {};
+  void shopId;
+  void businessId;
+  const details: Record<string, { name: string; image?: string }> = {};
+
+  try {
+    const response = await api.post<ProductSearchResponse>(
+      "/product/batch_details",
+      { product_ids: ids, token }
+    );
+    const data = response.data ?? {};
+    const products: ProductRecord[] =
+      data.products ?? data.product ?? data.data ?? data.results ?? [];
+    console.log(
+      "[top-items] batch_details status:",
+      data.status_code,
+      "products:",
+      Array.isArray(products) ? products.length : 0
+    );
+    if (Array.isArray(products)) {
+      for (const product of products) {
+        const productId = pickString(product, ["_id", "id", "product_id"]);
+        if (!productId) continue;
+        const name = pickString(product, [
+          "name",
+          "title",
+          "product_name",
+          "display_name",
+        ]);
+        if (!name) continue;
+        details[productId] = { name, image: pickImage(product) };
+      }
+    }
+  } catch (err) {
+    console.log("[top-items] batch_details error:", err);
+  }
+
+  return details;
+}
+
+export async function fetchOfficialTopSellingItems(
+  limit = 10,
+  period: TopItemsPeriod = "month",
+  auth?: AuthOverride
+): Promise<DashboardTopItem[]> {
+  const { email, token } = await resolveOfficialAuth(auth);
+  if (!email || !token) {
+    throw new Error("Official dashboard config missing.");
+  }
+
+  const preferAccountScope = Boolean(auth?.email || auth?.token);
+  const envBusinessId = preferAccountScope
+    ? undefined
+    : process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
+  const metaSelections = await discoverSelectionsFromMeta(email, token);
+  const businessId = envBusinessId ?? metaSelections.businessId ?? (await discoverBusinessId(email, token));
+  if (!businessId) {
+    throw new Error("Unable to resolve business_id for this account.");
+  }
+  console.log("[top-items] businessId:", businessId);
+
+  const envShopId = preferAccountScope
+    ? undefined
+    : process.env.EXPO_PUBLIC_OFFICIAL_SHOP_ID;
+  const shopId =
+    envShopId ?? metaSelections.storeId ?? (await discoverShopIdFromBusiness(businessId, token));
+  if (!shopId) {
+    throw new Error("Unable to resolve shop_id for this business.");
+  }
+  console.log("[top-items] shopId:", shopId, "period:", period);
+
+  const { startDate, endDate } = getRangeForPeriod(period);
+
+  const response = await api.post<PosDashboardResponse>("/pos/dashboard", {
+    shop_id: shopId,
+    start_date: startDate,
+    end_date: endDate,
+    status: "paid",
+    token,
+  });
+
+  const data = response.data;
+  console.log(
+    "[top-items] pos/dashboard status:",
+    data?.status_code,
+    "items:",
+    data?.sales_by_item ? Object.keys(data.sales_by_item).length : 0,
+    "keys:",
+    Object.keys(data ?? {})
+  );
+  if (data?.status_code !== 200 || !data.sales_by_item) {
+    throw new Error("POS dashboard request failed.");
+  }
+
+  const entries = Object.entries(data.sales_by_item)
+    .map(([id, amount]) => ({ id, revenue: toNumber(amount) }))
+    .filter((row) => row.revenue > 0)
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, limit);
+
+  const detailMap = await resolveProductDetails(
+    entries.map((row) => row.id),
+    shopId,
+    businessId,
+    token
+  );
+
+  return entries.map((row) => {
+    const detail = detailMap[row.id];
+    const name = detail?.name ?? `Item ${row.id.slice(-6).toUpperCase()}`;
+    return {
+      id: row.id,
+      name,
+      units: Math.round(row.revenue),
+      revenue: row.revenue.toFixed(2),
+      image: detail?.image,
+    };
+  });
+}
+
+
+export async function fetchOfficialMonthRevenueData(
+  auth?: AuthOverride
+): Promise<{
   summary: DashboardSummary;
   chart: DashboardChartPoint[];
 }> {
-  let businessId = process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
-  const [storedEmail, storedToken] = await Promise.all([
-    SecureStore.getItemAsync(AUTH_EMAIL_KEY),
-    SecureStore.getItemAsync(AUTH_TOKEN_KEY),
-  ]);
+  return fetchOfficialMonthRevenueDataForAuth(auth);
+}
 
-  const email = storedEmail ?? process.env.EXPO_PUBLIC_OFFICIAL_EMAIL;
-  const token = storedToken ?? process.env.EXPO_PUBLIC_OFFICIAL_TOKEN;
+export async function fetchOfficialMonthRevenueDataForAuth(
+  auth?: AuthOverride
+): Promise<{
+  summary: DashboardSummary;
+  chart: DashboardChartPoint[];
+}> {
+  const preferAccountScope = Boolean(auth?.email || auth?.token);
+  let businessId = preferAccountScope
+    ? undefined
+    : process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
+  const { email, token } = await resolveOfficialAuth(auth);
 
   if (!email || !token) {
     throw new Error("Official business sales config missing.");
   }
 
-  if (!businessId) {
-     businessId = (await discoverBusinessId(email, token)) ?? undefined;
-  }
+  const metaSelections = await discoverSelectionsFromMeta(email, token);
+  const storeId = metaSelections.storeId;
 
   if (!businessId) {
-    throw new Error("Unable to resolve business_id for this account.");
+     businessId = metaSelections.businessId ?? (await discoverBusinessId(email, token)) ?? undefined;
+  }
+
+  if (!businessId || !storeId) {
+    throw new Error("Unable to resolve business/store for this account.");
   }
 
   const { startDate, endDate } = getMonthRange();
-  const response = await api.post<BusinessSalesResponse>("/dashboard/business_sales", {
-    business_id: businessId,
-    email,
-    start_date: startDate,
-    end_date: endDate,
+  const rawOrders = await requestScopedOrders(
     token,
-  });
+    { time: [startDate, endDate] },
+    businessId,
+    storeId
+  );
 
-  const data = response.data;
-  if (data?.status_code !== 200) {
-    throw new Error("Official business sales request failed.");
+  const detailedOrders = rawOrders.filter(
+    (order): order is OrderSearchItem => typeof order === "object" && order !== null
+  );
+  if (detailedOrders.length === 0) {
+    throw new Error("No month revenue found for this store.");
   }
 
-  const dailyStats = data.daily_statistics ?? {};
-  const sortedDays = Object.keys(dailyStats).sort();
-  const lastSevenDays = sortedDays.slice(-7);
+  const revenueByDay = new Map<string, number>();
+  let totalSales = 0;
+  let totalProducts = 0;
+  for (const order of detailedOrders) {
+    totalSales += toNumber(order.price);
+    if (Array.isArray(order.qtys)) {
+      totalProducts += order.qtys.reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0);
+    }
+    if (order.time) {
+      const dayKey = toLocalDateKey(
+        new Date(order.time.replace(" ", "T").replace(" +", "+"))
+      );
+      revenueByDay.set(dayKey, (revenueByDay.get(dayKey) ?? 0) + toNumber(order.price));
+    }
+  }
 
+  const lastSevenDays = buildLastSevenDayKeys();
   const chart: DashboardChartPoint[] = lastSevenDays.map((dateKey) => {
     const d = new Date(`${dateKey}T00:00:00`);
-    const day = d.toLocaleDateString(undefined, { weekday: "short" });
     return {
-      day,
-      revenue: toNumber(dailyStats[dateKey]?.sales),
+      day: d.toLocaleDateString(undefined, { weekday: "short" }),
+      revenue: revenueByDay.get(dateKey) ?? 0,
     };
   });
 
-  const todayKey = new Date().toISOString().slice(0, 10);
-  const todaySales = toNumber(dailyStats[todayKey]?.sales);
-
-  const totalSales = toNumber(data.total_orders?.sales);
-  const totalOrderCount =
-    toNumber(data.total_order_count) || toNumber(data.total_orders?.num_sales);
-  const totalProducts = toNumber(data.total_orders?.num_products);
+  const todayKey = toLocalDateKey(new Date());
+  const todaySales = revenueByDay.get(todayKey) ?? 0;
+  const totalOrderCount = detailedOrders.length;
   const avgOrder = totalOrderCount > 0 ? totalSales / totalOrderCount : 0;
 
   return {
@@ -365,76 +790,38 @@ export async function fetchOfficialMonthRevenueData(): Promise<{
   };
 }
 
-export async function fetchOfficialRecentOrders(): Promise<DashboardRecentOrder[]> {
-  const [storedEmail, storedToken] = await Promise.all([
-    SecureStore.getItemAsync(AUTH_EMAIL_KEY),
-    SecureStore.getItemAsync(AUTH_TOKEN_KEY),
-  ]);
+export async function fetchOfficialRecentOrders(
+  auth?: AuthOverride
+): Promise<DashboardRecentOrder[]> {
+  return fetchOfficialRecentOrdersForAuth(auth);
+}
 
-  const email = storedEmail ?? process.env.EXPO_PUBLIC_OFFICIAL_EMAIL;
-  const token = storedToken ?? process.env.EXPO_PUBLIC_OFFICIAL_TOKEN;
+export async function fetchOfficialRecentOrdersForAuth(
+  auth?: AuthOverride
+): Promise<DashboardRecentOrder[]> {
+  const { email, token } = await resolveOfficialAuth(auth);
 
-  const envBusinessId = process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
+  const preferAccountScope = Boolean(auth?.email || auth?.token);
+  const envBusinessId = preferAccountScope
+    ? undefined
+    : process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
+  const metaSelections =
+    email && token
+      ? await discoverSelectionsFromMeta(email, token)
+      : { businessId: null, storeId: null };
   const businessId =
-    envBusinessId ?? (email && token ? await discoverBusinessId(email, token) : null);
+    envBusinessId ?? metaSelections.businessId ?? (email && token ? await discoverBusinessId(email, token) : null);
+  const storeId = metaSelections.storeId;
   const { startDate, endDate } = getRecentRange();
 
   const baseQuery: Record<string, unknown> = {
     time: [startDate, endDate],
   };
-
-  const requestOrders = async (query: Record<string, unknown>) => {
-    const payloads: Array<Record<string, unknown>> = [
-      {
-        detail: true,
-        ignore_pagination: false,
-        page: 0,
-        query,
-      },
-      {
-        detail: true,
-        ignore_pagination: true,
-        query,
-      },
-    ];
-
-    if (token) {
-      for (const payload of payloads) {
-        payload.token = token;
-      }
-    }
-
-    for (const payload of payloads) {
-      try {
-        const response = await api.post<OrderSearchResponse>(
-          "/search/order_search",
-          payload
-        );
-        if (Array.isArray(response.data?.orders) && response.data.orders.length > 0) {
-          return response.data.orders;
-        }
-      } catch {
-        // Try the next lighter/heavier variation.
-      }
-    }
-
+  if (!token || !businessId || !storeId) {
     return [];
-  };
-
-  let rawOrders: Array<OrderSearchItem | string> = [];
-
-  if (businessId) {
-    rawOrders = await requestOrders({
-      ...baseQuery,
-      business_id: businessId,
-    });
   }
 
-  if (rawOrders.length === 0) {
-    // Some accounts return empty when scoped by business selection.
-    // Retry with time-only query to keep recent orders visible.
-    rawOrders = await requestOrders(baseQuery);
-  }
+  const rawOrders = await requestScopedOrders(token, baseQuery, businessId, storeId);
 
   const detailedOrders = rawOrders.filter(
     (order): order is OrderSearchItem => typeof order === "object" && order !== null
@@ -478,71 +865,31 @@ export async function fetchOfficialRecentOrders(): Promise<DashboardRecentOrder[
   });
 }
 
-export async function fetchOfficialWeeklyRevenueChart(): Promise<DashboardChartPoint[]> {
-  const [storedEmail, storedToken] = await Promise.all([
-    SecureStore.getItemAsync(AUTH_EMAIL_KEY),
-    SecureStore.getItemAsync(AUTH_TOKEN_KEY),
-  ]);
-
-  const email = storedEmail ?? process.env.EXPO_PUBLIC_OFFICIAL_EMAIL;
-  const token = storedToken ?? process.env.EXPO_PUBLIC_OFFICIAL_TOKEN;
-  const envBusinessId = process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
+export async function fetchOfficialWeeklyRevenueChart(
+  auth?: AuthOverride
+): Promise<DashboardChartPoint[]> {
+  const { email, token } = await resolveOfficialAuth(auth);
+  const preferAccountScope = Boolean(auth?.email || auth?.token);
+  const envBusinessId = preferAccountScope
+    ? undefined
+    : process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
+  const metaSelections =
+    email && token
+      ? await discoverSelectionsFromMeta(email, token)
+      : { businessId: null, storeId: null };
   const businessId =
-    envBusinessId ?? (email && token ? await discoverBusinessId(email, token) : null);
+    envBusinessId ?? metaSelections.businessId ?? (email && token ? await discoverBusinessId(email, token) : null);
+  const storeId = metaSelections.storeId;
 
   const { startDate, endDate } = getWeeklyRange();
   const baseQuery: Record<string, unknown> = {
     time: [startDate, endDate],
   };
-
-  const requestOrders = async (query: Record<string, unknown>) => {
-    const payloads: Array<Record<string, unknown>> = [
-      {
-        detail: true,
-        ignore_pagination: false,
-        page: 0,
-        query,
-      },
-      {
-        detail: true,
-        ignore_pagination: true,
-        query,
-      },
-    ];
-
-    if (token) {
-      for (const payload of payloads) {
-        payload.token = token;
-      }
-    }
-
-    for (const payload of payloads) {
-      try {
-        const response = await api.post<OrderSearchResponse>(
-          "/search/order_search",
-          payload
-        );
-        if (Array.isArray(response.data?.orders) && response.data.orders.length > 0) {
-          return response.data.orders;
-        }
-      } catch {
-        // Try the next variation.
-      }
-    }
-
+  if (!token || !businessId || !storeId) {
     return [];
-  };
+  }
 
-  let rawOrders: Array<OrderSearchItem | string> = [];
-  if (businessId) {
-    rawOrders = await requestOrders({
-      ...baseQuery,
-      business_id: businessId,
-    });
-  }
-  if (rawOrders.length === 0) {
-    rawOrders = await requestOrders(baseQuery);
-  }
+  const rawOrders = await requestScopedOrders(token, baseQuery, businessId, storeId);
 
   const detailedOrders = rawOrders.filter(
     (order): order is OrderSearchItem => typeof order === "object" && order !== null
@@ -554,9 +901,9 @@ export async function fetchOfficialWeeklyRevenueChart(): Promise<DashboardChartP
       continue;
     }
 
-    const dayKey = new Date(order.time.replace(" ", "T").replace(" +", "+"))
-      .toISOString()
-      .slice(0, 10);
+    const dayKey = toLocalDateKey(
+      new Date(order.time.replace(" ", "T").replace(" +", "+"))
+    );
     revenueByDay.set(dayKey, (revenueByDay.get(dayKey) ?? 0) + toNumber(order.price));
   }
 

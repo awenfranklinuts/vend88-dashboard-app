@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import * as SecureStore from "expo-secure-store";
 import { loginWithEmail } from "../services/authService";
 import { api } from "../services/api";
@@ -38,12 +38,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [firstName, setFirstName] = useState<string | null>(null);
   const [lastName, setLastName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const activeTokenRef = useRef<string | null>(null);
 
   const refreshProfile = useCallback(async (authToken: string) => {
     try {
       const response = await api.post<AdminProfileResponse>("/admin/profile", {
         token: authToken,
       });
+      if (activeTokenRef.current !== authToken) {
+        return;
+      }
       const data = response.data;
       if (data?.status_code !== 200) return;
       const nextFirst = data.first_name?.trim() || null;
@@ -83,6 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (storedFirst) setFirstName(storedFirst);
           if (storedLast) setLastName(storedLast);
         }
+        activeTokenRef.current = storedToken;
         if (storedToken) {
           refreshProfile(storedToken);
         }
@@ -103,6 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = async (email: string, password: string): Promise<SignInResult> => {
     try {
       const result = await loginWithEmail(email, password);
+      activeTokenRef.current = result.token;
       setToken(result.token);
       setEmail(email);
       await Promise.all([
@@ -120,6 +126,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
+    activeTokenRef.current = null;
     setToken(null);
     setEmail(null);
     setFirstName(null);

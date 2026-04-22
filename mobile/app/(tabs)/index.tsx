@@ -1,5 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  Animated,
+  Easing,
+  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -16,6 +19,7 @@ import { API_TARGET, api } from "@/src/services/api";
 import {
   fetchOfficialMonthRevenueData,
   fetchOfficialRecentOrders,
+  fetchOfficialTopSellingItems,
   fetchOfficialWeeklyRevenueChart,
 } from "@/src/services/officialDashboard";
 import { AnimatedNumber } from "@/src/components/AnimatedNumber";
@@ -70,6 +74,25 @@ type Module = {
   color: string;
   status: string;
   today_txn: number;
+};
+
+type TopProduct = {
+  id: number | string;
+  name: string;
+  category: string;
+  units: number;
+  revenue: string;
+  change_pct?: number;
+  image?: string;
+};
+
+type Store = {
+  id: string;
+  name: string;
+  today_revenue: string;
+  orders: number;
+  status: string;
+  is_aggregate?: boolean;
 };
 
 const MODULE_ROUTE_MAP: Record<string, string> = {
@@ -149,70 +172,189 @@ function orderGlyph(moduleName: string): { icon: keyof typeof Ionicons.glyphMap;
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { t } = useI18n();
-  const { email, firstName, lastName } = useAuth();
+  const { t, locale } = useI18n();
+  const { email, token, firstName, lastName, loading: authLoading } = useAuth();
   const identity = buildIdentity(email, firstName, lastName);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [chart, setChart] = useState<ChartPoint[]>([]);
   const [orders, setOrders] = useState<RecentOrder[]>([]);
   const [modules, setModules] = useState<Module[]>([]);
+  const [topProducts, setTopProducts] = useState<TopProduct[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [selectedStoreId, setSelectedStoreId] = useState<string>("all");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [heroPeriod, setHeroPeriod] = useState<"month" | "week" | "today">("month");
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [chartError, setChartError] = useState<string | null>(null);
 
   const fetchAll = async () => {
     let hasOfficialSummary = false;
     let hasOfficialRecentOrders = false;
     let hasOfficialChart = false;
+    const currentAuth = { email, token };
 
     if (API_TARGET === "official") {
+      setSummary(null);
+      setChart([]);
+      setOrders([]);
+      setSummaryError(null);
+      setChartError(null);
+
       try {
-        const official = await fetchOfficialMonthRevenueData();
+        const official = await fetchOfficialMonthRevenueData(currentAuth);
         setSummary(official.summary);
         hasOfficialSummary = true;
       } catch {
         hasOfficialSummary = false;
+        setSummaryError("Unable to load month revenue for this account.");
       }
 
       try {
-        const officialChart = await fetchOfficialWeeklyRevenueChart();
-        setChart(officialChart);
-        hasOfficialChart = true;
+        const officialChart = await fetchOfficialWeeklyRevenueChart(currentAuth);
+        if (officialChart.length > 0) {
+          setChart(officialChart);
+          hasOfficialChart = true;
+        } else {
+          hasOfficialChart = false;
+          setChartError("No week or day revenue found for this account.");
+        }
       } catch {
         hasOfficialChart = false;
+        setChartError("Unable to load week or day revenue for this account.");
       }
 
       try {
-        const officialOrders = await fetchOfficialRecentOrders();
+        const officialOrders = await fetchOfficialRecentOrders(currentAuth);
         setOrders(officialOrders);
         hasOfficialRecentOrders = true;
       } catch {
         hasOfficialRecentOrders = false;
       }
+
+      const [m, st] = await Promise.allSettled([
+        api.get<Module[]>("/dashboard/modules"),
+        api.get<Store[]>("/dashboard/stores"),
+      ]);
+
+      if (m.status === "fulfilled") setModules(m.value.data);
+      if (st.status === "fulfilled") setStores(st.value.data);
+      return;
     }
 
-    const [s, c, o, m] = await Promise.allSettled([
+    const [s, c, o, m, p, st] = await Promise.allSettled([
       api.get<Summary>("/dashboard/summary"),
       api.get<ChartPoint[]>("/dashboard/revenue-chart"),
       api.get<RecentOrder[]>("/dashboard/recent-orders"),
       api.get<Module[]>("/dashboard/modules"),
+      api.get<TopProduct[]>("/dashboard/top-products"),
+      api.get<Store[]>("/dashboard/stores"),
     ]);
 
-    if (!hasOfficialSummary && s.status === "fulfilled") {
+    if (s.status === "fulfilled") {
       setSummary(s.value.data);
+      setSummaryError(null);
     }
-    if (!hasOfficialChart && c.status === "fulfilled") {
+    if (c.status === "fulfilled") {
       setChart(c.value.data);
+      setChartError(null);
     }
-    if (!hasOfficialRecentOrders && o.status === "fulfilled") {
+    if (o.status === "fulfilled") {
       setOrders(o.value.data);
     }
     if (m.status === "fulfilled") setModules(m.value.data);
+    if (p.status === "fulfilled") setTopProducts(p.value.data);
+    if (st.status === "fulfilled") setStores(st.value.data);
   };
 
+  // Top Selling Items — synced to heroPeriod (today/week/month).
+  const topListAnim = useRef(new Animated.Value(1)).current;
   useEffect(() => {
+    if (API_TARGET === "official" && authLoading) {
+      return;
+    }
+    let cancelled = false;
+    const run = async () => {
+      // Fade out current list before swapping data.
+      Animated.timing(topListAnim, {
+        toValue: 0,
+        duration: 140,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }).start();
+
+      const applyAndFadeIn = (next: TopProduct[]) => {
+        if (cancelled) return;
+        setTopProducts(next);
+        Animated.timing(topListAnim, {
+          toValue: 1,
+          duration: 220,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }).start();
+      };
+
+      if (API_TARGET === "official") {
+        try {
+          const officialTop = await fetchOfficialTopSellingItems(3, heroPeriod, {
+            email,
+            token,
+          });
+          if (cancelled) return;
+          applyAndFadeIn(
+            officialTop.map((item) => ({
+              id: item.id,
+              name: item.name,
+              category: "",
+              units: item.units,
+              revenue: item.revenue,
+              image: item.image,
+            }))
+          );
+          return;
+        } catch (err) {
+          console.log("[top-items] fetch failed:", err);
+          if (!cancelled) {
+            setTopProducts([]);
+            Animated.timing(topListAnim, {
+              toValue: 1,
+              duration: 160,
+              useNativeDriver: true,
+            }).start();
+          }
+          return;
+        }
+      }
+      try {
+        const { data } = await api.get<TopProduct[]>(
+          `/dashboard/top-products?period=${heroPeriod}`
+        );
+        applyAndFadeIn(data.slice(0, 3));
+      } catch {
+        // Restore visibility if fetch failed so the stale list remains readable.
+        if (!cancelled) {
+          Animated.timing(topListAnim, {
+            toValue: 1,
+            duration: 160,
+            useNativeDriver: true,
+          }).start();
+        }
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, email, heroPeriod, token, topListAnim]);
+
+  useEffect(() => {
+    if (API_TARGET === "official" && authLoading) {
+      return;
+    }
+
+    setLoading(true);
     fetchAll().finally(() => setLoading(false));
-  }, []);
+  }, [authLoading, email, token]);
 
   const onRefresh = async () => {
     haptic.light();
@@ -275,6 +417,7 @@ export default function DashboardScreen() {
   };
 
   const currentHero = heroConfig[heroPeriod];
+  const heroError = heroPeriod === "month" ? summaryError : chartError;
 
   // Build a period-appropriate sparkline. Only weekly data is available from the API,
   // so month/today are synthesised from totals to visualise the shape of the period.
@@ -302,12 +445,14 @@ export default function DashboardScreen() {
   // KPI values scaled to hero period (approximations when period-specific data isn't available).
   const totalOrders = summary?.total_orders ?? 0;
   const monthAvg = parseMoney(summary?.avg_order_value);
+  const todayDerivedOrders =
+    monthAvg > 0 ? Math.max(0, Math.round(todayRevenue / monthAvg)) : 0;
   const periodOrders =
     heroPeriod === "month"
       ? totalOrders
       : heroPeriod === "week"
       ? Math.round(totalOrders / 4.3)
-      : Math.round(totalOrders / 30);
+      : todayDerivedOrders;
   // Derive period avg from period sales / period orders; fall back to month avg.
   const avgOrder =
     periodOrders > 0 ? currentHero.value / periodOrders : monthAvg;
@@ -340,16 +485,45 @@ export default function DashboardScreen() {
       >
         {/* Header */}
         <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.greeting}>
-              {greeting(t)}
-              {identity.first ? `, ${identity.first}` : ""}
-            </Text>
-            <View style={styles.brandRow}>
-              <Text style={styles.brandVend}>VEND</Text>
-              <Text style={styles.brand88}>88</Text>
+          <View style={styles.headerText}>
+            <View style={styles.headerTopRow}>
+              <Text style={styles.eyebrow}>
+                {new Date()
+                  .toLocaleDateString(locale, {
+                    weekday: "short",
+                    day: "numeric",
+                    month: "short",
+                  })
+                  .toUpperCase()}
+              </Text>
             </View>
-            <Text style={styles.subtitle}>{t("dashboard_subtitle")}</Text>
+            <Text style={styles.greetingLine} numberOfLines={1}>
+              <Text style={styles.greetingDim}>
+                {greeting(t)}
+                {identity.first ? ", " : ""}
+              </Text>
+              {identity.first ? (
+                <Text style={styles.greetingName}>{identity.first}</Text>
+              ) : null}
+            </Text>
+            {(() => {
+              const online = modules.filter((m) => m.status === "online").length;
+              const offline = modules.length - online;
+              if (modules.length === 0) return null;
+              return (
+                <View style={styles.metaRow}>
+                  <PulsingDot
+                    color={offline === 0 ? SUCCESS : WARNING}
+                    size={6}
+                    active
+                  />
+                  <Text style={styles.metaText}>
+                    {online} {t("modules_online")}
+                    {offline > 0 ? ` · ${offline} ${t("modules_offline_status")}` : ""}
+                  </Text>
+                </View>
+              );
+            })()}
           </View>
           <View style={styles.headerActions}>
             <Pressable
@@ -391,6 +565,56 @@ export default function DashboardScreen() {
           </>
         ) : (
           <>
+            {/* Store strip — tap to filter (visual compare for now) */}
+            {stores.length > 1 && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.storeRow}
+              >
+                {stores.map((store) => {
+                  const selected = store.id === selectedStoreId;
+                  const online = store.status === "online";
+                  return (
+                    <Pressable
+                      key={store.id}
+                      accessibilityLabel={`${store.name}, $${store.today_revenue}`}
+                      onPress={() => {
+                        haptic.selection();
+                        setSelectedStoreId(store.id);
+                      }}
+                      style={({ pressed }) => [
+                        styles.storeChip,
+                        selected && styles.storeChipActive,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <View style={styles.storeChipHeader}>
+                        {store.is_aggregate ? (
+                          <Ionicons name="albums-outline" size={12} color={selected ? GOLD : TEXT_DIM} />
+                        ) : (
+                          <PulsingDot
+                            color={online ? SUCCESS : "#6b7280"}
+                            size={6}
+                            active={online}
+                          />
+                        )}
+                        <Text
+                          style={[styles.storeName, selected && styles.storeNameActive]}
+                          numberOfLines={1}
+                        >
+                          {store.is_aggregate ? t("dashboard_all_stores") : store.name}
+                        </Text>
+                      </View>
+                      <Text style={[styles.storeRevenue, selected && styles.storeRevenueActive]}>
+                        ${store.today_revenue}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+
             {/* Hero metric — tap to cycle period, long-press to open Sales */}
             <Pressable
               accessibilityLabel={`${currentHero.label}. Tap to switch period, long press to view report.`}
@@ -416,31 +640,42 @@ export default function DashboardScreen() {
                     />
                   </View>
                 </View>
-                <AnimatedNumber
-                  value={currentHero.value}
-                  prefix="$"
-                  style={styles.heroValue}
-                />
+                {heroError ? (
+                  <Text style={styles.heroError}>Error</Text>
+                ) : (
+                  <AnimatedNumber
+                    value={currentHero.value}
+                    prefix="$"
+                    decimals={2}
+                    style={styles.heroValue}
+                  />
+                )}
                 <View style={styles.heroFoot}>
-                  {(() => {
-                    const change = currentHero.change;
-                    const isPositive = change >= 0;
-                    const color = isPositive ? SUCCESS : DANGER;
-                    return (
-                      <View style={styles.heroBadge}>
-                        <Ionicons
-                          name={isPositive ? "trending-up" : "trending-down"}
-                          size={11}
-                          color={color}
-                        />
-                        <Text style={[styles.heroBadgeText, { color }]}>
-                          {isPositive ? "+" : ""}
-                          {change.toFixed(1)}%
-                        </Text>
-                      </View>
-                    );
-                  })()}
-                  <Text style={styles.heroHint}>{currentHero.hint}</Text>
+                  {heroError ? (
+                    <Text style={styles.heroHintError}>{heroError}</Text>
+                  ) : (
+                    <>
+                      {(() => {
+                        const change = currentHero.change;
+                        const isPositive = change >= 0;
+                        const color = isPositive ? SUCCESS : DANGER;
+                        return (
+                          <View style={styles.heroBadge}>
+                            <Ionicons
+                              name={isPositive ? "trending-up" : "trending-down"}
+                              size={11}
+                              color={color}
+                            />
+                            <Text style={[styles.heroBadgeText, { color }] }>
+                              {isPositive ? "+" : ""}
+                              {change.toFixed(1)}%
+                            </Text>
+                          </View>
+                        );
+                      })()}
+                      <Text style={styles.heroHint}>{currentHero.hint}</Text>
+                    </>
+                  )}
                 </View>
               </View>
               {displayChart.length > 0 && (
@@ -503,6 +738,79 @@ export default function DashboardScreen() {
             </View>
 
             {/* Revenue Chart removed — sparkline lives in the hero */}
+
+            {/* Top Selling Items — vertical list with progress bars */}
+            {topProducts.length > 0 && (
+              <>
+                <SectionLabel
+                  label={`${t("dashboard_top_products")} · ${periodLabel}`}
+                />
+                <Animated.View
+                  style={[
+                    styles.topList,
+                    {
+                      opacity: topListAnim,
+                      transform: [
+                        {
+                          translateY: topListAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [8, 0],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  {(() => {
+                    const maxUnits = Math.max(...topProducts.map((p) => p.units), 1);
+                    return topProducts.map((p, i) => {
+                      const pct = Math.max(0.04, p.units / maxUnits);
+                      const initial = (p.name?.trim()?.[0] ?? "?").toUpperCase();
+                      return (
+                        <Pressable
+                          key={p.id}
+                          accessibilityLabel={`${p.name}, ${p.units} sold`}
+                          onPress={() => {
+                            haptic.light();
+                            router.push("/(tabs)/products");
+                          }}
+                          style={({ pressed }) => [
+                            styles.topRow,
+                            i !== topProducts.length - 1 && styles.topRowDivider,
+                            pressed && styles.pressed,
+                          ]}
+                        >
+                          <View style={styles.topThumb}>
+                            {p.image ? (
+                              <Image
+                                source={{ uri: p.image }}
+                                style={styles.topThumbImage}
+                                resizeMode="cover"
+                              />
+                            ) : (
+                              <Text style={styles.topThumbText}>{initial}</Text>
+                            )}
+                          </View>
+                          <View style={styles.topBody}>
+                            <View style={styles.topBodyRow}>
+                              <Text style={styles.topName} numberOfLines={1}>
+                                {p.name}
+                              </Text>
+                              <Text style={styles.topUnits}>{p.units}</Text>
+                            </View>
+                            <View style={styles.topBarTrack}>
+                              <View
+                                style={[styles.topBarFill, { width: `${Math.round(pct * 100)}%` }]}
+                              />
+                            </View>
+                          </View>
+                        </Pressable>
+                      );
+                    });
+                  })()}
+                </Animated.View>
+              </>
+            )}
 
             {/* Modules — horizontal chip row */}
             <SectionLabel label={t("dashboard_modules")} />
@@ -636,26 +944,38 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 8,
   },
-  greeting: {
-    color: TEXT_DIM,
-    fontSize: 13,
-    fontWeight: "500",
-    marginBottom: 6,
-    letterSpacing: 0.1,
+  headerText: { flex: 1, gap: 6 },
+  headerTopRow: { flexDirection: "row", alignItems: "center" },
+  eyebrow: {
+    color: TEXT_FAINT,
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 2,
   },
-  brandRow: { flexDirection: "row", alignItems: "baseline" },
-  brandVend: {
-    fontSize: 26,
+  greetingLine: {
+    fontSize: 22,
+    lineHeight: 26,
     fontWeight: "700",
-    letterSpacing: 4,
     color: TEXT,
+    letterSpacing: -0.2,
   },
-  brand88: {
-    fontSize: 26,
+  greetingDim: {
+    color: TEXT_DIM,
     fontWeight: "500",
-    color: "#e53e3e",
-    marginLeft: 3,
-    letterSpacing: -0.5,
+  },
+  greetingName: {
+    color: TEXT,
+    fontWeight: "700",
+  },
+  metaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  metaText: {
+    color: TEXT_DIM,
+    fontSize: 12,
+    fontWeight: "500",
   },
 
   headerActions: {
@@ -745,6 +1065,13 @@ const styles = StyleSheet.create({
     marginTop: 8,
     letterSpacing: -1.4,
   },
+  heroError: {
+    color: DANGER,
+    fontSize: 36,
+    fontWeight: "800",
+    marginTop: 8,
+    letterSpacing: -1.1,
+  },
   heroBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -752,6 +1079,7 @@ const styles = StyleSheet.create({
   },
   heroBadgeText: { color: SUCCESS, fontSize: 12, fontWeight: "600" },
   heroHint: { color: TEXT_DIM, fontSize: 12, fontWeight: "500" },
+  heroHintError: { color: DANGER, fontSize: 12, fontWeight: "600", flexShrink: 1 },
 
   // Sparkline inside hero
   spark: {
@@ -920,11 +1248,108 @@ const styles = StyleSheet.create({
   },
   emptyText: { color: TEXT_DIM, fontSize: 13, fontWeight: "500" },
 
-  subtitle: {
-    marginTop: 6,
-    fontSize: 10,
-    letterSpacing: 3,
+  // Store strip
+  storeRow: { flexDirection: "row", gap: 8, paddingRight: SCREEN_PADDING },
+  storeChip: {
+    minWidth: 120,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    gap: 6,
+  },
+  storeChipActive: {
+    borderColor: GOLD,
+    backgroundColor: GOLD_DIM,
+  },
+  storeChipHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  storeName: {
     color: TEXT_DIM,
-    fontWeight: "500",
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    flexShrink: 1,
+  },
+  storeNameActive: { color: GOLD },
+  storeRevenue: {
+    color: TEXT,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  storeRevenueActive: { color: TEXT },
+
+  // Top Products
+  // Top Selling Items
+  topList: {
+    backgroundColor: CARD,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    paddingHorizontal: 14,
+  },
+  topRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+  },
+  topRowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
+  },
+  topThumb: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: GOLD_DIM,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  topThumbImage: {
+    width: "100%",
+    height: "100%",
+  },
+  topThumbText: {
+    color: GOLD,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  topBody: { flex: 1, gap: 6 },
+  topBodyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  topName: {
+    color: TEXT,
+    fontSize: 14,
+    fontWeight: "600",
+    flex: 1,
+  },
+  topUnits: {
+    color: TEXT,
+    fontSize: 14,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
+  },
+  topBarTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    overflow: "hidden",
+  },
+  topBarFill: {
+    height: "100%",
+    borderRadius: 2,
+    backgroundColor: GOLD,
   },
 });
