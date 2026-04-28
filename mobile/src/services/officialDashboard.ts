@@ -119,12 +119,21 @@ function formatBusinessDate(date: Date, endOfDay: boolean): string {
   return `${y}-${m}-${d} ${time} ${formatOffset(date)}`;
 }
 
+function formatBusinessDateExact(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  const ss = String(date.getSeconds()).padStart(2, "0");
+  return `${y}-${m}-${d} ${hh}:${mm}:${ss} ${formatOffset(date)}`;
+}
+
 function getMonthRange(now = new Date()) {
   const start = new Date(now.getFullYear(), now.getMonth(), 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
   return {
     startDate: formatBusinessDate(start, false),
-    endDate: formatBusinessDate(end, true),
+    endDate: formatBusinessDateExact(now),
   };
 }
 

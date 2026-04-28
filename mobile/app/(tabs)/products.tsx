@@ -12,16 +12,16 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/src/services/api";
+import { AnimatedNumber } from "@/src/components/AnimatedNumber";
 import { Skeleton } from "@/src/components/Skeleton";
-import { SectionLabel } from "@/src/components/SectionLabel";
 import { haptic } from "@/src/utils/haptics";
 import {
+  ACCENT,
   BG,
   CARD,
   CARD_BORDER,
   GOLD,
-  GOLD_DIM,
-  SCREEN_PADDING,
+  SUCCESS,
   TEXT,
   TEXT_DIM,
   TEXT_FAINT,
@@ -38,19 +38,30 @@ type Product = {
 
 type ViewMode = "grid" | "list";
 
+// ─── Category styling ────────────────────────────────────────────────────────
+
+const CATEGORY_META: Record<
+  string,
+  { icon: keyof typeof Ionicons.glyphMap; color: string }
+> = {
+  Beverages: { icon: "cafe-outline", color: "#10b981" },
+  Bakery: { icon: "pizza-outline", color: "#f59e0b" },
+  Food: { icon: "restaurant-outline", color: "#ef4444" },
+  Snacks: { icon: "fast-food-outline", color: "#8b5cf6" },
+  Desserts: { icon: "ice-cream-outline", color: "#ec4899" },
+  Other: { icon: "cube-outline", color: ACCENT },
+};
+
+function catMeta(cat: string) {
+  return CATEGORY_META[cat] ?? { icon: "cube-outline" as const, color: ACCENT };
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function parseMoney(v: string | number | undefined): number {
   if (typeof v === "number") return v;
   if (!v) return 0;
   return Number(String(v).replace(/[^0-9.-]/g, "")) || 0;
-}
-
-function formatMoney(v: number): string {
-  return v.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
 }
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
@@ -112,32 +123,54 @@ export default function ProductsScreen() {
 
   const Header = (
     <>
-      {/* Top bar — matches dashboard eyebrow + title + actions layout */}
+      {/* Top bar */}
       <View style={styles.topBar}>
         <View style={{ flex: 1 }}>
           <Text style={styles.eyebrow}>CATALOG</Text>
-          <Text style={styles.title} numberOfLines={1}>
-            <Text style={styles.titleBold}>Products</Text>
-            <Text style={styles.titleDim}>
-              {loading ? "" : `  ${filtered.length} of ${totalCount}`}
-            </Text>
+          <Text style={styles.title}>Products</Text>
+          <Text style={styles.subtitle}>
+            {loading
+              ? "Loading…"
+              : `${filtered.length} of ${totalCount} ${totalCount === 1 ? "item" : "items"}`}
           </Text>
-          {!loading && (
-            <View style={styles.metaRow}>
-              <Text style={styles.metaText}>
-                {categories.length - 1} categories · avg ${formatMoney(avgPrice)}
-              </Text>
-            </View>
-          )}
         </View>
         <Pressable
           accessibilityLabel="Add product"
           onPress={() => haptic.medium()}
-          style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
         >
-          <Ionicons name="add" size={18} color={GOLD} />
+          <Ionicons name="add" size={20} color="#181e38" />
         </Pressable>
       </View>
+
+      {/* Stats strip */}
+      {loading ? (
+        <Skeleton height={78} radius={18} />
+      ) : (
+        <View style={styles.statsRow}>
+          <View style={styles.statCard}>
+            <View style={[styles.statIcon, { backgroundColor: "rgba(212,175,55,0.15)" }]}>
+              <Ionicons name="cube" size={14} color={GOLD} />
+            </View>
+            <AnimatedNumber value={totalCount} style={styles.statValue} />
+            <Text style={styles.statLabel}>Products</Text>
+          </View>
+          <View style={styles.statCard}>
+            <View style={[styles.statIcon, { backgroundColor: "rgba(64,100,220,0.18)" }]}>
+              <Ionicons name="grid" size={14} color={ACCENT} />
+            </View>
+            <AnimatedNumber value={categories.length - 1} style={styles.statValue} />
+            <Text style={styles.statLabel}>Categories</Text>
+          </View>
+          <View style={styles.statCard}>
+            <View style={[styles.statIcon, { backgroundColor: "rgba(16,185,129,0.15)" }]}>
+              <Ionicons name="pricetag" size={14} color={SUCCESS} />
+            </View>
+            <AnimatedNumber value={avgPrice} prefix="$" decimals={2} style={styles.statValue} />
+            <Text style={styles.statLabel}>Avg price</Text>
+          </View>
+        </View>
+      )}
 
       {/* Search + view toggle */}
       <View style={styles.searchWrap}>
@@ -145,7 +178,7 @@ export default function ProductsScreen() {
           <Ionicons name="search" size={14} color={TEXT_DIM} />
           <TextInput
             accessibilityLabel="Search products"
-            placeholder="Search name or category"
+            placeholder="Search by name or category…"
             placeholderTextColor={TEXT_DIM}
             value={search}
             onChangeText={setSearch}
@@ -159,9 +192,8 @@ export default function ProductsScreen() {
                 haptic.selection();
                 setSearch("");
               }}
-              hitSlop={8}
             >
-              <Ionicons name="close-circle" size={15} color={TEXT_DIM} />
+              <Ionicons name="close-circle" size={16} color={TEXT_DIM} />
             </Pressable>
           ) : null}
         </View>
@@ -177,7 +209,7 @@ export default function ProductsScreen() {
           >
             <Ionicons
               name="grid-outline"
-              size={14}
+              size={15}
               color={viewMode === "grid" ? GOLD : TEXT_DIM}
             />
           </Pressable>
@@ -191,7 +223,7 @@ export default function ProductsScreen() {
           >
             <Ionicons
               name="list-outline"
-              size={16}
+              size={17}
               color={viewMode === "list" ? GOLD : TEXT_DIM}
             />
           </Pressable>
@@ -218,28 +250,27 @@ export default function ProductsScreen() {
                 }}
                 style={[styles.chip, active && styles.chipActive]}
               >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                  {c}
-                </Text>
-                <Text style={[styles.chipCount, active && styles.chipCountActive]}>
-                  {count}
-                </Text>
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>{c}</Text>
+                <View style={[styles.chipCount, active && styles.chipCountActive]}>
+                  <Text
+                    style={[
+                      styles.chipCountText,
+                      active && styles.chipCountTextActive,
+                    ]}
+                  >
+                    {count}
+                  </Text>
+                </View>
               </Pressable>
             );
           })}
         </ScrollView>
       )}
-
-      {!loading && filtered.length > 0 && (
-        <SectionLabel
-          label={category === "All" ? "ALL ITEMS" : category.toUpperCase()}
-        />
-      )}
     </>
   );
 
   const renderGridItem = ({ item, index }: { item: Product; index: number }) => {
-    const initial = (item.name?.trim()?.[0] ?? "?").toUpperCase();
+    const meta = catMeta(item.category);
     const isLeft = index % 2 === 0;
     return (
       <Pressable
@@ -248,43 +279,62 @@ export default function ProductsScreen() {
         style={({ pressed }) => [
           styles.gridCard,
           { marginRight: isLeft ? 10 : 0, marginLeft: isLeft ? 0 : 10 },
-          pressed && styles.pressed,
+          pressed && { opacity: 0.85 },
         ]}
       >
-        <View style={styles.gridThumb}>
-          <Text style={styles.gridThumbText}>{initial}</Text>
+        <View style={styles.gridCardTop}>
+          <View style={[styles.gridIcon, { backgroundColor: meta.color + "22" }]}>
+            <Ionicons name={meta.icon} size={24} color={meta.color} />
+          </View>
+          <Pressable
+            accessibilityLabel="Product options"
+            onPress={() => haptic.selection()}
+            hitSlop={10}
+          >
+            <Ionicons name="ellipsis-horizontal" size={16} color={TEXT_DIM} />
+          </Pressable>
         </View>
-        <Text style={styles.gridCategory} numberOfLines={1}>
-          {item.category}
-        </Text>
+        <View style={[styles.gridTag, { backgroundColor: meta.color + "1a" }]}>
+          <Text style={[styles.gridTagText, { color: meta.color }]}>{item.category}</Text>
+        </View>
         <Text style={styles.gridName} numberOfLines={2}>
           {item.name}
         </Text>
-        <Text style={styles.gridPrice}>${item.price}</Text>
+        <View style={styles.gridFooter}>
+          <Text style={styles.gridPrice}>${item.price}</Text>
+          <View style={styles.gridStatus}>
+            <View style={[styles.gridStatusDot, { backgroundColor: SUCCESS }]} />
+            <Text style={styles.gridStatusText}>In stock</Text>
+          </View>
+        </View>
       </Pressable>
     );
   };
 
   const renderListItem = ({ item }: { item: Product }) => {
-    const initial = (item.name?.trim()?.[0] ?? "?").toUpperCase();
+    const meta = catMeta(item.category);
     return (
       <Pressable
         accessibilityLabel={`${item.name}, ${item.category}, ${item.price} dollars`}
         onPress={() => haptic.light()}
-        style={({ pressed }) => [styles.listCard, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.listCard, pressed && { opacity: 0.85 }]}
       >
-        <View style={styles.listThumb}>
-          <Text style={styles.listThumbText}>{initial}</Text>
+        <View style={[styles.listIcon, { backgroundColor: meta.color + "22" }]}>
+          <Ionicons name={meta.icon} size={20} color={meta.color} />
         </View>
-        <View style={{ flex: 1, gap: 2 }}>
+        <View style={{ flex: 1, gap: 3 }}>
           <Text style={styles.listName} numberOfLines={1}>
             {item.name}
           </Text>
-          <Text style={styles.listCategory} numberOfLines={1}>
-            {item.category}
-          </Text>
+          <View style={styles.listMetaRow}>
+            <View style={[styles.miniTag, { backgroundColor: meta.color + "1a" }]}>
+              <Text style={[styles.miniTagText, { color: meta.color }]}>{item.category}</Text>
+            </View>
+            <View style={styles.metaDot} />
+            <Text style={styles.listMeta}>In stock</Text>
+          </View>
         </View>
-        <View style={styles.listRight}>
+        <View style={{ alignItems: "flex-end", gap: 4 }}>
           <Text style={styles.listPrice}>${item.price}</Text>
           <Ionicons name="chevron-forward" size={14} color={TEXT_FAINT} />
         </View>
@@ -295,7 +345,7 @@ export default function ProductsScreen() {
   const EmptyState = (
     <View style={styles.emptyCard}>
       <View style={styles.emptyIcon}>
-        <Ionicons name="cube-outline" size={24} color={TEXT_DIM} />
+        <Ionicons name="cube-outline" size={28} color={TEXT_DIM} />
       </View>
       <Text style={styles.emptyTitle}>No products</Text>
       <Text style={styles.emptyBody}>
@@ -319,7 +369,7 @@ export default function ProductsScreen() {
           onPress={() => haptic.medium()}
           style={[styles.emptyBtn, { flexDirection: "row", gap: 6 }]}
         >
-          <Ionicons name="add" size={13} color="#181e38" />
+          <Ionicons name="add" size={14} color="#181e38" />
           <Text style={styles.emptyBtnText}>Add product</Text>
         </Pressable>
       )}
@@ -339,7 +389,7 @@ export default function ProductsScreen() {
           {Header}
           <View style={{ gap: 10, marginTop: 6 }}>
             {[0, 1, 2, 3, 4].map((i) => (
-              <Skeleton key={i} height={viewMode === "grid" ? 120 : 68} radius={16} />
+              <Skeleton key={i} height={viewMode === "grid" ? 100 : 70} radius={16} />
             ))}
           </View>
         </ScrollView>
@@ -370,7 +420,7 @@ export default function ProductsScreen() {
 const styles = StyleSheet.create({
   safeContainer: { flex: 1, backgroundColor: BG },
   container: { flex: 1, backgroundColor: "transparent" },
-  content: { padding: SCREEN_PADDING, paddingBottom: 40, gap: 14 },
+  content: { padding: 16, paddingBottom: 40, gap: 18 },
 
   glow: {
     position: "absolute",
@@ -380,38 +430,59 @@ const styles = StyleSheet.create({
     height: 340,
     borderRadius: 200,
     backgroundColor: GOLD,
-    opacity: 0.07,
+    opacity: 0.08,
   },
 
-  pressed: { opacity: 0.7 },
-
-  // Header
-  topBar: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
+  topBar: { flexDirection: "row", alignItems: "center", gap: 8 },
   eyebrow: {
     color: TEXT_DIM,
     fontSize: 10,
     letterSpacing: 2,
     fontWeight: "800",
-    marginBottom: 4,
+    marginBottom: 2,
   },
-  title: { fontSize: 26, letterSpacing: -0.5, lineHeight: 30 },
-  titleBold: { color: TEXT, fontWeight: "800" },
-  titleDim: { color: TEXT_DIM, fontSize: 16, fontWeight: "600" },
-  metaRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
-  metaText: { color: TEXT_DIM, fontSize: 11, fontWeight: "600" },
-  actionBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
+  title: { fontSize: 28, fontWeight: "800", color: TEXT, letterSpacing: -0.5 },
+  subtitle: { color: TEXT_DIM, fontSize: 12, marginTop: 2, fontWeight: "600" },
+  addBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: GOLD,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: GOLD,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+  },
+
+  statsRow: { flexDirection: "row", gap: 10, marginTop: 4 },
+  statCard: {
+    flex: 1,
     backgroundColor: CARD,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: CARD_BORDER,
+    padding: 12,
+    gap: 6,
+  },
+  statIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
   },
+  statValue: { color: TEXT, fontSize: 18, fontWeight: "800", letterSpacing: -0.3 },
+  statLabel: {
+    color: TEXT_DIM,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+  },
 
-  // Search + view toggle
-  searchWrap: { flexDirection: "row", gap: 8, marginTop: 2 },
+  searchWrap: { flexDirection: "row", gap: 10, marginTop: 4 },
   searchRow: {
     flex: 1,
     flexDirection: "row",
@@ -422,80 +493,99 @@ const styles = StyleSheet.create({
     borderColor: CARD_BORDER,
     borderRadius: 12,
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 10,
   },
   searchInput: { flex: 1, color: TEXT, fontSize: 13, padding: 0 },
+
   viewToggle: {
     flexDirection: "row",
     backgroundColor: CARD,
     borderWidth: 1,
     borderColor: CARD_BORDER,
     borderRadius: 12,
-    padding: 2,
+    padding: 3,
+    gap: 2,
   },
   viewBtn: {
-    width: 32,
-    height: 32,
+    width: 34,
+    height: 34,
     borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
   },
-  viewBtnActive: { backgroundColor: GOLD_DIM },
+  viewBtnActive: {
+    backgroundColor: "rgba(212,175,55,0.15)",
+  },
 
-  // Category chips — minimalist, no pill count badge
-  chipsRow: { gap: 8, paddingVertical: 2 },
+  chipsRow: { gap: 8, paddingVertical: 2, marginTop: 4 },
   chip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingLeft: 14,
+    paddingRight: 6,
+    paddingVertical: 6,
     borderRadius: 999,
     backgroundColor: CARD,
     borderWidth: 1,
     borderColor: CARD_BORDER,
   },
-  chipActive: { backgroundColor: GOLD_DIM, borderColor: "rgba(212,175,55,0.4)" },
+  chipActive: { backgroundColor: "rgba(212,175,55,0.18)", borderColor: GOLD },
   chipText: { color: TEXT_DIM, fontSize: 12, fontWeight: "700" },
   chipTextActive: { color: GOLD },
-  chipCount: { color: TEXT_FAINT, fontSize: 11, fontWeight: "700" },
-  chipCountActive: { color: GOLD, opacity: 0.75 },
+  chipCount: {
+    minWidth: 22,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  chipCountActive: { backgroundColor: "rgba(212,175,55,0.3)" },
+  chipCountText: { color: TEXT_DIM, fontSize: 10, fontWeight: "800" },
+  chipCountTextActive: { color: GOLD },
 
-  // Grid card — lean, consistent with dashboard topThumb vibe
+  // Grid card
   gridCard: {
     flex: 1,
     backgroundColor: CARD,
-    borderRadius: 16,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: CARD_BORDER,
     padding: 14,
-    gap: 8,
+    gap: 10,
   },
-  gridThumb: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    backgroundColor: GOLD_DIM,
+  gridCardTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  gridIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 4,
   },
-  gridThumbText: { color: GOLD, fontSize: 15, fontWeight: "800" },
-  gridCategory: {
-    color: TEXT_DIM,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
+  gridTag: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
   },
-  gridName: { color: TEXT, fontSize: 14, fontWeight: "700", minHeight: 36 },
-  gridPrice: {
-    color: TEXT,
-    fontSize: 16,
-    fontWeight: "800",
-    letterSpacing: -0.3,
+  gridTagText: { fontSize: 10, fontWeight: "800", letterSpacing: 0.5 },
+  gridName: { color: TEXT, fontSize: 14, fontWeight: "800", minHeight: 36 },
+  gridFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     marginTop: 2,
   },
+  gridPrice: { color: GOLD, fontSize: 18, fontWeight: "800", letterSpacing: -0.3 },
+  gridStatus: { flexDirection: "row", alignItems: "center", gap: 4 },
+  gridStatusDot: { width: 6, height: 6, borderRadius: 3 },
+  gridStatusText: { color: TEXT_DIM, fontSize: 10, fontWeight: "700" },
 
   // List card
   listCard: {
@@ -506,27 +596,22 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderColor: CARD_BORDER,
     borderWidth: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    padding: 12,
   },
-  listThumb: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    backgroundColor: GOLD_DIM,
+  listIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
   },
-  listThumbText: { color: GOLD, fontSize: 15, fontWeight: "800" },
-  listName: { color: TEXT, fontWeight: "700", fontSize: 14 },
-  listCategory: {
-    color: TEXT_DIM,
-    fontSize: 11,
-    fontWeight: "600",
-    letterSpacing: 0.3,
-  },
-  listRight: { flexDirection: "row", alignItems: "center", gap: 6 },
-  listPrice: { color: TEXT, fontSize: 15, fontWeight: "800", letterSpacing: -0.2 },
+  listName: { color: TEXT, fontWeight: "800", fontSize: 14 },
+  listMetaRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  miniTag: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  miniTagText: { fontSize: 10, fontWeight: "800" },
+  metaDot: { width: 2, height: 2, borderRadius: 1, backgroundColor: TEXT_FAINT },
+  listMeta: { color: TEXT_DIM, fontSize: 11, fontWeight: "600" },
+  listPrice: { color: GOLD, fontSize: 16, fontWeight: "800" },
 
   // Empty
   emptyCard: {
@@ -535,20 +620,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: CARD_BORDER,
     borderStyle: "dashed",
-    paddingVertical: 32,
+    paddingVertical: 36,
     paddingHorizontal: 24,
     alignItems: "center",
     gap: 6,
     marginTop: 4,
   },
   emptyIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
+    width: 56,
+    height: 56,
+    borderRadius: 16,
     backgroundColor: "rgba(255,255,255,0.04)",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 4,
+    marginBottom: 6,
   },
   emptyTitle: { color: TEXT, fontSize: 15, fontWeight: "800" },
   emptyBody: {

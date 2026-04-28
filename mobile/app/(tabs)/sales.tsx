@@ -15,21 +15,22 @@ import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/src/services/api";
 import { AnimatedNumber } from "@/src/components/AnimatedNumber";
 import { Skeleton } from "@/src/components/Skeleton";
+import { SectionLabel } from "@/src/components/SectionLabel";
 import { haptic } from "@/src/utils/haptics";
 import {
   ACCENT,
   ACCENT_DIM,
   BG,
-  CARD,
-  CARD_BORDER,
+  CARD,  CARD_BORDER,
+  DANGER,
   GOLD,
+  GOLD_DIM,
+  SCREEN_PADDING,
   SUCCESS,
-  SUCCESS_DIM,
   TEXT,
   TEXT_DIM,
   TEXT_FAINT,
   WARNING,
-  WARNING_DIM,
 } from "@/src/theme/tokens";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -242,6 +243,7 @@ export default function SalesScreen() {
   const [period, setPeriod] = useState<Period>("this_week");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(() => startOfDay(new Date()));
   const [selectedWeekStart, setSelectedWeekStart] = useState<Date>(() => weekStart(new Date()));
   const [selectedMonthStart, setSelectedMonthStart] = useState<Date>(() => monthStart(new Date()));
@@ -320,30 +322,74 @@ export default function SalesScreen() {
     setSelectedDate(todayRef.current);
   };
 
-  // Horizontal swipe to navigate days when on Today view
+  // Horizontal swipe to navigate the active period (day / week / month)
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (_e, g) => {
-        if (periodRef.current !== "today") return false;
         return Math.abs(g.dx) > 18 && Math.abs(g.dx) > Math.abs(g.dy) * 1.8;
       },
       onPanResponderRelease: (_e, g) => {
-        if (periodRef.current !== "today") return;
         if (Math.abs(g.dx) < 40) return;
-        if (g.dx > 0) {
-          haptic.selection();
-          setSelectedDate((d) => addDays(d, -1));
-        } else {
-          setSelectedDate((d) => {
-            if (d >= todayRef.current) {
-              haptic.warning();
-              return d;
-            }
+        const direction = g.dx > 0 ? -1 : 1; // swipe right → previous, swipe left → next
+        const p = periodRef.current;
+        const today = todayRef.current;
+
+        if (p === "today") {
+          if (direction === -1) {
             haptic.selection();
-            const next = addDays(d, 1);
-            return next > todayRef.current ? todayRef.current : next;
-          });
+            setSelectedDate((d) => addDays(d, -1));
+          } else {
+            setSelectedDate((d) => {
+              if (d >= today) {
+                haptic.warning();
+                return d;
+              }
+              haptic.selection();
+              const next = addDays(d, 1);
+              return next > today ? today : next;
+            });
+          }
+        } else if (p === "this_week") {
+          const tws = weekStart(today);
+          if (direction === -1) {
+            haptic.selection();
+            setSelectedWeekStart((d) => addDays(d, -7));
+          } else {
+            setSelectedWeekStart((d) => {
+              if (d >= tws) {
+                haptic.warning();
+                return d;
+              }
+              haptic.selection();
+              const next = addDays(d, 7);
+              return next > tws ? tws : next;
+            });
+          }
+        } else {
+          const tms = monthStart(today);
+          if (direction === -1) {
+            haptic.selection();
+            setSelectedMonthStart((d) => {
+              const x = new Date(d);
+              x.setMonth(x.getMonth() - 1);
+              return x;
+            });
+          } else {
+            setSelectedMonthStart((d) => {
+              if (
+                d.getFullYear() === tms.getFullYear() &&
+                d.getMonth() === tms.getMonth()
+              ) {
+                haptic.warning();
+                return d;
+              }
+              haptic.selection();
+              const x = new Date(d);
+              x.setMonth(x.getMonth() + 1);
+              return x > tms ? tms : x;
+            });
+          }
         }
       },
     })
@@ -378,7 +424,7 @@ export default function SalesScreen() {
   const revenueChange = 12.4; // Optional — surface from API if available
 
   // Filter + group transactions
-  const { sections, totalFiltered, paymentBreakdown } = useMemo(() => {
+  const { sections, totalFiltered, paymentBreakdown, statusCounts } = useMemo(() => {
     const q = search.trim().toLowerCase();
     const filtered = sales.filter((s) => {
       const d = parseDate(s.date);
@@ -395,6 +441,22 @@ export default function SalesScreen() {
       }
       return true;
     });
+
+    // Status counts (within current period + search, before status filter)
+    const periodMatched = sales.filter((s) => {
+      const d = parseDate(s.date);
+      if (!isInPeriod(d, period, selectedDate, selectedWeekStart, selectedMonthStart)) return false;
+      if (q) {
+        const hay = `${s.order_id} ${s.module} ${s.payment}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    const counts: Record<StatusFilter, number> = {
+      all: periodMatched.length,
+      completed: periodMatched.filter((s) => s.status === "completed").length,
+      pending: periodMatched.filter((s) => s.status !== "completed").length,
+    };
 
     // Group by day
     const groups = new Map<string, { title: string; date: Date; items: Sale[] }>();
@@ -433,6 +495,7 @@ export default function SalesScreen() {
       sections: sectionsArr,
       totalFiltered: filtered.length,
       paymentBreakdown: payArr,
+      statusCounts: counts,
     };
   }, [sales, period, statusFilter, search, selectedDate, selectedWeekStart, selectedMonthStart]);
 
@@ -440,8 +503,6 @@ export default function SalesScreen() {
 
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
-      <View style={styles.glow} />
-
       <View style={{ flex: 1 }} {...panResponder.panHandlers}>
       <SectionList
         sections={loading ? [] : sections}
@@ -457,265 +518,232 @@ export default function SalesScreen() {
           <>
             {/* Top bar */}
             <View style={styles.topBar}>
-              <View style={{ flex: 1 }}>
+              <View style={{ flex: 1, gap: 4 }}>
                 <Text style={styles.eyebrow}>REPORTS</Text>
                 <Text style={styles.title}>Sales</Text>
-                <Text style={styles.dateSubtitle}>
-                  {period === "today"
-                    ? formatFullDate(selectedDate)
-                    : period === "this_week"
-                    ? formatWeekPill(selectedWeekStart)
-                    : formatMonth(selectedMonthStart)}
-                </Text>
               </View>
               <Pressable
                 accessibilityLabel="Export report"
                 onPress={() => haptic.selection()}
-                style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.8 }]}
+                style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
               >
-                <Ionicons name="download-outline" size={16} color={TEXT} />
+                <Ionicons name="download-outline" size={18} color={TEXT} />
               </Pressable>
               <Pressable
                 accessibilityLabel="Filters"
                 onPress={() => haptic.selection()}
-                style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.8 }]}
+                style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
               >
-                <Ionicons name="options-outline" size={16} color={TEXT} />
+                <Ionicons name="options-outline" size={18} color={TEXT} />
               </Pressable>
             </View>
 
-            {/* Period segmented */}
-            <View style={styles.periodRow}>
-              {PERIODS.map((p) => (
-                <Pressable
-                  key={p}
-                  accessibilityLabel={`Show ${PERIOD_LABELS[p]} data`}
-                  style={[styles.periodBtn, period === p && styles.periodBtnActive]}
-                  onPress={() => {
-                    haptic.selection();
-                    setPeriod(p);
-                  }}
-                >
-                  <Text style={[styles.periodText, period === p && styles.periodTextActive]}>
-                    {PERIOD_LABELS[p]}
-                  </Text>
-                </Pressable>
-              ))}
+            {/* Period — underline text tabs */}
+            <View style={styles.periodTabs}>
+              {PERIODS.map((p) => {
+                const active = period === p;
+                return (
+                  <Pressable
+                    key={p}
+                    accessibilityLabel={`Show ${PERIOD_LABELS[p]} data`}
+                    onPress={() => {
+                      haptic.selection();
+                      setPeriod(p);
+                    }}
+                    style={styles.periodTab}
+                  >
+                    <Text style={[styles.periodTabText, active && styles.periodTabTextActive]}>
+                      {PERIOD_LABELS[p]}
+                    </Text>
+                    <View
+                      style={[
+                        styles.periodTabUnderline,
+                        active && styles.periodTabUnderlineActive,
+                      ]}
+                    />
+                  </Pressable>
+                );
+              })}
             </View>
 
-            {/* Day strip — only in Today mode */}
-            {period === "today" && (
-              <View style={styles.dayStripWrap}>
-                <ScrollView
-                  ref={dayStripRef}
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.dayStrip}
-                  onContentSizeChange={(w) => {
-                    // Keep today pill in view on mount
-                    if (!dayStripInited.current) {
-                      dayStripRef.current?.scrollToEnd({ animated: false });
-                      dayStripInited.current = true;
-                    }
-                  }}
-                >
-                  {dayStripDates.map((d) => {
-                    const active = dayKey(d) === dayKey(selectedDate);
-                    const isToday = dayKey(d) === dayKey(today);
-                    const weekday = d.toLocaleDateString(undefined, { weekday: "short" });
-                    return (
-                      <Pressable
-                        key={dayKey(d)}
-                        accessibilityLabel={`View ${d.toDateString()}`}
-                        onPress={() => {
-                          haptic.selection();
-                          setSelectedDate(startOfDay(d));
-                        }}
-                        style={[
-                          styles.dayPill,
-                          active && styles.dayPillActive,
-                          isToday && !active && styles.dayPillToday,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.dayPillWeekday,
-                            active && styles.dayPillWeekdayActive,
-                          ]}
-                        >
-                          {isToday ? "TODAY" : weekday.toUpperCase()}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.dayPillNum,
-                            active && styles.dayPillNumActive,
-                          ]}
-                        >
-                          {d.getDate()}
-                        </Text>
-                        {active && <View style={styles.dayPillMarker} />}
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            )}
+            {/* Date pager — [<] label [>]  +  Today reset */}
+            {(() => {
+              const isCurrent =
+                period === "today"
+                  ? isSelectedToday
+                  : period === "this_week"
+                  ? dayKey(selectedWeekStart) === dayKey(thisWeekStart)
+                  : selectedMonthStart.getFullYear() === thisMonthStart.getFullYear() &&
+                    selectedMonthStart.getMonth() === thisMonthStart.getMonth();
 
-            {/* Week strip — only in Week mode */}
-            {period === "this_week" && (
-              <View style={styles.dayStripWrap}>
-                <ScrollView
-                  ref={weekStripRef}
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.dayStrip}
-                  onContentSizeChange={() => {
-                    if (!weekStripInited.current) {
-                      weekStripRef.current?.scrollToEnd({ animated: false });
-                      weekStripInited.current = true;
-                    }
-                  }}
-                >
-                  {weekStripDates.map((ws, idx) => {
-                    const active = dayKey(ws) === dayKey(selectedWeekStart);
-                    const isThisWeek = dayKey(ws) === dayKey(thisWeekStart);
-                    const we = addDays(ws, 6);
-                    const startDay = ws.getDate();
-                    const endDay = we.getDate();
-                    const mo = ws.toLocaleDateString(undefined, { month: "short" }).toUpperCase();
-                    const crossMonth = ws.getMonth() !== we.getMonth();
-                    const endMo = we.toLocaleDateString(undefined, { month: "short" }).toUpperCase();
-                    return (
-                      <Pressable
-                        key={dayKey(ws)}
-                        accessibilityLabel={`View week of ${ws.toDateString()}`}
-                        onPress={() => {
-                          haptic.selection();
-                          setSelectedWeekStart(ws);
-                        }}
-                        style={[
-                          styles.weekPill,
-                          active && styles.dayPillActive,
-                          isThisWeek && !active && styles.dayPillToday,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.dayPillWeekday,
-                            active && styles.dayPillWeekdayActive,
-                          ]}
-                        >
-                          {isThisWeek ? "THIS WEEK" : mo}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.weekPillRange,
-                            active && styles.dayPillNumActive,
-                          ]}
-                        >
-                          {crossMonth
-                            ? `${startDay}–${endDay}`
-                            : `${startDay} – ${endDay}`}
-                        </Text>
-                        {active && <View style={styles.dayPillMarker} />}
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            )}
+              const canGoNext =
+                period === "today"
+                  ? selectedDate < today
+                  : period === "this_week"
+                  ? selectedWeekStart < thisWeekStart
+                  : selectedMonthStart < thisMonthStart;
 
-            {/* Month strip — only in Month mode */}
-            {period === "this_month" && (
-              <View style={styles.dayStripWrap}>
-                <ScrollView
-                  ref={monthStripRef}
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.dayStrip}
-                  onContentSizeChange={() => {
-                    if (!monthStripInited.current) {
-                      monthStripRef.current?.scrollToEnd({ animated: false });
-                      monthStripInited.current = true;
-                    }
-                  }}
-                >
-                  {monthStripDates.map((ms) => {
-                    const active =
-                      ms.getFullYear() === selectedMonthStart.getFullYear() &&
-                      ms.getMonth() === selectedMonthStart.getMonth();
-                    const isThisMonth =
-                      ms.getFullYear() === thisMonthStart.getFullYear() &&
-                      ms.getMonth() === thisMonthStart.getMonth();
-                    const mo = ms.toLocaleDateString(undefined, { month: "short" });
-                    return (
-                      <Pressable
-                        key={`${ms.getFullYear()}-${ms.getMonth()}`}
-                        accessibilityLabel={`View ${mo} ${ms.getFullYear()}`}
-                        onPress={() => {
-                          haptic.selection();
-                          setSelectedMonthStart(monthStart(ms));
-                        }}
-                        style={[
-                          styles.monthPill,
-                          active && styles.dayPillActive,
-                          isThisMonth && !active && styles.dayPillToday,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.dayPillWeekday,
-                            active && styles.dayPillWeekdayActive,
-                          ]}
-                        >
-                          {isThisMonth ? "NOW" : ms.getFullYear().toString()}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.dayPillNum,
-                            active && styles.dayPillNumActive,
-                          ]}
-                        >
-                          {mo.toUpperCase()}
-                        </Text>
-                        {active && <View style={styles.dayPillMarker} />}
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            )}
+              const label =
+                period === "today"
+                  ? formatFullDate(selectedDate)
+                  : period === "this_week"
+                  ? formatWeekPill(selectedWeekStart)
+                  : formatMonthPill(selectedMonthStart);
 
-            {/* Hero revenue */}
-            {loading ? (
-              <Skeleton height={148} radius={22} />
-            ) : (
-              <View style={styles.heroCard}>
-                <View style={styles.heroRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.heroLabel}>
-                      {period === "today" && !isSelectedToday
-                        ? `${formatShortDate(selectedDate).toUpperCase()} · REVENUE`
-                        : period === "this_week" &&
-                          dayKey(selectedWeekStart) !== dayKey(thisWeekStart)
-                        ? `${formatWeekPill(selectedWeekStart).toUpperCase()} · REVENUE`
-                        : period === "this_month" &&
-                          (selectedMonthStart.getFullYear() !== thisMonthStart.getFullYear() ||
-                            selectedMonthStart.getMonth() !== thisMonthStart.getMonth())
-                        ? `${formatMonthPill(selectedMonthStart).toUpperCase()} · REVENUE`
-                        : `${PERIOD_LABELS[period].toUpperCase()} REVENUE`}
+              const goPrev = () => {
+                haptic.selection();
+                if (period === "today") {
+                  setSelectedDate((d) => addDays(d, -1));
+                } else if (period === "this_week") {
+                  setSelectedWeekStart((d) => addDays(d, -7));
+                } else {
+                  setSelectedMonthStart((d) => {
+                    const x = new Date(d);
+                    x.setMonth(x.getMonth() - 1);
+                    return x;
+                  });
+                }
+              };
+              const goNext = () => {
+                if (!canGoNext) {
+                  haptic.warning();
+                  return;
+                }
+                haptic.selection();
+                if (period === "today") {
+                  setSelectedDate((d) => {
+                    const next = addDays(d, 1);
+                    return next > today ? today : next;
+                  });
+                } else if (period === "this_week") {
+                  setSelectedWeekStart((d) => {
+                    const next = addDays(d, 7);
+                    return next > thisWeekStart ? thisWeekStart : next;
+                  });
+                } else {
+                  setSelectedMonthStart((d) => {
+                    const x = new Date(d);
+                    x.setMonth(x.getMonth() + 1);
+                    return x > thisMonthStart ? thisMonthStart : x;
+                  });
+                }
+              };
+              const goCurrent = () => {
+                haptic.light();
+                if (period === "today") setSelectedDate(today);
+                else if (period === "this_week") setSelectedWeekStart(thisWeekStart);
+                else setSelectedMonthStart(thisMonthStart);
+              };
+
+              return (
+                <View style={styles.datePager}>
+                  <Pressable
+                    accessibilityLabel="Previous"
+                    onPress={goPrev}
+                    style={({ pressed }) => [styles.pagerArrow, pressed && styles.pressed]}
+                    hitSlop={8}
+                  >
+                    <Ionicons name="chevron-back" size={18} color={TEXT} />
+                  </Pressable>
+
+                  <View style={styles.pagerCenter}>
+                    <Text style={styles.pagerLabel} numberOfLines={1}>
+                      {label}
                     </Text>
+                    {isCurrent ? (
+                      <Text style={styles.pagerCurrentTag}>
+                        {period === "today"
+                          ? "TODAY"
+                          : period === "this_week"
+                          ? "THIS WEEK"
+                          : "THIS MONTH"}
+                      </Text>
+                    ) : (
+                      <Pressable
+                        accessibilityLabel="Jump to current"
+                        onPress={goCurrent}
+                        hitSlop={6}
+                      >
+                        <Text style={styles.pagerJump}>
+                          Jump to{" "}
+                          {period === "today"
+                            ? "today"
+                            : period === "this_week"
+                            ? "this week"
+                            : "this month"}
+                        </Text>
+                      </Pressable>
+                    )}
+                  </View>
+
+                  <Pressable
+                    accessibilityLabel="Next"
+                    onPress={goNext}
+                    disabled={!canGoNext}
+                    style={({ pressed }) => [
+                      styles.pagerArrow,
+                      !canGoNext && styles.pagerArrowDisabled,
+                      pressed && canGoNext && styles.pressed,
+                    ]}
+                    hitSlop={8}
+                  >
+                    <Ionicons
+                      name="chevron-forward"
+                      size={18}
+                      color={canGoNext ? TEXT : TEXT_FAINT}
+                    />
+                  </Pressable>
+                </View>
+              );
+            })()}
+
+            {/* Hero revenue — flat, dashboard-style */}
+            {loading ? (
+              <Skeleton height={110} radius={22} />
+            ) : (
+              <>
+                <View style={styles.hero}>
+                  <View style={styles.heroLeft}>
+                    <View style={styles.heroLabelRow}>
+                      <Text style={styles.heroLabel}>
+                        {period === "today" && !isSelectedToday
+                          ? `${formatShortDate(selectedDate).toUpperCase()} · REVENUE`
+                          : period === "this_week" &&
+                            dayKey(selectedWeekStart) !== dayKey(thisWeekStart)
+                          ? `${formatWeekPill(selectedWeekStart).toUpperCase()} · REVENUE`
+                          : period === "this_month" &&
+                            (selectedMonthStart.getFullYear() !== thisMonthStart.getFullYear() ||
+                              selectedMonthStart.getMonth() !== thisMonthStart.getMonth())
+                          ? `${formatMonthPill(selectedMonthStart).toUpperCase()} · REVENUE`
+                          : `${PERIOD_LABELS[period].toUpperCase()} REVENUE`}
+                      </Text>
+                      <View style={styles.heroDots}>
+                        <View
+                          style={[styles.heroDot, period === "today" && styles.heroDotActive]}
+                        />
+                        <View
+                          style={[styles.heroDot, period === "this_week" && styles.heroDotActive]}
+                        />
+                        <View
+                          style={[styles.heroDot, period === "this_month" && styles.heroDotActive]}
+                        />
+                      </View>
+                    </View>
                     <AnimatedNumber
                       value={parseMoney(stat?.revenue)}
                       prefix="$"
                       style={styles.heroValue}
                     />
-                    <View style={styles.heroBadgeRow}>
+                    <View style={styles.heroFoot}>
                       <View style={styles.heroBadge}>
                         <Ionicons name="trending-up" size={11} color={SUCCESS} />
-                        <Text style={styles.heroBadgeText}>+{revenueChange}%</Text>
+                        <Text style={[styles.heroBadgeText, { color: SUCCESS }]}>
+                          +{revenueChange}%
+                        </Text>
                       </View>
-                      <Text style={styles.heroHint}>vs previous {PERIOD_LABELS[period].toLowerCase()}</Text>
+                      <Text style={styles.heroHint}>
+                        vs previous {PERIOD_LABELS[period].toLowerCase()}
+                      </Text>
                     </View>
                   </View>
 
@@ -723,59 +751,65 @@ export default function SalesScreen() {
                   {chart.length > 0 && (
                     <View style={styles.spark}>
                       {chart.slice(-7).map((p, i) => {
-                        const h = Math.max(6, (p.revenue / maxChart) * 46);
+                        const slice = chart.slice(-7);
+                        const heightPct = Math.max(p.revenue / maxChart, 0.08);
+                        const isLast = i === slice.length - 1;
                         return (
-                          <View
-                            key={`${p.day}-${i}`}
-                            style={[
-                              styles.sparkBar,
-                              {
-                                height: h,
-                                backgroundColor: i === chart.slice(-7).length - 1 ? GOLD : ACCENT,
-                                opacity: i === chart.slice(-7).length - 1 ? 1 : 0.7,
-                              },
-                            ]}
-                          />
+                          <View key={`${p.day}-${i}`} style={styles.sparkCol}>
+                            <View
+                              style={[
+                                styles.sparkBar,
+                                { height: `${Math.round(heightPct * 100)}%` },
+                                isLast && styles.sparkBarActive,
+                              ]}
+                            />
+                          </View>
                         );
                       })}
                     </View>
                   )}
                 </View>
 
-                {/* Mini stats row inside hero */}
-                <View style={styles.heroStatsRow}>
-                  <View style={styles.heroStat}>
-                    <Text style={styles.heroStatLabel}>Orders</Text>
-                    <AnimatedNumber value={stat?.orders ?? 0} style={styles.heroStatValue} />
+                {/* KPI Row — flat, divided by hairlines */}
+                <View style={styles.kpiRow}>
+                  <View style={styles.kpiCell}>
+                    <Ionicons name="receipt-outline" size={16} color={WARNING} />
+                    <AnimatedNumber value={stat?.orders ?? 0} style={styles.kpiValue} />
+                    <Text style={styles.kpiLabel}>Orders</Text>
                   </View>
-                  <View style={styles.heroDivider} />
-                  <View style={styles.heroStat}>
-                    <Text style={styles.heroStatLabel}>Avg order</Text>
+                  <View style={styles.kpiDivider} />
+                  <View style={styles.kpiCell}>
+                    <Ionicons name="cart-outline" size={16} color="#818cf8" />
                     <AnimatedNumber
                       value={parseMoney(stat?.avg)}
                       prefix="$"
                       decimals={2}
-                      style={styles.heroStatValue}
+                      style={styles.kpiValue}
                     />
+                    <Text style={styles.kpiLabel}>Avg order</Text>
                   </View>
-                  <View style={styles.heroDivider} />
-                  <View style={styles.heroStat}>
-                    <Text style={styles.heroStatLabel}>Txns</Text>
-                    <AnimatedNumber value={totalFiltered} style={styles.heroStatValue} />
+                  <View style={styles.kpiDivider} />
+                  <View style={styles.kpiCell}>
+                    <Ionicons name="swap-horizontal-outline" size={16} color={GOLD} />
+                    <AnimatedNumber value={totalFiltered} style={styles.kpiValue} />
+                    <Text style={styles.kpiLabel}>Txns</Text>
                   </View>
                 </View>
-              </View>
+              </>
             )}
 
             {/* Payment breakdown */}
             {!loading && paymentBreakdown.length > 0 && (
-              <View style={styles.card}>
-                <View style={styles.cardHeader}>
-                  <Text style={styles.sectionTitle}>Payment Mix</Text>
-                  <Text style={styles.sectionHint}>
-                    {paymentBreakdown.length} {paymentBreakdown.length === 1 ? "method" : "methods"}
-                  </Text>
-                </View>
+              <View style={styles.block}>
+                <SectionLabel
+                  label="Payment Mix"
+                  right={
+                    <Text style={styles.sectionHint}>
+                      {paymentBreakdown.length}{" "}
+                      {paymentBreakdown.length === 1 ? "method" : "methods"}
+                    </Text>
+                  }
+                />
 
                 {/* Stacked bar */}
                 <View style={styles.stackedBar}>
@@ -810,54 +844,72 @@ export default function SalesScreen() {
 
             {/* Module breakdown */}
             {loading ? (
-              <Skeleton height={160} radius={16} />
+              <Skeleton height={140} radius={16} />
             ) : (
               byModule.length > 0 && (
-                <View style={styles.card}>
-                  <View style={styles.cardHeader}>
-                    <Text style={styles.sectionTitle}>Revenue by Module</Text>
-                    <Ionicons name="chevron-forward" size={14} color={TEXT_DIM} />
+                <View style={styles.block}>
+                  <SectionLabel label="Revenue by Module" />
+                  <View style={styles.moduleList}>
+                    {byModule.map((m, i) => (
+                      <View
+                        key={m.module}
+                        style={[
+                          styles.moduleRow,
+                          i !== byModule.length - 1 && styles.moduleRowDivider,
+                        ]}
+                      >
+                        <View style={styles.moduleLeft}>
+                          <View
+                            style={[
+                              styles.moduleDot,
+                              { backgroundColor: MODULE_COLORS[m.module] ?? "#64748b" },
+                            ]}
+                          />
+                          <Text style={styles.moduleName}>{m.module}</Text>
+                        </View>
+                        <View style={styles.barWrap}>
+                          <View
+                            style={[
+                              styles.barFill,
+                              {
+                                width: `${m.pct}%`,
+                                backgroundColor: MODULE_COLORS[m.module] ?? "#64748b",
+                              },
+                            ]}
+                          />
+                        </View>
+                        <Text style={styles.moduleRevenue}>${m.revenue.toFixed(0)}</Text>
+                      </View>
+                    ))}
                   </View>
-                  {byModule.map((m) => (
-                    <View key={m.module} style={styles.moduleRow}>
-                      <View style={styles.moduleLeft}>
-                        <View
-                          style={[
-                            styles.moduleDot,
-                            { backgroundColor: MODULE_COLORS[m.module] ?? "#64748b" },
-                          ]}
-                        />
-                        <Text style={styles.moduleName}>{m.module}</Text>
-                      </View>
-                      <View style={styles.barWrap}>
-                        <View
-                          style={[
-                            styles.barFill,
-                            {
-                              width: `${m.pct}%`,
-                              backgroundColor: MODULE_COLORS[m.module] ?? "#64748b",
-                            },
-                          ]}
-                        />
-                      </View>
-                      <Text style={styles.moduleRevenue}>${m.revenue.toFixed(0)}</Text>
-                    </View>
-                  ))}
                 </View>
               )
             )}
 
-            {/* Search */}
-            <View style={styles.searchRow}>
-              <Ionicons name="search" size={14} color={TEXT_DIM} />
+            {/* Search — focus-aware pill */}
+            <View
+              style={[
+                styles.searchRow,
+                searchFocused && styles.searchRowFocused,
+              ]}
+            >
+              <Ionicons
+                name="search"
+                size={15}
+                color={searchFocused ? GOLD : TEXT_DIM}
+              />
               <TextInput
                 accessibilityLabel="Search transactions"
                 placeholder="Search order ID, module, payment…"
-                placeholderTextColor={TEXT_DIM}
+                placeholderTextColor={TEXT_FAINT}
                 value={search}
                 onChangeText={setSearch}
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setSearchFocused(false)}
                 style={styles.searchInput}
                 returnKeyType="search"
+                autoCorrect={false}
+                autoCapitalize="none"
               />
               {search ? (
                 <Pressable
@@ -866,43 +918,64 @@ export default function SalesScreen() {
                     haptic.selection();
                     setSearch("");
                   }}
+                  hitSlop={8}
                 >
-                  <Ionicons name="close-circle" size={16} color={TEXT_DIM} />
+                  <Ionicons name="close-circle" size={18} color={TEXT_DIM} />
                 </Pressable>
               ) : null}
             </View>
 
-            {/* Status filter chips */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.chipsRow}
-            >
+            {/* Status filter — segmented with counts */}
+            <View style={styles.filterSegment}>
               {STATUS_FILTERS.map((f) => {
                 const active = statusFilter === f;
+                const count = statusCounts[f];
                 return (
                   <Pressable
                     key={f}
-                    accessibilityLabel={`Filter: ${STATUS_LABELS[f]}`}
+                    accessibilityLabel={`Filter: ${STATUS_LABELS[f]}, ${count} records`}
                     onPress={() => {
                       haptic.selection();
                       setStatusFilter(f);
                     }}
-                    style={[styles.chip, active && styles.chipActive]}
+                    style={[
+                      styles.filterSeg,
+                      active && styles.filterSegActive,
+                    ]}
                   >
-                    <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                    <Text
+                      style={[
+                        styles.filterSegText,
+                        active && styles.filterSegTextActive,
+                      ]}
+                    >
                       {STATUS_LABELS[f]}
                     </Text>
+                    <View
+                      style={[
+                        styles.filterSegCount,
+                        active && styles.filterSegCountActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.filterSegCountText,
+                          active && styles.filterSegCountTextActive,
+                        ]}
+                      >
+                        {count}
+                      </Text>
+                    </View>
                   </Pressable>
                 );
               })}
-            </ScrollView>
+            </View>
 
             {/* Txn header */}
-            <View style={styles.cardHeader}>
-              <Text style={styles.sectionTitle}>Transactions</Text>
-              <Text style={styles.sectionHint}>{totalFiltered} records</Text>
-            </View>
+            <SectionLabel
+              label="Transactions"
+              right={<Text style={styles.sectionHint}>{totalFiltered} records</Text>}
+            />
           </>
         }
         renderSectionHeader={({ section }) => (
@@ -913,18 +986,24 @@ export default function SalesScreen() {
             </Text>
           </View>
         )}
-        renderItem={({ item }) => {
+        renderItem={({ item, index, section }) => {
           const d = parseDate(item.date);
           const payIcon = PAYMENT_ICONS[item.payment] ?? "card-outline";
           const payColor = PAYMENT_COLORS[item.payment] ?? "#64748b";
+          const isLastInSection = index === section.data.length - 1;
+          const done = item.status === "completed";
           return (
             <Pressable
               accessibilityLabel={`Order ${item.order_id}, ${item.status}, ${item.total} dollars`}
               onPress={() => haptic.light()}
-              style={({ pressed }) => [styles.txnCard, pressed && { opacity: 0.85 }]}
+              style={({ pressed }) => [
+                styles.txnRow,
+                !isLastInSection && styles.txnRowDivider,
+                pressed && styles.pressed,
+              ]}
             >
-              <View style={[styles.txnIcon, { backgroundColor: payColor + "1f" }]}>
-                <Ionicons name={payIcon} size={18} color={payColor} />
+              <View style={[styles.txnIcon, { backgroundColor: payColor + "1a" }]}>
+                <Ionicons name={payIcon} size={16} color={payColor} />
               </View>
 
               <View style={styles.txnMid}>
@@ -935,7 +1014,7 @@ export default function SalesScreen() {
                   <View
                     style={[
                       styles.modTag,
-                      { backgroundColor: (MODULE_COLORS[item.module] ?? "#64748b") + "22" },
+                      { backgroundColor: (MODULE_COLORS[item.module] ?? "#64748b") + "1f" },
                     ]}
                   >
                     <Text
@@ -948,51 +1027,40 @@ export default function SalesScreen() {
                     </Text>
                   </View>
                 </View>
-                <View style={styles.txnBottomRow}>
-                  <Text style={styles.txnMeta}>{formatTime(d)}</Text>
-                  <View style={styles.metaDot} />
-                  <Text style={styles.txnMeta}>{item.items} items</Text>
-                  <View style={styles.metaDot} />
-                  <Text style={styles.txnMeta}>{item.payment}</Text>
-                </View>
+                <Text style={styles.txnSub} numberOfLines={1}>
+                  {formatTime(d)} · {item.items} items · {item.payment}
+                </Text>
               </View>
 
               <View style={styles.txnRight}>
                 <Text style={styles.txnTotal}>${item.total}</Text>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    item.status === "completed" ? styles.statusDone : styles.statusPending,
-                  ]}
-                >
+                <View style={styles.statusRow}>
                   <View
                     style={[
-                      styles.statusDotSmall,
-                      {
-                        backgroundColor: item.status === "completed" ? SUCCESS : WARNING,
-                      },
+                      styles.statusDot,
+                      { backgroundColor: done ? SUCCESS : WARNING },
                     ]}
                   />
                   <Text
                     style={[
                       styles.statusText,
-                      item.status === "completed" ? styles.statusDoneText : styles.statusPendingText,
+                      { color: done ? SUCCESS : WARNING },
                     ]}
                   >
-                    {item.status === "completed" ? "Done" : "Active"}
+                    {done ? "Done" : "Active"}
                   </Text>
                 </View>
               </View>
             </Pressable>
           );
         }}
-        ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+        ItemSeparatorComponent={null}
         SectionSeparatorComponent={() => <View style={{ height: 4 }} />}
         ListEmptyComponent={
           loading ? (
-            <View style={{ gap: 10, paddingTop: 4 }}>
+            <View style={{ gap: 1, paddingTop: 4 }}>
               {[0, 1, 2, 3].map((i) => (
-                <Skeleton key={i} height={72} radius={14} />
+                <Skeleton key={i} height={64} radius={0} />
               ))}
             </View>
           ) : (
@@ -1032,338 +1100,423 @@ export default function SalesScreen() {
 const styles = StyleSheet.create({
   safeContainer: { flex: 1, backgroundColor: BG },
   container: { flex: 1, backgroundColor: "transparent" },
-  content: { padding: 16, paddingBottom: 40, gap: 24 },
+  content: { padding: SCREEN_PADDING, paddingTop: 8, paddingBottom: 40, gap: 22 },
+  pressed: { opacity: 0.7 },
 
-  glow: {
-    position: "absolute",
-    top: -140,
-    right: -120,
-    width: 340,
-    height: 340,
-    borderRadius: 200,
-    backgroundColor: GOLD,
-    opacity: 0.08,
+  // Top bar — matches dashboard rhythm
+  topBar: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginBottom: 4,
   },
-
-  topBar: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 2 },
   eyebrow: {
-    color: TEXT_DIM,
+    color: TEXT_FAINT,
     fontSize: 10,
     letterSpacing: 2,
-    fontWeight: "800",
-    marginBottom: 2,
+    fontWeight: "700",
   },
-  title: { fontSize: 28, fontWeight: "800", color: TEXT, letterSpacing: -0.5 },
+  title: {
+    fontSize: 26,
+    fontWeight: "800",
+    color: TEXT,
+    letterSpacing: -0.4,
+    lineHeight: 30,
+  },
   dateSubtitle: {
     color: TEXT_DIM,
     fontSize: 12,
-    fontWeight: "600",
-    marginTop: 2,
+    fontWeight: "500",
   },
   iconBtn: {
     width: 36,
     height: 36,
-    borderRadius: 12,
+    borderRadius: 18,
     backgroundColor: CARD,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
     alignItems: "center",
     justifyContent: "center",
+    marginTop: 14,
   },
 
-  periodRow: {
+  // Period — underline text tabs
+  periodTabs: {
     flexDirection: "row",
-    backgroundColor: "rgba(255,255,255,0.05)",
-    borderRadius: 12,
-    padding: 3,
-    gap: 3,
+    gap: 24,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
   },
-  periodBtn: { flex: 1, paddingVertical: 8, alignItems: "center", borderRadius: 10 },
-  periodBtnActive: {
-    backgroundColor: "rgba(212,175,55,0.18)",
-    borderWidth: 1,
-    borderColor: "rgba(212,175,55,0.35)",
+  periodTab: {
+    paddingVertical: 10,
+    alignItems: "center",
   },
-  periodText: { fontSize: 12, fontWeight: "700", color: TEXT_DIM },
-  periodTextActive: { color: GOLD },
+  periodTabText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: TEXT_DIM,
+    letterSpacing: 0.2,
+    marginBottom: 6,
+  },
+  periodTabTextActive: {
+    color: TEXT,
+    fontWeight: "700",
+  },
+  periodTabUnderline: {
+    height: 2,
+    width: "100%",
+    borderRadius: 1,
+    backgroundColor: "transparent",
+  },
+  periodTabUnderlineActive: {
+    backgroundColor: GOLD,
+  },
 
-  dayStripWrap: {
-    marginTop: 2,
-    marginHorizontal: -16, // edge-to-edge scroll within padded content
-  },
-  dayStrip: {
-    gap: 8,
-    paddingHorizontal: 16,
+  // Date pager — [<] label [>]
+  datePager: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
     paddingVertical: 4,
   },
-  dayPill: {
-    minWidth: 56,
-    paddingHorizontal: 10,
-    paddingTop: 8,
-    paddingBottom: 8,
-    borderRadius: 14,
+  pagerArrow: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: CARD,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
+  },
+  pagerArrowDisabled: {
+    opacity: 0.4,
+  },
+  pagerCenter: {
+    flex: 1,
     alignItems: "center",
     gap: 2,
   },
-  dayPillActive: {
-    backgroundColor: GOLD,
-    borderColor: GOLD,
-    shadowColor: GOLD,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
+  pagerLabel: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: TEXT,
+    letterSpacing: -0.2,
   },
-  dayPillToday: {
-    borderColor: "rgba(212,175,55,0.5)",
-  },
-  dayPillWeekday: {
+  pagerCurrentTag: {
     fontSize: 9,
-    fontWeight: "800",
-    color: TEXT_DIM,
-    letterSpacing: 1,
+    fontWeight: "700",
+    color: GOLD,
+    letterSpacing: 1.5,
   },
-  dayPillWeekdayActive: { color: "#181e38" },
-  dayPillNum: { fontSize: 17, fontWeight: "800", color: TEXT, letterSpacing: -0.3 },
-  dayPillNumActive: { color: "#181e38" },
-  dayPillMarker: {
+  pagerJump: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: GOLD,
+    letterSpacing: 0.3,
+  },
+
+  // Hero — flat (no card)
+  hero: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 16,
+    paddingVertical: 4,
+  },
+  heroLeft: { flex: 1, gap: 4 },
+  heroLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  heroDots: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  heroDot: {
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#181e38",
-    marginTop: 1,
+    backgroundColor: "rgba(255,255,255,0.15)",
   },
-
-  weekPill: {
-    minWidth: 64,
-    paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 8,
-    borderRadius: 14,
-    backgroundColor: CARD,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    alignItems: "center",
-    gap: 2,
+  heroDotActive: {
+    backgroundColor: GOLD,
+    width: 10,
   },
-  weekPillRange: {
-    fontSize: 14,
-    fontWeight: "800",
-    color: TEXT,
-    letterSpacing: -0.3,
-  },
-
-  monthPill: {
-    minWidth: 62,
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 8,
-    borderRadius: 14,
-    backgroundColor: CARD,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    alignItems: "center",
-    gap: 2,
-  },
-
-  heroCard: {
-    backgroundColor: CARD,
-    borderRadius: 22,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    gap: 14,
-    marginTop: 4,
-    shadowColor: GOLD,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 16,
-  },
-  heroRow: { flexDirection: "row", alignItems: "flex-end", gap: 12 },
   heroLabel: {
     color: TEXT_DIM,
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: "700",
-    letterSpacing: 2,
-  },
-  heroValue: { color: TEXT, fontSize: 34, fontWeight: "800", marginTop: 6, letterSpacing: -1 },
-  heroBadgeRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 },
-  heroBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    backgroundColor: SUCCESS_DIM,
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  heroBadgeText: { color: SUCCESS, fontSize: 11, fontWeight: "800" },
-  heroHint: { color: TEXT_FAINT, fontSize: 10, fontWeight: "600" },
-
-  spark: { flexDirection: "row", gap: 3, alignItems: "flex-end", height: 50 },
-  sparkBar: { width: 6, borderRadius: 3 },
-
-  heroStatsRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.03)",
-    borderRadius: 14,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-  },
-  heroStat: { flex: 1, alignItems: "center", gap: 2 },
-  heroStatLabel: {
-    color: TEXT_DIM,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 0.5,
+    letterSpacing: 1.5,
     textTransform: "uppercase",
   },
-  heroStatValue: { color: TEXT, fontSize: 15, fontWeight: "800" },
-  heroDivider: {
-    width: StyleSheet.hairlineWidth,
-    height: 24,
-    backgroundColor: CARD_BORDER,
+  heroValue: {
+    color: TEXT,
+    fontSize: 38,
+    fontWeight: "800",
+    marginTop: 8,
+    letterSpacing: -1.4,
   },
-
-  card: {
-    backgroundColor: CARD,
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    gap: 10,
-    marginTop: 2,
-  },
-  cardHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  sectionTitle: { fontSize: 14, fontWeight: "800", color: TEXT },
-  sectionHint: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
-
-  stackedBar: {
-    flexDirection: "row",
-    height: 10,
-    borderRadius: 5,
-    overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,0.05)",
-  },
-  legend: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 2 },
-  legendItem: { flexDirection: "row", alignItems: "center", gap: 5 },
-  legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendName: { fontSize: 11, color: TEXT, fontWeight: "700" },
-  legendPct: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
-
-  moduleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  moduleLeft: { flexDirection: "row", alignItems: "center", gap: 6, width: 78 },
-  moduleDot: { width: 8, height: 8, borderRadius: 4 },
-  moduleName: { fontSize: 12, color: TEXT, fontWeight: "700" },
-  barWrap: {
-    flex: 1,
-    height: 8,
-    backgroundColor: "rgba(255,255,255,0.05)",
-    borderRadius: 4,
-    overflow: "hidden",
-  },
-  barFill: { height: "100%", borderRadius: 4 },
-  moduleRevenue: { width: 54, textAlign: "right", fontSize: 12, fontWeight: "800", color: TEXT },
-
-  searchRow: {
+  heroFoot: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: CARD,
-    borderWidth: 1,
+    marginTop: 6,
+  },
+  heroBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  heroBadgeText: { fontSize: 12, fontWeight: "600" },
+  heroHint: { color: TEXT_DIM, fontSize: 12, fontWeight: "500" },
+
+  // Sparkline inside hero
+  spark: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 4,
+    height: 64,
+    paddingBottom: 2,
+  },
+  sparkCol: {
+    alignItems: "center",
+    justifyContent: "flex-end",
+    height: "100%",
+  },
+  sparkBar: {
+    width: 5,
+    backgroundColor: "rgba(212,175,55,0.25)",
+    borderRadius: 2,
+    minHeight: 4,
+  },
+  sparkBarActive: {
+    backgroundColor: GOLD,
+  },
+
+  // KPI row — flat with hairline dividers
+  kpiRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    paddingVertical: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+  },
+  kpiCell: {
+    flex: 1,
+    gap: 6,
+    paddingHorizontal: 4,
+  },
+  kpiDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: CARD_BORDER,
+    marginHorizontal: 4,
+  },
+  kpiValue: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: TEXT,
     marginTop: 4,
+    letterSpacing: -0.4,
   },
-  searchInput: { flex: 1, color: TEXT, fontSize: 13, padding: 0 },
+  kpiLabel: { fontSize: 11, color: TEXT_DIM, fontWeight: "500" },
 
-  chipsRow: { gap: 8, paddingVertical: 2, marginTop: 4 },
-  chip: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 999,
-    backgroundColor: CARD,
-    borderWidth: 1,
+  // Generic flat block (replaces card)
+  block: {
+    gap: 10,
+  },
+  sectionHint: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
+
+  // Stacked bar / legend
+  stackedBar: {
+    flexDirection: "row",
+    height: 8,
+    borderRadius: 4,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  legend: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 4 },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendName: { fontSize: 11, color: TEXT, fontWeight: "600" },
+  legendPct: { fontSize: 11, color: TEXT_DIM, fontWeight: "500" },
+
+  // Module list
+  moduleList: {
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
   },
-  chipActive: { backgroundColor: ACCENT_DIM, borderColor: ACCENT },
-  chipText: { color: TEXT_DIM, fontSize: 12, fontWeight: "700" },
-  chipTextActive: { color: ACCENT },
+  moduleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 12,
+  },
+  moduleRowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  moduleLeft: { flexDirection: "row", alignItems: "center", gap: 6, width: 84 },
+  moduleDot: { width: 8, height: 8, borderRadius: 4 },
+  moduleName: { fontSize: 12, color: TEXT, fontWeight: "600" },
+  barWrap: {
+    flex: 1,
+    height: 6,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  barFill: { height: "100%", borderRadius: 3 },
+  moduleRevenue: {
+    width: 56,
+    textAlign: "right",
+    fontSize: 12,
+    fontWeight: "700",
+    color: TEXT,
+    letterSpacing: -0.2,
+  },
 
+  // Search — focus-aware pill
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  searchRowFocused: {
+    borderColor: GOLD,
+    backgroundColor: GOLD_DIM,
+  },
+  searchInput: {
+    flex: 1,
+    color: TEXT,
+    fontSize: 14,
+    fontWeight: "500",
+    padding: 0,
+    letterSpacing: -0.1,
+  },
+
+  // Status filter — segmented with counts
+  filterSegment: {
+    flexDirection: "row",
+    backgroundColor: CARD,
+    borderRadius: 12,
+    padding: 4,
+    gap: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  filterSeg: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 8,
+    borderRadius: 9,
+  },
+  filterSegActive: {
+    backgroundColor: BG,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  filterSegText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: TEXT_DIM,
+    letterSpacing: 0.1,
+  },
+  filterSegTextActive: {
+    color: TEXT,
+    fontWeight: "700",
+  },
+  filterSegCount: {
+    minWidth: 20,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  filterSegCountActive: {
+    backgroundColor: GOLD_DIM,
+  },
+  filterSegCountText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: TEXT_DIM,
+    letterSpacing: 0.1,
+  },
+  filterSegCountTextActive: {
+    color: GOLD,
+  },
+
+  // Section header (sticky day grouping)
   sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: 8,
-    paddingHorizontal: 4,
+    paddingTop: 12,
+    paddingBottom: 8,
     backgroundColor: BG,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
   },
   sectionHeaderText: {
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "700",
     color: TEXT_DIM,
     letterSpacing: 1.5,
     textTransform: "uppercase",
   },
-  sectionHeaderTotal: { fontSize: 12, fontWeight: "800", color: GOLD },
+  sectionHeaderTotal: { fontSize: 12, fontWeight: "700", color: GOLD, letterSpacing: -0.2 },
 
-  txnCard: {
+  // Transactions — flat rows like dashboard order list
+  txnRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    backgroundColor: CARD,
-    borderRadius: 14,
-    padding: 12,
-    borderWidth: 1,
+    paddingVertical: 14,
+  },
+  txnRowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
   },
   txnIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
   },
-  txnMid: { flex: 1, gap: 4 },
+  txnMid: { flex: 1, gap: 3 },
   txnTopRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  txnId: { fontSize: 13, fontWeight: "800", color: TEXT, flexShrink: 1 },
+  txnId: { fontSize: 13, fontWeight: "700", color: TEXT, flexShrink: 1, letterSpacing: -0.1 },
   modTag: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  modTagText: { fontSize: 10, fontWeight: "800" },
-  txnBottomRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  txnMeta: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
-  metaDot: { width: 2, height: 2, borderRadius: 1, backgroundColor: TEXT_FAINT },
+  modTagText: { fontSize: 10, fontWeight: "700" },
+  txnSub: { fontSize: 11, color: TEXT_DIM, fontWeight: "500" },
 
   txnRight: { alignItems: "flex-end", gap: 4 },
-  txnTotal: { fontSize: 15, fontWeight: "800", color: TEXT },
-  statusBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  statusDotSmall: { width: 5, height: 5, borderRadius: 3 },
-  statusDone: { backgroundColor: SUCCESS_DIM },
-  statusPending: { backgroundColor: WARNING_DIM },
-  statusText: { fontSize: 10, fontWeight: "800" },
-  statusDoneText: { color: SUCCESS },
-  statusPendingText: { color: WARNING },
+  txnTotal: { fontSize: 15, fontWeight: "700", color: TEXT, letterSpacing: -0.3 },
+  statusRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  statusDot: { width: 5, height: 5, borderRadius: 2.5 },
+  statusText: { fontSize: 10, fontWeight: "600", letterSpacing: 0.2 },
 
+  // Empty
   emptyCard: {
-    backgroundColor: CARD,
     borderRadius: 18,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
     borderStyle: "dashed",
     paddingVertical: 32,
@@ -1372,8 +1525,8 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 4,
   },
-  emptyTitle: { color: TEXT, fontSize: 14, fontWeight: "800", marginTop: 4 },
-  emptyBody: { color: TEXT_DIM, fontSize: 12, fontWeight: "600", textAlign: "center" },
+  emptyTitle: { color: TEXT, fontSize: 14, fontWeight: "700", marginTop: 4 },
+  emptyBody: { color: TEXT_DIM, fontSize: 12, fontWeight: "500", textAlign: "center" },
   emptyBtn: {
     marginTop: 10,
     paddingHorizontal: 14,
@@ -1381,5 +1534,5 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: GOLD,
   },
-  emptyBtnText: { color: "#181e38", fontWeight: "800", fontSize: 12 },
+  emptyBtnText: { color: "#181e38", fontWeight: "700", fontSize: 12 },
 });

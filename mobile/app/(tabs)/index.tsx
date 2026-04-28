@@ -160,6 +160,13 @@ function parseMoney(v: string | number | undefined): number {
   return Number(String(v).replace(/[^0-9.-]/g, "")) || 0;
 }
 
+function formatShortDate(date: Date, locale: string): string {
+  return date.toLocaleDateString(locale, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
 function orderGlyph(moduleName: string): { icon: keyof typeof Ionicons.glyphMap; color: string } {
   const key = moduleName.toLowerCase();
   if (key.includes("pos") || key.includes("retail")) return { icon: "storefront-outline", color: "#60a5fa" };
@@ -418,6 +425,19 @@ export default function DashboardScreen() {
 
   const currentHero = heroConfig[heroPeriod];
   const heroError = heroPeriod === "month" ? summaryError : chartError;
+  const heroDateRange = (() => {
+    const now = new Date();
+    if (heroPeriod === "today") {
+      return formatShortDate(now, locale);
+    }
+    if (heroPeriod === "week") {
+      const start = new Date(now);
+      start.setDate(start.getDate() - 6);
+      return `${formatShortDate(start, locale)} - ${formatShortDate(now, locale)}`;
+    }
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return `${formatShortDate(start, locale)} - ${formatShortDate(now, locale)}`;
+  })();
 
   // Build a period-appropriate sparkline. Only weekly data is available from the API,
   // so month/today are synthesised from totals to visualise the shape of the period.
@@ -628,6 +648,7 @@ export default function DashboardScreen() {
               <View style={styles.heroLeft}>
                 <View style={styles.heroLabelRow}>
                   <Text style={styles.heroLabel}>{currentHero.label}</Text>
+                  <Text style={styles.heroRange}>{heroDateRange}</Text>
                   <View style={styles.heroDots}>
                     <View
                       style={[styles.heroDot, heroPeriod === "month" && styles.heroDotActive]}
@@ -1057,6 +1078,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: 1.5,
     textTransform: "uppercase",
+  },
+  heroRange: {
+    color: TEXT_FAINT,
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 0.2,
   },
   heroValue: {
     color: TEXT,
