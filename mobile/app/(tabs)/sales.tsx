@@ -925,8 +925,8 @@ export default function SalesScreen() {
               ) : null}
             </View>
 
-            {/* Status filter — segmented with counts */}
-            <View style={styles.filterSegment}>
+            {/* Status filter — underline text tabs (matches period tabs) */}
+            <View style={styles.statusTabs}>
               {STATUS_FILTERS.map((f) => {
                 const active = statusFilter === f;
                 const count = statusCounts[f];
@@ -938,34 +938,39 @@ export default function SalesScreen() {
                       haptic.selection();
                       setStatusFilter(f);
                     }}
-                    style={[
-                      styles.filterSeg,
-                      active && styles.filterSegActive,
-                    ]}
+                    style={styles.statusTab}
                   >
-                    <Text
-                      style={[
-                        styles.filterSegText,
-                        active && styles.filterSegTextActive,
-                      ]}
-                    >
-                      {STATUS_LABELS[f]}
-                    </Text>
-                    <View
-                      style={[
-                        styles.filterSegCount,
-                        active && styles.filterSegCountActive,
-                      ]}
-                    >
+                    <View style={styles.statusTabRow}>
                       <Text
                         style={[
-                          styles.filterSegCountText,
-                          active && styles.filterSegCountTextActive,
+                          styles.statusTabText,
+                          active && styles.statusTabTextActive,
                         ]}
                       >
-                        {count}
+                        {STATUS_LABELS[f]}
                       </Text>
+                      <View
+                        style={[
+                          styles.statusTabCount,
+                          active && styles.statusTabCountActive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.statusTabCountText,
+                            active && styles.statusTabCountTextActive,
+                          ]}
+                        >
+                          {count}
+                        </Text>
+                      </View>
                     </View>
+                    <View
+                      style={[
+                        styles.statusTabUnderline,
+                        active && styles.statusTabUnderlineActive,
+                      ]}
+                    />
                   </Pressable>
                 );
               })}
@@ -1403,63 +1408,62 @@ const styles = StyleSheet.create({
     letterSpacing: -0.1,
   },
 
-  // Status filter — segmented with counts
-  filterSegment: {
+  // Status filter — underline text tabs (matches period tabs)
+  statusTabs: {
     flexDirection: "row",
-    backgroundColor: CARD,
-    borderRadius: 12,
-    padding: 4,
-    gap: 4,
-    borderWidth: StyleSheet.hairlineWidth,
+    gap: 24,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
   },
-  filterSeg: {
-    flex: 1,
+  statusTab: {
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  statusTabRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
     gap: 6,
-    paddingVertical: 8,
-    borderRadius: 9,
+    marginBottom: 6,
   },
-  filterSegActive: {
-    backgroundColor: BG,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  filterSegText: {
-    fontSize: 12,
+  statusTabText: {
+    fontSize: 13,
     fontWeight: "600",
     color: TEXT_DIM,
-    letterSpacing: 0.1,
+    letterSpacing: 0.2,
   },
-  filterSegTextActive: {
+  statusTabTextActive: {
     color: TEXT,
     fontWeight: "700",
   },
-  filterSegCount: {
+  statusTabCount: {
     minWidth: 20,
-    paddingHorizontal: 5,
+    paddingHorizontal: 6,
     paddingVertical: 1,
     borderRadius: 999,
     backgroundColor: "rgba(255,255,255,0.06)",
     alignItems: "center",
     justifyContent: "center",
   },
-  filterSegCountActive: {
+  statusTabCountActive: {
     backgroundColor: GOLD_DIM,
   },
-  filterSegCountText: {
+  statusTabCountText: {
     fontSize: 10,
     fontWeight: "700",
     color: TEXT_DIM,
     letterSpacing: 0.1,
   },
-  filterSegCountTextActive: {
+  statusTabCountTextActive: {
     color: GOLD,
+  },
+  statusTabUnderline: {
+    height: 2,
+    width: "100%",
+    borderRadius: 1,
+    backgroundColor: "transparent",
+  },
+  statusTabUnderlineActive: {
+    backgroundColor: GOLD,
   },
 
   // Section header (sticky day grouping)

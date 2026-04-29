@@ -6,6 +6,11 @@ const AUTH_EMAIL_KEY = "vend88-auth-email";
 
 export type DashboardSummary = {
   today_sales: string;
+  week_revenue?: string;
+  today_items?: number;
+  week_items?: number;
+  today_orders?: number;
+  week_orders?: number;
   total_orders: number;
   total_products: number;
   avg_order_value: string;
@@ -15,6 +20,12 @@ export type DashboardSummary = {
 };
 
 export type DashboardChartPoint = { day: string; revenue: number };
+
+export type OfficialHeroRevenueSeries = {
+  week: DashboardChartPoint[];
+  month: DashboardChartPoint[];
+  today: DashboardChartPoint[];
+};
 
 export type DashboardRecentOrder = {
   id: string;
@@ -102,8 +113,10 @@ function toNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function formatOffset(date: Date): string {
-  const offsetMinutes = -date.getTimezoneOffset();
+function formatOffsetCurrentLocal(): string {
+  // Use current local offset consistently for request payload timestamps.
+  const now = new Date();
+  const offsetMinutes = -now.getTimezoneOffset();
   const sign = offsetMinutes >= 0 ? "+" : "-";
   const abs = Math.abs(offsetMinutes);
   const hh = String(Math.floor(abs / 60)).padStart(2, "0");
@@ -116,7 +129,7 @@ function formatBusinessDate(date: Date, endOfDay: boolean): string {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   const time = endOfDay ? "23:59:59" : "00:00:00";
-  return `${y}-${m}-${d} ${time} ${formatOffset(date)}`;
+  return `${y}-${m}-${d} ${time} ${formatOffsetCurrentLocal()}`;
 }
 
 function formatBusinessDateExact(date: Date): string {
@@ -126,7 +139,17 @@ function formatBusinessDateExact(date: Date): string {
   const hh = String(date.getHours()).padStart(2, "0");
   const mm = String(date.getMinutes()).padStart(2, "0");
   const ss = String(date.getSeconds()).padStart(2, "0");
-  return `${y}-${m}-${d} ${hh}:${mm}:${ss} ${formatOffset(date)}`;
+  return `${y}-${m}-${d} ${hh}:${mm}:${ss} ${formatOffsetCurrentLocal()}`;
+}
+
+function parseApiDateToLocal(value?: string): Date | null {
+  if (!value) return null;
+  // Accept API shapes like "YYYY-MM-DD HH:mm:ss +1000" or ISO.
+  const normalized = value.includes(" ")
+    ? value.replace(" ", "T").replace(" +", "+")
+    : value;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function getMonthRange(now = new Date()) {
@@ -134,6 +157,16 @@ function getMonthRange(now = new Date()) {
   return {
     startDate: formatBusinessDate(start, false),
     endDate: formatBusinessDateExact(now),
+  };
+}
+
+function getPreviousMonthRange(now = new Date()) {
+  const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const end = new Date(now.getFullYear(), now.getMonth(), 0);
+  end.setHours(23, 59, 59, 0);
+  return {
+    startDate: formatBusinessDate(start, false),
+    endDate: formatBusinessDate(end, true),
   };
 }
 
@@ -191,11 +224,8 @@ function buildLastSevenDayKeys(now = new Date()): string[] {
 
 function toRelativeTime(value?: string): string {
   if (!value) return "-";
-  const normalized = value.includes(" ")
-    ? value.replace(" ", "T").replace(" +", "+")
-    : value;
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) {
+  const date = parseApiDateToLocal(value);
+  if (!date) {
     return value;
   }
 
@@ -538,9 +568,251 @@ export type DashboardTopItem = {
 
 type PosDashboardResponse = {
   status_code?: number;
+  sales_by_method?: Record<string, number>;
   sales_by_item?: Record<string, number>;
   sales_by_category?: Record<string, number>;
 };
+
+type StoreStatisticsResponse = {
+  status_code?: number;
+  financial_summary?: {
+    total_revenue?: number;
+  };
+  operational_summary?: {
+    total_orders?: number;
+  };
+  breakdowns?: {
+    hourly_sales?: Record<string, number>;
+  };
+};
+
+function sumSalesByMethod(data?: PosDashboardResponse): number {
+  if (!data?.sales_by_method) return 0;
+  return Object.values(data.sales_by_method).reduce(
+    (sum, value) => sum + toNumber(value),
+    0
+  );
+}
+
+function sumSalesByItem(data?: PosDashboardResponse): number {
+  if (!data?.sales_by_item) return 0;
+  return Object.values(data.sales_by_item).reduce(
+    (sum, value) => sum + toNumber(value),
+    0
+  );
+}
+
+type PosDashboardSnapshot = {
+  revenueTotal: number;
+  itemsTotal: number;
+};
+
+type StoreStatisticsSnapshot = {
+  ordersTotal: number;
+  revenueTotal: number;
+};
+
+async function fetchStoreStatisticsSnapshot(
+  shopId: string,
+  token: string,
+  startDate: string,
+  endDate: string
+): Promise<StoreStatisticsSnapshot> {
+  const response = await api.post<StoreStatisticsResponse>(
+    "/dashboard/storeStatistics",
+    {
+      shop_id: shopId,
+      start_date: startDate,
+      end_date: endDate,
+      token,
+    }
+  );
+
+  const data = response.data;
+  if (data?.status_code !== 200) {
+    throw new Error("Store statistics request failed.");
+  }
+
+  return {
+    ordersTotal: toNumber(data.operational_summary?.total_orders),
+    revenueTotal: toNumber(data.financial_summary?.total_revenue),
+  };
+}
+
+async function fetchPosDashboardSnapshot(
+  shopId: string,
+  token: string,
+  startDate: string,
+  endDate: string
+): Promise<PosDashboardSnapshot> {
+  const response = await api.post<PosDashboardResponse>("/pos/dashboard", {
+    shop_id: shopId,
+    start_date: startDate,
+    end_date: endDate,
+    status: "paid",
+    token,
+  });
+
+  const data = response.data;
+  if (data?.status_code !== 200) {
+    throw new Error("POS dashboard request failed.");
+  }
+
+  return {
+    revenueTotal: sumSalesByMethod(data),
+    itemsTotal: sumSalesByItem(data),
+  };
+}
+
+async function fetchPosDashboardSalesTotal(
+  shopId: string,
+  token: string,
+  startDate: string,
+  endDate: string
+): Promise<number> {
+  const snapshot = await fetchPosDashboardSnapshot(shopId, token, startDate, endDate);
+  return snapshot.revenueTotal;
+}
+
+async function resolveOfficialShopContext(auth?: AuthOverride): Promise<{
+  email: string;
+  token: string;
+  businessId: string;
+  shopId: string;
+}> {
+  const { email, token } = await resolveOfficialAuth(auth);
+  if (!email || !token) {
+    throw new Error("Official dashboard config missing.");
+  }
+
+  const preferAccountScope = Boolean(auth?.email || auth?.token);
+  const envBusinessId = preferAccountScope
+    ? undefined
+    : process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
+  const envShopId = preferAccountScope
+    ? undefined
+    : process.env.EXPO_PUBLIC_OFFICIAL_SHOP_ID;
+
+  const metaSelections = await discoverSelectionsFromMeta(email, token);
+  const businessId =
+    envBusinessId ?? metaSelections.businessId ?? (await discoverBusinessId(email, token));
+  if (!businessId) {
+    throw new Error("Unable to resolve business_id for this account.");
+  }
+
+  const shopId =
+    envShopId ??
+    metaSelections.storeId ??
+    (await discoverShopIdFromBusiness(businessId, token));
+  if (!shopId) {
+    throw new Error("Unable to resolve shop_id for this business.");
+  }
+
+  return { email, token, businessId, shopId };
+}
+
+function formatHourLabel(hour24: number): string {
+  const suffix = hour24 >= 12 ? "p" : "a";
+  const h12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${h12}${suffix}`;
+}
+
+export async function fetchOfficialHeroRevenueSeries(
+  auth?: AuthOverride
+): Promise<OfficialHeroRevenueSeries> {
+  const { token, businessId, shopId } = await resolveOfficialShopContext(auth);
+  const now = new Date();
+
+  // Week: 7 daily buckets ending today.
+  const weekKeys = buildLastSevenDayKeys(now);
+  const week = await Promise.all(
+    weekKeys.map(async (dateKey) => {
+      const dayStart = new Date(`${dateKey}T00:00:00`);
+      const dayEnd = new Date(`${dateKey}T23:59:59`);
+      const revenue = await fetchPosDashboardSalesTotal(
+        shopId,
+        token,
+        formatBusinessDate(dayStart, false),
+        formatBusinessDate(dayEnd, true)
+      );
+      return {
+        day: dayStart.toLocaleDateString(undefined, { weekday: "short" }),
+        revenue,
+      };
+    })
+  );
+
+  // Month: 4 API buckets from month start → now.
+  const monthStartDate = new Date(now.getFullYear(), now.getMonth(), 1);
+  const totalDaysElapsed = now.getDate();
+  const month = await Promise.all(
+    Array.from({ length: 4 }, async (_, i) => {
+      const startDay = Math.floor((totalDaysElapsed * i) / 4) + 1;
+      const endDay = i === 3 ? totalDaysElapsed : Math.floor((totalDaysElapsed * (i + 1)) / 4);
+
+      const bucketStart = new Date(monthStartDate);
+      bucketStart.setDate(startDay);
+      bucketStart.setHours(0, 0, 0, 0);
+
+      const bucketEnd = new Date(monthStartDate);
+      bucketEnd.setDate(endDay);
+      bucketEnd.setHours(23, 59, 59, 0);
+
+      const revenue = await fetchPosDashboardSalesTotal(
+        shopId,
+        token,
+        formatBusinessDate(bucketStart, false),
+        i === 3 ? formatBusinessDateExact(now) : formatBusinessDate(bucketEnd, true)
+      );
+
+      return {
+        day: `W${i + 1}`,
+        revenue,
+      };
+    })
+  );
+
+  // Today: derive local 3-hour buckets from recent orders timestamps.
+  // Request a wider window to absorb API/store timezone differences, then clamp locally.
+  const localDayStart = new Date(now);
+  localDayStart.setHours(0, 0, 0, 0);
+  const localDayEnd = new Date(now);
+  localDayEnd.setHours(23, 59, 59, 999);
+  const requestStart = new Date(localDayStart);
+  requestStart.setHours(requestStart.getHours() - 16);
+  const requestEnd = new Date(localDayEnd);
+  requestEnd.setHours(requestEnd.getHours() + 16);
+
+  const rawOrders = await requestScopedOrders(
+    token,
+    { time: [formatBusinessDateExact(requestStart), formatBusinessDateExact(requestEnd)] },
+    businessId,
+    shopId
+  );
+
+  const detailedOrders = rawOrders.filter(
+    (order): order is OrderSearchItem => typeof order === "object" && order !== null
+  );
+
+  const slotHours = [0, 3, 6, 9, 12, 15, 18, 21];
+  const slotForHour = (hour24: number): number => Math.floor(hour24 / 3) * 3;
+  const hourlyByHour = new Map<number, number>();
+  for (const order of detailedOrders) {
+    if (!order.time) continue;
+    const parsedDate = parseApiDateToLocal(order.time);
+    if (!parsedDate) continue;
+    if (parsedDate < localDayStart || parsedDate > localDayEnd) continue;
+    const bucket = slotForHour(parsedDate.getHours());
+    hourlyByHour.set(bucket, (hourlyByHour.get(bucket) ?? 0) + toNumber(order.price));
+  }
+
+  const today = slotHours.map((slotStart) => ({
+    day: formatHourLabel(slotStart),
+    revenue: hourlyByHour.get(slotStart) ?? 0,
+  }));
+
+  return { week, month, today };
+}
 
 type ProductRecord = Record<string, unknown>;
 
@@ -740,7 +1012,11 @@ export async function fetchOfficialMonthRevenueDataForAuth(
     throw new Error("Unable to resolve business/store for this account.");
   }
 
-  const { startDate, endDate } = getMonthRange();
+  const now = new Date();
+  const { startDate, endDate } = getMonthRange(now);
+  const previousMonthRange = getPreviousMonthRange(now);
+  const weekRange = getWeeklyRange();
+  const todayRange = getTodayRange();
   const rawOrders = await requestScopedOrders(
     token,
     { time: [startDate, endDate] },
@@ -751,22 +1027,60 @@ export async function fetchOfficialMonthRevenueDataForAuth(
   const detailedOrders = rawOrders.filter(
     (order): order is OrderSearchItem => typeof order === "object" && order !== null
   );
-  if (detailedOrders.length === 0) {
-    throw new Error("No month revenue found for this store.");
-  }
 
   const revenueByDay = new Map<string, number>();
-  let totalSales = 0;
-  let totalProducts = 0;
+  const [
+    monthSnapshot,
+    weekSnapshot,
+    todaySnapshot,
+    monthStats,
+    weekStats,
+    todayStats,
+    previousMonthStats,
+  ] = await Promise.all([
+    fetchPosDashboardSnapshot(storeId, token, startDate, endDate),
+    fetchPosDashboardSnapshot(
+      storeId,
+      token,
+      weekRange.startDate,
+      weekRange.endDate
+    ),
+    fetchPosDashboardSnapshot(
+      storeId,
+      token,
+      todayRange.startDate,
+      todayRange.endDate
+    ),
+    fetchStoreStatisticsSnapshot(storeId, token, startDate, endDate),
+    fetchStoreStatisticsSnapshot(
+      storeId,
+      token,
+      weekRange.startDate,
+      weekRange.endDate
+    ),
+    fetchStoreStatisticsSnapshot(
+      storeId,
+      token,
+      todayRange.startDate,
+      todayRange.endDate
+    ),
+    fetchStoreStatisticsSnapshot(
+      storeId,
+      token,
+      previousMonthRange.startDate,
+      previousMonthRange.endDate
+    ),
+  ]);
+
+  let totalProductsFromOrders = 0;
   for (const order of detailedOrders) {
-    totalSales += toNumber(order.price);
     if (Array.isArray(order.qtys)) {
-      totalProducts += order.qtys.reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0);
+      totalProductsFromOrders += order.qtys.reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0);
     }
     if (order.time) {
-      const dayKey = toLocalDateKey(
-        new Date(order.time.replace(" ", "T").replace(" +", "+"))
-      );
+      const parsedDate = parseApiDateToLocal(order.time);
+      if (!parsedDate) continue;
+      const dayKey = toLocalDateKey(parsedDate);
       revenueByDay.set(dayKey, (revenueByDay.get(dayKey) ?? 0) + toNumber(order.price));
     }
   }
@@ -780,20 +1094,37 @@ export async function fetchOfficialMonthRevenueDataForAuth(
     };
   });
 
-  const todayKey = toLocalDateKey(new Date());
-  const todaySales = revenueByDay.get(todayKey) ?? 0;
-  const totalOrderCount = detailedOrders.length;
-  const avgOrder = totalOrderCount > 0 ? totalSales / totalOrderCount : 0;
+  const monthOrders = Math.round(monthStats.ordersTotal);
+  const weekOrders = Math.round(weekStats.ordersTotal);
+  const todayOrders = Math.round(todayStats.ordersTotal);
+  const monthRevenue = monthStats.revenueTotal;
+  const previousMonthRevenue = previousMonthStats.revenueTotal;
+  const previousMonthOrders = previousMonthStats.ordersTotal;
+  const revenueChangePct =
+    previousMonthRevenue > 0
+      ? ((monthRevenue - previousMonthRevenue) / previousMonthRevenue) * 100
+      : 0;
+  const ordersChangePct =
+    previousMonthOrders > 0
+      ? ((monthOrders - previousMonthOrders) / previousMonthOrders) * 100
+      : 0;
+  const avgOrder = monthOrders > 0 ? monthRevenue / monthOrders : 0;
+  void totalProductsFromOrders;
 
   return {
     summary: {
-      today_sales: todaySales.toFixed(2),
-      total_orders: totalOrderCount,
-      total_products: totalProducts,
+      today_sales: todaySnapshot.revenueTotal.toFixed(2),
+      week_revenue: weekSnapshot.revenueTotal.toFixed(2),
+      today_items: Math.round(todaySnapshot.itemsTotal),
+      week_items: Math.round(weekSnapshot.itemsTotal),
+      today_orders: todayOrders,
+      week_orders: weekOrders,
+      total_orders: monthOrders,
+      total_products: Math.round(monthSnapshot.itemsTotal),
       avg_order_value: avgOrder.toFixed(2),
-      total_revenue_month: totalSales.toFixed(2),
-      revenue_change_pct: 0,
-      orders_change_pct: 0,
+      total_revenue_month: monthRevenue.toFixed(2),
+      revenue_change_pct: revenueChangePct,
+      orders_change_pct: ordersChangePct,
     },
     chart,
   };
@@ -877,52 +1208,8 @@ export async function fetchOfficialRecentOrdersForAuth(
 export async function fetchOfficialWeeklyRevenueChart(
   auth?: AuthOverride
 ): Promise<DashboardChartPoint[]> {
-  const { email, token } = await resolveOfficialAuth(auth);
-  const preferAccountScope = Boolean(auth?.email || auth?.token);
-  const envBusinessId = preferAccountScope
-    ? undefined
-    : process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
-  const metaSelections =
-    email && token
-      ? await discoverSelectionsFromMeta(email, token)
-      : { businessId: null, storeId: null };
-  const businessId =
-    envBusinessId ?? metaSelections.businessId ?? (email && token ? await discoverBusinessId(email, token) : null);
-  const storeId = metaSelections.storeId;
-
-  const { startDate, endDate } = getWeeklyRange();
-  const baseQuery: Record<string, unknown> = {
-    time: [startDate, endDate],
-  };
-  if (!token || !businessId || !storeId) {
-    return [];
-  }
-
-  const rawOrders = await requestScopedOrders(token, baseQuery, businessId, storeId);
-
-  const detailedOrders = rawOrders.filter(
-    (order): order is OrderSearchItem => typeof order === "object" && order !== null
-  );
-
-  const revenueByDay = new Map<string, number>();
-  for (const order of detailedOrders) {
-    if (!order.time) {
-      continue;
-    }
-
-    const dayKey = toLocalDateKey(
-      new Date(order.time.replace(" ", "T").replace(" +", "+"))
-    );
-    revenueByDay.set(dayKey, (revenueByDay.get(dayKey) ?? 0) + toNumber(order.price));
-  }
-
-  return buildLastSevenDayKeys().map((dateKey) => {
-    const d = new Date(`${dateKey}T00:00:00`);
-    return {
-      day: d.toLocaleDateString(undefined, { weekday: "short" }),
-      revenue: revenueByDay.get(dateKey) ?? 0,
-    };
-  });
+  const series = await fetchOfficialHeroRevenueSeries(auth);
+  return series.week;
 }
 
 export async function fetchOfficialSalesHistory(

@@ -3,24 +3,26 @@ import {
   Animated,
   Easing,
   Image,
+  Modal,
   RefreshControl,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   View,
   Pressable,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useI18n } from "@/src/context/I18nContext";
 import { useAuth } from "@/src/context/AuthContext";
 import { API_TARGET, api } from "@/src/services/api";
 import {
+  fetchOfficialHeroRevenueSeries,
   fetchOfficialMonthRevenueData,
   fetchOfficialRecentOrders,
   fetchOfficialTopSellingItems,
-  fetchOfficialWeeklyRevenueChart,
 } from "@/src/services/officialDashboard";
 import { AnimatedNumber } from "@/src/components/AnimatedNumber";
 import { PulsingDot } from "@/src/components/PulsingDot";
@@ -48,10 +50,15 @@ import { SectionLabel } from "@/src/components/SectionLabel";
 
 type Summary = {
   today_sales: string;
+  week_revenue?: string;
+  today_orders?: number;
+  week_orders?: number;
   total_orders: number;
   total_products: number;
   avg_order_value: string;
   total_revenue_month: string;
+  today_items?: number;
+  week_items?: number;
   revenue_change_pct: number;
   orders_change_pct: number;
 };
@@ -177,6 +184,28 @@ function orderGlyph(moduleName: string): { icon: keyof typeof Ionicons.glyphMap;
   return { icon: "receipt-outline", color: ACCENT };
 }
 
+// Pick a "nice" tick step so the Y-axis shows round numbers (1 / 2 / 2.5 / 5 × 10ⁿ).
+function niceTickStep(rawMax: number): number {
+  if (!isFinite(rawMax) || rawMax <= 0) return 1;
+  const target = rawMax / 4;
+  const exp = Math.floor(Math.log10(target));
+  const pow = Math.pow(10, exp);
+  const norm = target / pow;
+  let nice: number;
+  if (norm <= 1) nice = 1;
+  else if (norm <= 2) nice = 2;
+  else if (norm <= 2.5) nice = 2.5;
+  else if (norm <= 5) nice = 5;
+  else nice = 10;
+  return nice * pow;
+}
+
+function shortMoney(n: number): string {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `$${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k`;
+  return `$${Math.round(n).toLocaleString()}`;
+}
+
 export default function DashboardScreen() {
   const router = useRouter();
   const { t, locale } = useI18n();
@@ -184,6 +213,8 @@ export default function DashboardScreen() {
   const identity = buildIdentity(email, firstName, lastName);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [chart, setChart] = useState<ChartPoint[]>([]);
+  const [monthChart, setMonthChart] = useState<ChartPoint[]>([]);
+  const [todayChart, setTodayChart] = useState<ChartPoint[]>([]);
   const [orders, setOrders] = useState<RecentOrder[]>([]);
   const [modules, setModules] = useState<Module[]>([]);
   const [topProducts, setTopProducts] = useState<TopProduct[]>([]);
@@ -192,6 +223,9 @@ export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [heroPeriod, setHeroPeriod] = useState<"month" | "week" | "today">("month");
+  const [chartOpen, setChartOpen] = useState(false);
+  const [selectedBar, setSelectedBar] = useState<number | null>(null);
+  const [barTrackH, setBarTrackH] = useState(0);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [chartError, setChartError] = useState<string | null>(null);
 
@@ -204,6 +238,8 @@ export default function DashboardScreen() {
     if (API_TARGET === "official") {
       setSummary(null);
       setChart([]);
+      setMonthChart([]);
+      setTodayChart([]);
       setOrders([]);
       setSummaryError(null);
       setChartError(null);
@@ -218,9 +254,11 @@ export default function DashboardScreen() {
       }
 
       try {
-        const officialChart = await fetchOfficialWeeklyRevenueChart(currentAuth);
-        if (officialChart.length > 0) {
-          setChart(officialChart);
+        const officialSeries = await fetchOfficialHeroRevenueSeries(currentAuth);
+        if (officialSeries.week.length > 0) {
+          setChart(officialSeries.week);
+          setMonthChart(officialSeries.month);
+          setTodayChart(officialSeries.today);
           hasOfficialChart = true;
         } else {
           hasOfficialChart = false;
@@ -272,6 +310,57 @@ export default function DashboardScreen() {
     if (m.status === "fulfilled") setModules(m.value.data);
     if (p.status === "fulfilled") setTopProducts(p.value.data);
     if (st.status === "fulfilled") setStores(st.value.data);
+  };
+
+  // Sparkline fade-cross when heroPeriod changes (number of bars differs per period).
+  const sparkAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    sparkAnim.setValue(0);
+    Animated.timing(sparkAnim, {
+      toValue: 1,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [heroPeriod, sparkAnim]);
+
+  // Detail-chart bar grow-in animation (replays on period change or modal open).
+  const barAnim = useRef(new Animated.Value(0)).current;
+  // Detail-chart page zoom/fade-in animation.
+  const modalAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!chartOpen) return;
+    setSelectedBar(null);
+    barAnim.setValue(0);
+    Animated.timing(barAnim, {
+      toValue: 1,
+      duration: 420,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [chartOpen, heroPeriod, barAnim]);
+
+  useEffect(() => {
+    if (chartOpen) {
+      modalAnim.setValue(0);
+      Animated.timing(modalAnim, {
+        toValue: 1,
+        duration: 360,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [chartOpen, modalAnim]);
+
+  const closeChartModal = () => {
+    Animated.timing(modalAnim, {
+      toValue: 0,
+      duration: 220,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) setChartOpen(false);
+    });
   };
 
   // Top Selling Items — synced to heroPeriod (today/week/month).
@@ -374,7 +463,12 @@ export default function DashboardScreen() {
   const maxRevenue = Math.max(...chart.map((p) => p.revenue), 1);
 
   const weekRevenue = chart.reduce((acc, p) => acc + p.revenue, 0);
-  const todayRevenue = chart.length > 0 ? chart[chart.length - 1].revenue : parseMoney(summary?.today_sales);
+  const todayRevenue =
+    API_TARGET === "official"
+      ? parseMoney(summary?.today_sales)
+      : chart.length > 0
+      ? chart[chart.length - 1].revenue
+      : parseMoney(summary?.today_sales);
 
   // Period-over-period % change.
   // month: from API. week: last-3-days vs first-4-days momentum proxy. today: today vs yesterday.
@@ -439,9 +533,13 @@ export default function DashboardScreen() {
     return `${formatShortDate(start, locale)} - ${formatShortDate(now, locale)}`;
   })();
 
-  // Build a period-appropriate sparkline. Only weekly data is available from the API,
-  // so month/today are synthesised from totals to visualise the shape of the period.
+  // Build period sparkline.
   const displayChart: ChartPoint[] = (() => {
+    if (API_TARGET === "official") {
+      if (heroPeriod === "week") return chart;
+      if (heroPeriod === "today") return todayChart;
+      return monthChart;
+    }
     if (heroPeriod === "week") return chart;
     if (heroPeriod === "today") {
       // Synthesise an intraday curve summing to todayRevenue (morning build-up → lunch peak → evening).
@@ -461,6 +559,13 @@ export default function DashboardScreen() {
     ];
   })();
   const displayMax = Math.max(...displayChart.map((p) => p.revenue), 1);
+  const currentTodayBucketLabel = (() => {
+    const now = new Date();
+    const hour24 = Math.floor(now.getHours() / 3) * 3;
+    const suffix = hour24 >= 12 ? "p" : "a";
+    const h12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+    return `${h12}${suffix}`;
+  })();
 
   // KPI values scaled to hero period (approximations when period-specific data isn't available).
   const totalOrders = summary?.total_orders ?? 0;
@@ -468,7 +573,13 @@ export default function DashboardScreen() {
   const todayDerivedOrders =
     monthAvg > 0 ? Math.max(0, Math.round(todayRevenue / monthAvg)) : 0;
   const periodOrders =
-    heroPeriod === "month"
+    API_TARGET === "official"
+      ? heroPeriod === "month"
+        ? totalOrders
+        : heroPeriod === "week"
+        ? summary?.week_orders ?? 0
+        : summary?.today_orders ?? 0
+      : heroPeriod === "month"
       ? totalOrders
       : heroPeriod === "week"
       ? Math.round(totalOrders / 4.3)
@@ -487,7 +598,14 @@ export default function DashboardScreen() {
     itemsPerOrderSamples.length > 0
       ? itemsPerOrderSamples.reduce((a, b) => a + b, 0) / itemsPerOrderSamples.length
       : 2.4;
-  const periodItems = Math.round(periodOrders * avgItemsPerOrder);
+  const periodItems =
+    API_TARGET === "official"
+      ? heroPeriod === "month"
+        ? summary?.total_products ?? 0
+        : heroPeriod === "week"
+        ? summary?.week_items ?? 0
+        : summary?.today_items ?? 0
+      : Math.round(periodOrders * avgItemsPerOrder);
   const periodLabel =
     heroPeriod === "month"
       ? t("dashboard_period_this_month")
@@ -576,12 +694,6 @@ export default function DashboardScreen() {
               <Skeleton height={86} radius={16} style={{ flex: 1 } as any} />
             </View>
             <Skeleton height={170} radius={22} />
-            <Skeleton height={24} width="30%" />
-            <View style={styles.moduleRow}>
-              {[0, 1, 2, 3].map((i) => (
-                <Skeleton key={i} height={56} radius={14} style={{ width: 160 } as any} />
-              ))}
-            </View>
           </>
         ) : (
           <>
@@ -700,26 +812,54 @@ export default function DashboardScreen() {
                 </View>
               </View>
               {displayChart.length > 0 && (
-                <View style={styles.spark}>
-                  {displayChart.map((p, i) => {
-                    const heightPct = Math.max(p.revenue / displayMax, 0.08);
-                    const isLast = i === displayChart.length - 1;
-                    return (
-                      <View key={`${heroPeriod}-${p.day}-${i}`} style={styles.sparkCol}>
-                        <View
-                          style={[
-                            styles.sparkBar,
-                            { height: `${Math.round(heightPct * 100)}%` },
-                            isLast && styles.sparkBarActive,
-                          ]}
-                        />
-                        <Text style={[styles.sparkLabel, isLast && styles.sparkLabelActive]}>
-                          {p.day}
-                        </Text>
-                      </View>
-                    );
-                  })}
-                </View>
+                <Pressable
+                  accessibilityLabel={`Open detailed ${currentHero.label} chart`}
+                  onPress={() => {
+                    haptic.light();
+                    setChartOpen(true);
+                  }}
+                  hitSlop={6}
+                >
+                  <Animated.View
+                    style={[
+                      styles.spark,
+                      {
+                        opacity: sparkAnim,
+                        transform: [
+                          {
+                            translateY: sparkAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [4, 0],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  >
+                    {displayChart.map((p, i) => {
+                      const heightPct = Math.max(p.revenue / displayMax, 0.08);
+                      const isLast = i === displayChart.length - 1;
+                      const isActive =
+                        heroPeriod === "today"
+                          ? p.day === currentTodayBucketLabel
+                          : isLast;
+                      return (
+                        <View key={`${heroPeriod}-${p.day}-${i}`} style={styles.sparkCol}>
+                          <View
+                            style={[
+                              styles.sparkBar,
+                              { height: `${Math.round(heightPct * 100)}%` },
+                              isActive && styles.sparkBarActive,
+                            ]}
+                          />
+                          <Text style={[styles.sparkLabel, isActive && styles.sparkLabelActive]}>
+                            {p.day}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </Animated.View>
+                </Pressable>
               )}
             </Pressable>
 
@@ -833,47 +973,6 @@ export default function DashboardScreen() {
               </>
             )}
 
-            {/* Modules — horizontal chip row */}
-            <SectionLabel label={t("dashboard_modules")} />
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.moduleRow}
-            >
-              {modules.map((mod) => {
-                const isOnline = mod.status === "online";
-                return (
-                  <Pressable
-                    key={mod.id}
-                    accessibilityLabel={`${moduleDisplayName(mod.id, mod.name, t)}, ${mod.status}`}
-                    style={({ pressed }) => [styles.moduleChip, pressed && styles.moduleCardPressed]}
-                    onPress={() => {
-                      haptic.light();
-                      const route = MODULE_ROUTE_MAP[mod.id];
-                      if (route) router.push(route as any);
-                    }}
-                  >
-                    <View style={[styles.moduleIconWrap, { backgroundColor: mod.color + "1a" }]}>
-                      <Ionicons name={mod.icon as any} size={18} color={mod.color} />
-                    </View>
-                    <View style={styles.moduleChipText}>
-                      <Text style={styles.moduleName} numberOfLines={1}>
-                        {moduleDisplayName(mod.id, mod.name, t)}
-                      </Text>
-                      <View style={styles.moduleFooter}>
-                        <PulsingDot color={isOnline ? SUCCESS : "#6b7280"} size={5} active={isOnline} />
-                        <Text style={styles.moduleTxn} numberOfLines={1}>
-                          {mod.today_txn > 0
-                            ? `${mod.today_txn} ${t("dashboard_txn_suffix")}`
-                            : moduleStatusLabel(mod.status, t)}
-                        </Text>
-                      </View>
-                    </View>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-
             {/* Recent Orders */}
             <SectionLabel
               label={t("dashboard_recent_orders")}
@@ -948,6 +1047,427 @@ export default function DashboardScreen() {
           </>
         )}
       </ScrollView>
+
+      {/* Detailed chart modal — opens from the hero sparkline */}
+      <Modal
+        visible={chartOpen}
+        animationType="none"
+        transparent
+        onRequestClose={closeChartModal}
+        statusBarTranslucent
+        hardwareAccelerated
+      >
+        <SafeAreaProvider>
+        <Animated.View
+          style={[
+            styles.modalPage,
+            {
+              opacity: modalAnim,
+              transform: [
+                {
+                  scale: modalAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.995, 1],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+        <SafeAreaView style={styles.modalPage} edges={["top", "bottom"]}>
+          <StatusBar barStyle="light-content" />
+          {/* Sticky header (title + period tabs) — slides up first */}
+          <Animated.View
+            style={{
+              opacity: modalAnim.interpolate({
+                inputRange: [0, 0.5, 1],
+                outputRange: [0, 0.6, 1],
+              }),
+              transform: [
+                {
+                  translateY: modalAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [28, 0],
+                  }),
+                },
+              ],
+            }}
+          >
+          <View style={styles.modalStickyHead}>
+            {/* Modal header */}
+            <View style={styles.modalHead}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalEyebrow}>{currentHero.label}</Text>
+                <Text style={styles.modalTitle} numberOfLines={1}>
+                  ${currentHero.value.toLocaleString(locale, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </Text>
+                <View style={styles.modalSubRow}>
+                  {(() => {
+                    const change = currentHero.change;
+                    const isPositive = change >= 0;
+                    const color = isPositive ? SUCCESS : DANGER;
+                    return (
+                      <View style={styles.heroBadge}>
+                        <Ionicons
+                          name={isPositive ? "trending-up" : "trending-down"}
+                          size={11}
+                          color={color}
+                        />
+                        <Text style={[styles.heroBadgeText, { color }]}>
+                          {isPositive ? "+" : ""}
+                          {change.toFixed(1)}%
+                        </Text>
+                      </View>
+                    );
+                  })()}
+                  <Text style={styles.modalSub}>{heroDateRange}</Text>
+                </View>
+              </View>
+              <Pressable
+                accessibilityLabel="Close"
+                onPress={() => {
+                  haptic.selection();
+                  closeChartModal();
+                }}
+                style={({ pressed }) => [styles.modalClose, pressed && styles.pressed]}
+                hitSlop={8}
+              >
+                <Ionicons name="close" size={18} color={TEXT} />
+              </Pressable>
+            </View>
+
+            {/* Period segmented tabs */}
+            <View style={styles.modalTabs}>
+              {(["today", "week", "month"] as const).map((p) => {
+                const active = heroPeriod === p;
+                return (
+                  <Pressable
+                    key={p}
+                    accessibilityLabel={`Show ${p} chart`}
+                    onPress={() => {
+                      haptic.selection();
+                      setHeroPeriod(p);
+                    }}
+                    style={[styles.modalTab, active && styles.modalTabActive]}
+                  >
+                    <Text
+                      style={[
+                        styles.modalTabText,
+                        active && styles.modalTabTextActive,
+                      ]}
+                    >
+                      {p === "today" ? t("dashboard_period_today") : p === "week" ? t("dashboard_period_this_week") : t("dashboard_period_this_month")}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+          </Animated.View>
+
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={styles.modalScrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            <Animated.View
+              style={{
+                gap: 18,
+                opacity: modalAnim.interpolate({
+                  inputRange: [0, 0.4, 1],
+                  outputRange: [0, 0, 1],
+                }),
+                transform: [
+                  {
+                    translateY: modalAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [40, 0],
+                    }),
+                  },
+                ],
+              }}
+            >
+
+            {/* Detailed bar chart */}
+            {(() => {
+              const peakIdx = displayChart.reduce(
+                (best, p, i) => (p.revenue > displayChart[best].revenue ? i : best),
+                0
+              );
+              const worstIdx = displayChart.reduce(
+                (worst, p, i) => (p.revenue < displayChart[worst].revenue ? i : worst),
+                0
+              );
+              const peak = displayChart[peakIdx]?.revenue ?? 0;
+              const chartSum = displayChart.reduce((a, p) => a + p.revenue, 0);
+              // Use the authoritative hero value as the period total — the chart is a
+              // visual breakdown that may not perfectly sum to it (e.g. partial today data).
+              const total =
+                currentHero.value > 0 ? currentHero.value : chartSum;
+              const avg = displayChart.length > 0 ? total / displayChart.length : 0;
+
+              // Nice Y-axis ticks: pick a round step so labels read $0/$1.5k/$3k/...
+              const tickStep = niceTickStep(displayMax);
+              const niceMax = Math.max(tickStep * 4, displayMax);
+              const ticks = [4, 3, 2, 1, 0].map((m) => tickStep * m);
+
+              const inspected = selectedBar !== null ? displayChart[selectedBar] : null;
+              const inspectedShare =
+                inspected && total > 0 ? (inspected.revenue / total) * 100 : 0;
+
+              return (
+                <>
+                  {/* Inspector strip — updates when a bar is tapped */}
+                  <View style={styles.inspector}>
+                    {inspected ? (
+                      <>
+                        <View style={styles.inspectorDot} />
+                        <Text style={styles.inspectorLabel}>{inspected.day}</Text>
+                        <Text style={styles.inspectorValue}>
+                          ${inspected.revenue.toLocaleString(locale, {
+                            minimumFractionDigits: 0,
+                            maximumFractionDigits: 0,
+                          })}
+                        </Text>
+                        <Text style={styles.inspectorMeta}>
+                          {inspectedShare.toFixed(1)}% of total
+                        </Text>
+                        <Pressable
+                          accessibilityLabel="Clear selection"
+                          hitSlop={8}
+                          onPress={() => setSelectedBar(null)}
+                          style={styles.inspectorClear}
+                        >
+                          <Ionicons name="close" size={12} color={TEXT_DIM} />
+                        </Pressable>
+                      </>
+                    ) : (
+                      <Text style={styles.inspectorHint}>
+                        Tap a bar to inspect
+                      </Text>
+                    )}
+                  </View>
+
+                  <View style={styles.detailChartWrap}>
+                    {/* Y-axis gridlines + nice labels */}
+                    <View style={styles.gridlines} pointerEvents="none">
+                      {ticks.map((v, i) => (
+                        <View key={i} style={styles.gridRow}>
+                          <Text style={styles.gridLabel}>{shortMoney(v)}</Text>
+                          <View style={styles.gridLine} />
+                        </View>
+                      ))}
+                    </View>
+
+                    {/* Bars */}
+                    <View style={styles.detailBars}>
+                      {displayChart.map((p, i) => {
+                        const heightPct = niceMax > 0 ? p.revenue / niceMax : 0;
+                        const finalH = Math.max(barTrackH * heightPct, p.revenue > 0 ? 3 : 0);
+                        const isPeak = i === peakIdx;
+                        const isActive =
+                          heroPeriod === "today"
+                            ? p.day === currentTodayBucketLabel
+                            : i === displayChart.length - 1;
+                        const isSelected = selectedBar === i;
+                        const dayLower = p.day.toLowerCase();
+                        const isWeekend =
+                          heroPeriod === "week" &&
+                          (dayLower === "sat" || dayLower === "sun");
+                        return (
+                          <Pressable
+                            key={`detail-${p.day}-${i}`}
+                            accessibilityLabel={`${p.day} ${shortMoney(p.revenue)}`}
+                            onPress={() => {
+                              haptic.selection();
+                              setSelectedBar((prev) => (prev === i ? null : i));
+                            }}
+                            style={[
+                              styles.detailCol,
+                              isWeekend && styles.detailColWeekend,
+                            ]}
+                          >
+                            {p.revenue > 0 ? (
+                              <Text
+                                style={[
+                                  styles.detailValue,
+                                  isPeak && styles.detailValuePeak,
+                                  isSelected && styles.detailValueSelected,
+                                ]}
+                                numberOfLines={1}
+                              >
+                                {shortMoney(p.revenue)}
+                              </Text>
+                            ) : (
+                              <Text style={styles.detailValue}> </Text>
+                            )}
+                            <View
+                              style={styles.detailBarTrack}
+                              onLayout={
+                                i === 0
+                                  ? (e) =>
+                                      setBarTrackH(e.nativeEvent.layout.height)
+                                  : undefined
+                              }
+                            >
+                              {/* Animated current-period bar */}
+                              <Animated.View
+                                style={[
+                                  styles.detailBarFill,
+                                  { height: barAnim.interpolate({
+                                      inputRange: [0, 1],
+                                      outputRange: [0, finalH],
+                                    }) },
+                                  isActive && styles.detailBarFillActive,
+                                  isPeak && styles.detailBarFillPeak,
+                                  isSelected && styles.detailBarFillSelected,
+                                ]}
+                              />
+                            </View>
+                            <Text
+                              style={[
+                                styles.detailLabel,
+                                isActive && styles.detailLabelActive,
+                                isSelected && styles.detailLabelSelected,
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {p.day}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+
+                    {/* Average reference line (dashed) — rendered above bars */}
+                    {avg > 0 && niceMax > 0 && barTrackH > 0 && (
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.avgLineWrap,
+                          { bottom: 18 + (avg / niceMax) * barTrackH },
+                        ]}
+                      >
+                        <View style={styles.avgLine} />
+                        <Text style={styles.avgLineLabel}>AVG {shortMoney(avg)}</Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Chart legend */}
+                  <View style={styles.chartLegendRow}>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendSwatch, { backgroundColor: GOLD }]} />
+                      <Text style={styles.legendText}>Revenue</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={styles.legendDash} />
+                      <Text style={styles.legendText}>Average per period</Text>
+                    </View>
+                  </View>
+
+                  {/* Footer KPIs */}
+                  <View style={styles.modalKpiRow}>
+                    <View style={styles.modalKpi}>
+                      <Text style={styles.modalKpiLabel}>Total</Text>
+                      <Text style={styles.modalKpiValue}>
+                        ${total.toLocaleString(locale, {
+                          minimumFractionDigits: 0,
+                          maximumFractionDigits: 0,
+                        })}
+                      </Text>
+                    </View>
+                    <View style={styles.modalKpiDivider} />
+                    <View style={styles.modalKpi}>
+                      <Text style={styles.modalKpiLabel}>Avg / bucket</Text>
+                      <Text style={styles.modalKpiValue}>
+                        ${avg.toLocaleString(locale, {
+                          minimumFractionDigits: 0,
+                          maximumFractionDigits: 0,
+                        })}
+                      </Text>
+                    </View>
+                    <View style={styles.modalKpiDivider} />
+                    <Pressable
+                      style={styles.modalKpi}
+                      onPress={() => {
+                        haptic.selection();
+                        setSelectedBar(peakIdx);
+                      }}
+                      accessibilityLabel="Highlight peak bucket"
+                    >
+                      <Text style={styles.modalKpiLabel}>Peak</Text>
+                      <Text style={[styles.modalKpiValue, { color: GOLD }]}>
+                        ${peak.toLocaleString(locale, {
+                          minimumFractionDigits: 0,
+                          maximumFractionDigits: 0,
+                        })}
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  {/* Best / slowest callouts */}
+                  {displayChart.length > 1 && (
+                    <View style={styles.calloutRow}>
+                      <Pressable
+                        style={[styles.callout, styles.calloutBest]}
+                        onPress={() => {
+                          haptic.selection();
+                          setSelectedBar(peakIdx);
+                        }}
+                        accessibilityLabel="Highlight best bucket"
+                      >
+                        <Ionicons name="trending-up" size={12} color={SUCCESS} />
+                        <Text style={styles.calloutLabel}>Best</Text>
+                        <Text style={styles.calloutValue}>
+                          {displayChart[peakIdx]?.day} · {shortMoney(peak)}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.callout, styles.calloutWorst]}
+                        onPress={() => {
+                          haptic.selection();
+                          setSelectedBar(worstIdx);
+                        }}
+                        accessibilityLabel="Highlight slowest bucket"
+                      >
+                        <Ionicons name="trending-down" size={12} color={DANGER} />
+                        <Text style={styles.calloutLabel}>Slowest</Text>
+                        <Text style={styles.calloutValue}>
+                          {displayChart[worstIdx]?.day} ·{" "}
+                          {shortMoney(displayChart[worstIdx]?.revenue ?? 0)}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  )}
+
+                  <Pressable
+                    accessibilityLabel="View full sales report"
+                    onPress={() => {
+                      haptic.medium();
+                      closeChartModal();
+                      router.push("/(tabs)/sales");
+                    }}
+                    style={({ pressed }) => [
+                      styles.modalCta,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Text style={styles.modalCtaText}>View full report</Text>
+                    <Ionicons name="arrow-forward" size={14} color="#181e38" />
+                  </Pressable>
+                </>
+              );
+            })()}
+            </Animated.View>
+          </ScrollView>
+        </SafeAreaView>
+        </Animated.View>
+        </SafeAreaProvider>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1108,12 +1628,14 @@ const styles = StyleSheet.create({
   heroHint: { color: TEXT_DIM, fontSize: 12, fontWeight: "500" },
   heroHintError: { color: DANGER, fontSize: 12, fontWeight: "600", flexShrink: 1 },
 
-  // Sparkline inside hero
+  // Sparkline inside hero — fixed footprint so heroLeft doesn't shift between periods (4/7/8 bars)
   spark: {
     flexDirection: "row",
     alignItems: "flex-end",
+    justifyContent: "flex-end",
     gap: 4,
     height: 64,
+    width: 80,
     paddingBottom: 2,
   },
   sparkCol: {
@@ -1139,6 +1661,428 @@ const styles = StyleSheet.create({
   sparkLabelActive: {
     color: GOLD,
     fontWeight: "700",
+  },
+
+  // ─── Detailed chart full-page ─────────────────────────────────────────
+  modalPage: {
+    flex: 1,
+    backgroundColor: BG,
+  },
+  modalStickyHead: {
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 16,
+    paddingBottom: 12,
+    backgroundColor: BG,
+    gap: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
+  },
+  modalContent: {
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 16,
+    paddingBottom: 32,
+    gap: 20,
+  },
+  modalScrollContent: {
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 16,
+    paddingBottom: 36,
+    gap: 18,
+  },
+  modalHead: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  modalEyebrow: {
+    color: TEXT_DIM,
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+    textTransform: "uppercase",
+  },
+  modalTitle: {
+    color: TEXT,
+    fontSize: 32,
+    fontWeight: "800",
+    letterSpacing: -1.2,
+    marginTop: 4,
+  },
+  modalSubRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 6,
+  },
+  modalSub: {
+    color: TEXT_DIM,
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  modalClose: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // Period underline tabs
+  modalTabs: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  modalTab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: "center",
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+  },
+  modalTabActive: {
+    borderBottomColor: GOLD,
+  },
+  modalTabText: {
+    color: TEXT_DIM,
+    fontSize: 13,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  modalTabTextActive: {
+    color: GOLD,
+    fontWeight: "700",
+  },
+
+  // Detailed chart
+  detailChartWrap: {
+    height: 320,
+    paddingTop: 18,
+    paddingLeft: 44,
+    paddingRight: 4,
+  },
+  gridlines: {
+    ...StyleSheet.absoluteFillObject,
+    paddingTop: 18,
+    paddingBottom: 36,
+    justifyContent: "space-between",
+  },
+  gridRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  gridLabel: {
+    width: 38,
+    textAlign: "right",
+    color: TEXT_FAINT,
+    fontSize: 9,
+    fontWeight: "600",
+  },
+  gridLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: CARD_BORDER,
+  },
+  detailBars: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    gap: 6,
+  },
+  detailCol: {
+    flex: 1,
+    alignItems: "center",
+    gap: 6,
+    height: "100%",
+  },
+  detailValue: {
+    fontSize: 9,
+    color: TEXT_DIM,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  detailValuePeak: {
+    color: GOLD,
+  },
+  detailBarTrack: {
+    flex: 1,
+    width: "100%",
+    flexDirection: "column-reverse",
+    borderRadius: 6,
+    overflow: "hidden",
+  },
+  detailBarFill: {
+    width: "100%",
+    backgroundColor: "rgba(212,175,55,0.22)",
+    borderTopLeftRadius: 6,
+    borderTopRightRadius: 6,
+    minHeight: 3,
+  },
+  detailBarFillActive: {
+    backgroundColor: "rgba(212,175,55,0.55)",
+  },
+  detailBarFillPeak: {
+    backgroundColor: GOLD,
+  },
+  detailLabel: {
+    fontSize: 10,
+    color: TEXT_DIM,
+    fontWeight: "600",
+  },
+  detailLabelActive: {
+    color: TEXT,
+    fontWeight: "700",
+  },
+  detailLabelSelected: {
+    color: GOLD,
+    fontWeight: "700",
+  },
+  detailValueSelected: {
+    color: GOLD,
+    fontSize: 11,
+  },
+  detailColWeekend: {
+    backgroundColor: "rgba(255,255,255,0.025)",
+    borderRadius: 6,
+  },
+  detailBarFillSelected: {
+    backgroundColor: GOLD,
+    shadowColor: GOLD,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 6,
+  },
+  detailBarPrev: {
+    position: "absolute",
+    left: "20%",
+    right: "20%",
+    bottom: 0,
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.22)",
+    borderRadius: 4,
+  },
+
+  // Inspector strip
+  inspector: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    minHeight: 36,
+  },
+  inspectorDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: GOLD,
+  },
+  inspectorLabel: {
+    color: TEXT,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  inspectorValue: {
+    color: GOLD,
+    fontSize: 14,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+  },
+  inspectorMeta: {
+    color: TEXT_DIM,
+    fontSize: 11,
+    fontWeight: "600",
+    marginLeft: "auto",
+  },
+  inspectorClear: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  inspectorHint: {
+    color: TEXT_FAINT,
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.4,
+  },
+
+  // Average reference line
+  avgLineWrap: {
+    position: "absolute",
+    left: 44,
+    right: 4,
+    height: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: -9,
+    zIndex: 10,
+    elevation: 10,
+  },
+  avgLine: {
+    flex: 1,
+    height: 0,
+    borderTopWidth: 1.5,
+    borderStyle: "dashed",
+    borderColor: SUCCESS,
+  },
+  avgLineLabel: {
+    color: "#0b1220",
+    backgroundColor: SUCCESS,
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    marginLeft: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    overflow: "hidden",
+  },
+
+  // Legend
+  chartLegendRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+    paddingHorizontal: 4,
+  },
+  legendDash: {
+    width: 18,
+    height: 0,
+    borderTopWidth: 1.5,
+    borderStyle: "dashed",
+    borderColor: SUCCESS,
+  },
+  chartLegend: {
+    flexDirection: "row",
+    gap: 14,
+    flexWrap: "wrap",
+    paddingHorizontal: 4,
+  },
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  legendSwatch: {
+    width: 10,
+    height: 10,
+    borderRadius: 2,
+  },
+  legendSwatchDash: {
+    width: 14,
+    height: 0,
+    borderTopWidth: 1,
+    borderStyle: "dashed",
+    borderColor: SUCCESS_DIM,
+  },
+  legendText: {
+    color: TEXT_DIM,
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 0.3,
+  },
+
+  // Best / slowest callouts
+  calloutRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  callout: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  calloutBest: {
+    borderColor: SUCCESS_DIM,
+  },
+  calloutWorst: {
+    borderColor: "rgba(239,68,68,0.25)",
+  },
+  calloutLabel: {
+    color: TEXT_DIM,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+  },
+  calloutValue: {
+    color: TEXT,
+    fontSize: 12,
+    fontWeight: "700",
+    flexShrink: 1,
+  },
+
+  // Modal KPI row
+  modalKpiRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    paddingVertical: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  modalKpi: {
+    flex: 1,
+    gap: 4,
+    paddingHorizontal: 4,
+  },
+  modalKpiDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: CARD_BORDER,
+    marginHorizontal: 4,
+  },
+  modalKpiLabel: {
+    fontSize: 10,
+    color: TEXT_DIM,
+    fontWeight: "600",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+  },
+  modalKpiValue: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: TEXT,
+    letterSpacing: -0.3,
+  },
+
+  // Modal CTA
+  modalCta: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: GOLD,
+    borderRadius: 14,
+    paddingVertical: 14,
+    shadowColor: GOLD,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+  },
+  modalCtaText: {
+    color: "#181e38",
+    fontSize: 14,
+    fontWeight: "800",
+    letterSpacing: 0.2,
   },
 
   // KPI row — flat cells with hairline dividers
