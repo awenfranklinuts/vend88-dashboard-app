@@ -7,13 +7,17 @@ import {
   LayoutChangeEvent,
   PanResponder,
   PanResponderGestureState,
-  ScrollView,
   StyleSheet,
   Text,
   View,
   Pressable,
 } from "react-native";
-import { PinchGestureHandler, PinchGestureHandlerStateChangeEvent, State } from "react-native-gesture-handler";
+import {
+  Gesture,
+  GestureDetector,
+  ScrollView,
+} from "react-native-gesture-handler";
+import { runOnJS } from "react-native-reanimated";
 import Svg, {
   Circle,
   Defs,
@@ -121,14 +125,12 @@ export function TodayLineChart({
     if (w !== outerW) setOuterW(w);
   };
 
-  const handlePinchStateChange = (e: PinchGestureHandlerStateChangeEvent) => {
-    if (e.nativeEvent.state === State.BEGAN || e.nativeEvent.state === State.ACTIVE) {
-      spacingAtPinchStart.current = spacing;
-    }
+  const beginPinch = () => {
+    spacingAtPinchStart.current = spacing;
   };
 
-  const handlePinch = (e: { nativeEvent: { scale: number } }) => {
-    const next = spacingAtPinchStart.current * e.nativeEvent.scale;
+  const applyPinchScale = (scale: number) => {
+    const next = spacingAtPinchStart.current * scale;
     const clamped = Math.max(
       minPointSpacingFloor,
       Math.min(minPointSpacingCeil, next)
@@ -137,6 +139,24 @@ export function TodayLineChart({
       setSpacing(clamped);
     }
   };
+
+  // Modern Gesture API: composes correctly with the native ScrollView on
+  // Android (the legacy PinchGestureHandler was being starved of touches by
+  // the inner ScrollView, so two-finger zoom never fired on Android).
+  const pinchGesture = useMemo(
+    () =>
+      Gesture.Pinch()
+        .onBegin(() => {
+          runOnJS(beginPinch)();
+        })
+        .onUpdate((e) => {
+          runOnJS(applyPinchScale)(e.scale);
+        }),
+    // beginPinch/applyPinchScale close over `spacing` via refs/setState — safe
+    // to recreate when spacing changes so onBegin captures the latest value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [spacing]
+  );
 
   // Width available for the plot inside the ScrollView (subtract sticky y-axis on the left).
   const viewportPlotW = Math.max(0, outerW - Y_AXIS_W);
@@ -299,10 +319,7 @@ export function TodayLineChart({
       </View>
 
       {/* Scrollable + pinchable plot */}
-      <PinchGestureHandler
-        onGestureEvent={handlePinch}
-        onHandlerStateChange={handlePinchStateChange}
-      >
+      <GestureDetector gesture={pinchGesture}>
         <ScrollView
           ref={scrollRef}
           horizontal
@@ -517,7 +534,7 @@ export function TodayLineChart({
           )}
         </View>
         </ScrollView>
-      </PinchGestureHandler>
+      </GestureDetector>
     </View>
   );
 }
