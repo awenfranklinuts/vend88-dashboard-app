@@ -610,6 +610,7 @@ type PosDashboardSnapshot = {
 type StoreStatisticsSnapshot = {
   ordersTotal: number;
   revenueTotal: number;
+  hourlySales: Record<string, number>;
 };
 
 async function fetchStoreStatisticsSnapshot(
@@ -636,6 +637,7 @@ async function fetchStoreStatisticsSnapshot(
   return {
     ordersTotal: toNumber(data.operational_summary?.total_orders),
     revenueTotal: toNumber(data.financial_summary?.total_revenue),
+    hourlySales: data.breakdowns?.hourly_sales ?? {},
   };
 }
 
@@ -712,10 +714,25 @@ async function resolveOfficialShopContext(auth?: AuthOverride): Promise<{
 }
 
 function formatHourLabel(hour24: number): string {
-  const suffix = hour24 >= 12 ? "p" : "a";
-  const h12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
-  return `${h12}${suffix}`;
+  return `${String(hour24).padStart(2, "0")}:00`;
 }
+
+// ── Today hourly cache ──────────────────────────────────────────────────────
+// Per-id order detail is immutable once fetched; we keep a session-wide map so
+// that opening the chart twice doesn't re-fetch the same orders. The buckets
+// themselves are also memoised with a short TTL so a second open within 60s
+// is instant. A lightweight 5s burst-throttle prevents back-to-back refreshes
+// from re-running the network at all.
+const TODAY_HOURLY_TTL_MS = 60_000;
+const orderDetailCache = new Map<string, OrderSearchItem>();
+type TodayCacheEntry = {
+  ts: number;
+  data: DashboardChartPoint[];
+  knownIds: Set<string>;
+};
+const todayHourlyCache = new Map<string, TodayCacheEntry>();
+const dayKey = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 export async function fetchOfficialHeroRevenueSeries(
   auth?: AuthOverride
@@ -772,44 +789,101 @@ export async function fetchOfficialHeroRevenueSeries(
     })
   );
 
-  // Today: derive local 3-hour buckets from recent orders timestamps.
-  // Request a wider window to absorb API/store timezone differences, then clamp locally.
+  // Today: 24 hourly buckets sourced from /search/order_search.
+  // Step 1 — list IDs of all orders that occurred today (ignore_pagination, no detail).
+  // Step 2 — fetch detail ONLY for ids we haven't seen yet (immutable cache).
+  // Step 3 — bucket revenue by the hour parsed from `time`.
   const localDayStart = new Date(now);
   localDayStart.setHours(0, 0, 0, 0);
   const localDayEnd = new Date(now);
-  localDayEnd.setHours(23, 59, 59, 999);
-  const requestStart = new Date(localDayStart);
-  requestStart.setHours(requestStart.getHours() - 16);
-  const requestEnd = new Date(localDayEnd);
-  requestEnd.setHours(requestEnd.getHours() + 16);
+  localDayEnd.setHours(23, 59, 59, 0);
 
-  const rawOrders = await requestScopedOrders(
-    token,
-    { time: [formatBusinessDateExact(requestStart), formatBusinessDateExact(requestEnd)] },
-    businessId,
-    shopId
-  );
-
-  const detailedOrders = rawOrders.filter(
-    (order): order is OrderSearchItem => typeof order === "object" && order !== null
-  );
-
-  const slotHours = [0, 3, 6, 9, 12, 15, 18, 21];
-  const slotForHour = (hour24: number): number => Math.floor(hour24 / 3) * 3;
-  const hourlyByHour = new Map<number, number>();
-  for (const order of detailedOrders) {
-    if (!order.time) continue;
-    const parsedDate = parseApiDateToLocal(order.time);
-    if (!parsedDate) continue;
-    if (parsedDate < localDayStart || parsedDate > localDayEnd) continue;
-    const bucket = slotForHour(parsedDate.getHours());
-    hourlyByHour.set(bucket, (hourlyByHour.get(bucket) ?? 0) + toNumber(order.price));
+  const cacheKey = `${businessId}:${dayKey(now)}`;
+  const cached = todayHourlyCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < TODAY_HOURLY_TTL_MS) {
+    console.log("[hero-today] cache hit, age=", Date.now() - cached.ts, "ms");
+    return { week, month, today: cached.data };
   }
 
-  const today = slotHours.map((slotStart) => ({
-    day: formatHourLabel(slotStart),
-    revenue: hourlyByHour.get(slotStart) ?? 0,
+  const hourlyByHour = new Map<number, number>();
+  try {
+    const listPayload = {
+      ignore_pagination: true,
+      query: {
+        time: [
+          formatBusinessDate(localDayStart, false),
+          formatBusinessDate(localDayEnd, true),
+        ],
+        business_id: businessId,
+      },
+      token,
+    };
+    const listResp = await api.post<OrderSearchResponse>(
+      "/search/order_search",
+      listPayload
+    );
+    const rawIds = Array.isArray(listResp.data?.orders)
+      ? listResp.data!.orders!.filter(
+          (v): v is string => typeof v === "string" && v.trim().length > 0
+        )
+      : [];
+
+    // Only fetch detail for ids we haven't already cached this session.
+    const newIds = rawIds.filter((id) => !orderDetailCache.has(id));
+    console.log(
+      `[hero-today] ids total=${rawIds.length} new=${newIds.length} cached=${rawIds.length - newIds.length}`
+    );
+
+    // Fetch detail per new id in parallel batches to avoid spamming the network.
+    const BATCH = 10;
+    for (let i = 0; i < newIds.length; i += BATCH) {
+      const slice = newIds.slice(i, i + BATCH);
+      const results = await Promise.allSettled(
+        slice.map(async (id) => {
+          const resp = await api.post<OrderSearchResponse>(
+            "/search/order_search",
+            { detail: true, query: { _id: id }, token }
+          );
+          const orders = resp.data?.orders;
+          if (Array.isArray(orders) && orders.length > 0) {
+            const first = orders[0];
+            if (typeof first === "object" && first !== null) {
+              return { id, item: first as OrderSearchItem };
+            }
+          }
+          return null;
+        })
+      );
+      for (const r of results) {
+        if (r.status === "fulfilled" && r.value) {
+          orderDetailCache.set(r.value.id, r.value.item);
+        }
+      }
+    }
+
+    for (const id of rawIds) {
+      const order = orderDetailCache.get(id);
+      if (!order) continue;
+      const parsed = parseApiDateToLocal(order.time);
+      if (!parsed) continue;
+      if (parsed < localDayStart || parsed > localDayEnd) continue;
+      const hour = parsed.getHours();
+      hourlyByHour.set(hour, (hourlyByHour.get(hour) ?? 0) + toNumber(order.price));
+    }
+  } catch (err) {
+    console.log("[hero-today] order_search error:", err);
+  }
+
+  const today = Array.from({ length: 24 }, (_, hour) => ({
+    day: formatHourLabel(hour),
+    revenue: hourlyByHour.get(hour) ?? 0,
   }));
+
+  todayHourlyCache.set(cacheKey, {
+    ts: Date.now(),
+    data: today,
+    knownIds: new Set(orderDetailCache.keys()),
+  });
 
   return { week, month, today };
 }

@@ -1,50 +1,14 @@
-import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { isAxiosError } from "axios";
-import { api } from "../services/api";
 import { useI18n } from "../context/I18nContext";
 import { DANGER, DANGER_DIM } from "../theme/tokens";
 
-// Lightweight health ping — surfaces a banner when the API is unreachable.
-// We intentionally avoid NetInfo to keep dependencies minimal.
+// Health ping disabled — the previous endpoint (/dashboard/summary) does not exist on
+// the official Vend88 API and was generating noisy 404s every 15 s. The banner now
+// stays hidden; reintroduce a real reachability check here if/when needed.
 export function OfflineBanner() {
-  const [offline, setOffline] = useState(false);
   const { t } = useI18n();
-
-  useEffect(() => {
-    let cancelled = false;
-    let consecutiveFailures = 0;
-
-    const check = async () => {
-      try {
-        await api.get("/dashboard/summary", { timeout: 4000 });
-        if (cancelled) return;
-        consecutiveFailures = 0;
-        setOffline(false);
-      } catch (error) {
-        if (cancelled) return;
-
-        // If we got an HTTP response, the server is reachable.
-        if (isAxiosError(error) && error.response) {
-          consecutiveFailures = 0;
-          setOffline(false);
-          return;
-        }
-
-        consecutiveFailures += 1;
-        // Only flip to offline after two failures to avoid flicker on slow nets.
-        if (consecutiveFailures >= 2) setOffline(true);
-      }
-    };
-
-    check();
-    const id = setInterval(check, 15000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
+  const offline = false;
 
   if (!offline) return null;
 

@@ -84,7 +84,7 @@ const translations = {
     dashboard_all_stores: "All stores",
     dashboard_no_products: "No product sales yet",
     dashboard_recent_orders: "Recent Orders",
-    dashboard_see_all: "See all ->",
+    dashboard_see_all: "See all",
     dashboard_no_recent_orders: "No recent orders yet",
     dashboard_done: "Done",
     dashboard_in_progress: "In Progress",

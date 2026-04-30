@@ -47,6 +47,7 @@ import {
   SCREEN_PADDING,
 } from "@/src/theme/tokens";
 import { SectionLabel } from "@/src/components/SectionLabel";
+import { TodayLineChart } from "@/src/components/TodayLineChart";
 
 type Summary = {
   today_sales: string;
@@ -206,6 +207,51 @@ function shortMoney(n: number): string {
   return `$${Math.round(n).toLocaleString()}`;
 }
 
+/**
+ * Reliable dashed horizontal line for React Native.
+ * `borderStyle: "dashed"` with `borderTopWidth` is unreliable across iOS/Android,
+ * so we render explicit dash segments inside a flex row that fills its parent.
+ */
+function DashedLine({
+  color,
+  thickness = 1.5,
+  dashWidth = 6,
+  dashGap = 4,
+}: {
+  color: string;
+  thickness?: number;
+  dashWidth?: number;
+  dashGap?: number;
+}) {
+  const [width, setWidth] = useState(0);
+  const dashCount =
+    width > 0 ? Math.max(1, Math.floor((width + dashGap) / (dashWidth + dashGap))) : 0;
+  return (
+    <View
+      style={{
+        flex: 1,
+        height: thickness,
+        flexDirection: "row",
+        alignItems: "center",
+        overflow: "hidden",
+      }}
+      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+    >
+      {Array.from({ length: dashCount }).map((_, i) => (
+        <View
+          key={i}
+          style={{
+            width: dashWidth,
+            height: thickness,
+            backgroundColor: color,
+            marginRight: i === dashCount - 1 ? 0 : dashGap,
+          }}
+        />
+      ))}
+    </View>
+  );
+}
+
 export default function DashboardScreen() {
   const router = useRouter();
   const { t, locale } = useI18n();
@@ -228,6 +274,14 @@ export default function DashboardScreen() {
   const [barTrackH, setBarTrackH] = useState(0);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [chartError, setChartError] = useState<string | null>(null);
+  // Ticks every 60s while the detail modal is open. Drives the "current hour"
+  // indicator and triggers a quiet refresh of today's hourly data.
+  const [nowTick, setNowTick] = useState(0);
+  // "See all top items" modal state.
+  const [topAllOpen, setTopAllOpen] = useState(false);
+  const [topAll, setTopAll] = useState<TopProduct[]>([]);
+  const [topAllLoading, setTopAllLoading] = useState(false);
+  const [topAllError, setTopAllError] = useState<string | null>(null);
 
   const fetchAll = async () => {
     let hasOfficialSummary = false;
@@ -351,6 +405,39 @@ export default function DashboardScreen() {
       }).start();
     }
   }, [chartOpen, modalAnim]);
+
+  // Cross-fade between datasets when the period changes inside the modal.
+  // The chart container fades + slides from 0→12→full to make the swap feel
+  // intentional rather than a hard cut.
+  const chartFadeAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!chartOpen) return;
+    chartFadeAnim.setValue(0);
+    Animated.timing(chartFadeAnim, {
+      toValue: 1,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [heroPeriod, chartOpen, chartFadeAnim]);
+
+  // While the modal is open, tick every 60s so the "current hour" indicator
+  // stays accurate and today's hourly data is quietly refreshed in the
+  // background. The 60s TTL on the order cache keeps this cheap.
+  useEffect(() => {
+    if (!chartOpen) return;
+    const id = setInterval(() => {
+      setNowTick((t) => t + 1);
+      if (API_TARGET === "official" && heroPeriod === "today") {
+        // Re-fetch today only — fetchAll covers more than we need but is
+        // already memoised at the network layer and incremental at the
+        // detail-fetch layer, so the marginal cost is small.
+        fetchAll();
+      }
+    }, 60_000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chartOpen, heroPeriod]);
 
   const closeChartModal = () => {
     Animated.timing(modalAnim, {
@@ -560,10 +647,43 @@ export default function DashboardScreen() {
   })();
   const displayMax = Math.max(...displayChart.map((p) => p.revenue), 1);
   const currentTodayBucketLabel = (() => {
+    // Recompute when nowTick changes so the indicator follows the clock.
+    void nowTick;
     const now = new Date();
-    const hour24 = Math.floor(now.getHours() / 3) * 3;
-    const suffix = hour24 >= 12 ? "p" : "a";
-    const h12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+    return `${String(now.getHours()).padStart(2, "0")}:00`;
+  })();
+
+  // Hero sparkline: 3-hour buckets (8 bars) aggregated from the 24-point today series
+  // for the small bar chart next to "Today revenue". Modal still uses the full 24-pt set.
+  const heroChart: ChartPoint[] =
+    heroPeriod === "today" && displayChart.length > 0
+      ? (() => {
+          const slotHours = [0, 3, 6, 9, 12, 15, 18, 21];
+          const slotLabel = (h: number) => {
+            const suffix = h >= 12 ? "p" : "a";
+            const h12 = h % 12 === 0 ? 12 : h % 12;
+            return `${h12}${suffix}`;
+          };
+          return slotHours.map((slotStart) => {
+            let revenue = 0;
+            for (let h = slotStart; h < slotStart + 3 && h < 24; h++) {
+              const point = displayChart.find(
+                (p) => p.day === `${String(h).padStart(2, "0")}:00`
+              );
+              if (point) revenue += point.revenue;
+            }
+            return { day: slotLabel(slotStart), revenue };
+          });
+        })()
+      : displayChart;
+  const heroChartMax = Math.max(...heroChart.map((p) => p.revenue), 1);
+  const currentHeroBucketLabel = (() => {
+    void nowTick;
+    if (heroPeriod !== "today") return currentTodayBucketLabel;
+    const h = new Date().getHours();
+    const slot = Math.floor(h / 3) * 3;
+    const suffix = slot >= 12 ? "p" : "a";
+    const h12 = slot % 12 === 0 ? 12 : slot % 12;
     return `${h12}${suffix}`;
   })();
 
@@ -836,12 +956,12 @@ export default function DashboardScreen() {
                       },
                     ]}
                   >
-                    {displayChart.map((p, i) => {
-                      const heightPct = Math.max(p.revenue / displayMax, 0.08);
-                      const isLast = i === displayChart.length - 1;
+                    {heroChart.map((p, i) => {
+                      const heightPct = Math.max(p.revenue / heroChartMax, 0.08);
+                      const isLast = i === heroChart.length - 1;
                       const isActive =
                         heroPeriod === "today"
-                          ? p.day === currentTodayBucketLabel
+                          ? p.day === currentHeroBucketLabel
                           : isLast;
                       return (
                         <View key={`${heroPeriod}-${p.day}-${i}`} style={styles.sparkCol}>
@@ -905,6 +1025,57 @@ export default function DashboardScreen() {
               <>
                 <SectionLabel
                   label={`${t("dashboard_top_products")} · ${periodLabel}`}
+                  right={
+                    <Pressable
+                      accessibilityLabel={`See all top items for ${periodLabel}`}
+                      onPress={() => {
+                        haptic.selection();
+                        setTopAllOpen(true);
+                        setTopAllError(null);
+                        setTopAllLoading(true);
+                        (async () => {
+                          try {
+                            if (API_TARGET === "official") {
+                              const all = await fetchOfficialTopSellingItems(
+                                50,
+                                heroPeriod,
+                                { email, token }
+                              );
+                              setTopAll(
+                                all.map((it) => ({
+                                  id: it.id,
+                                  name: it.name,
+                                  category: "",
+                                  units: it.units,
+                                  revenue: it.revenue,
+                                  image: it.image,
+                                }))
+                              );
+                            } else {
+                              const { data } = await api.get<TopProduct[]>(
+                                `/dashboard/top-products?period=${heroPeriod}&limit=50`
+                              );
+                              setTopAll(data);
+                            }
+                          } catch (err) {
+                            console.log("[top-items-all] fetch failed:", err);
+                            setTopAllError("Unable to load items.");
+                            setTopAll([]);
+                          } finally {
+                            setTopAllLoading(false);
+                          }
+                        })();
+                      }}
+                      style={({ pressed }) => [
+                        styles.seeAllChip,
+                        pressed && styles.seeAllChipPressed,
+                      ]}
+                      hitSlop={6}
+                    >
+                      <Text style={styles.seeAll}>{t("dashboard_see_all")}</Text>
+                      <Ionicons name="chevron-forward" size={13} color={TEXT_DIM} />
+                    </Pressable>
+                  }
                 />
                 <Animated.View
                   style={[
@@ -983,8 +1154,14 @@ export default function DashboardScreen() {
                     haptic.selection();
                     router.push("/(tabs)/sales");
                   }}
+                  style={({ pressed }) => [
+                    styles.seeAllChip,
+                    pressed && styles.seeAllChipPressed,
+                  ]}
+                  hitSlop={6}
                 >
                   <Text style={styles.seeAll}>{t("dashboard_see_all")}</Text>
+                  <Ionicons name="chevron-forward" size={13} color={TEXT_DIM} />
                 </Pressable>
               }
             />
@@ -1048,6 +1225,123 @@ export default function DashboardScreen() {
         )}
       </ScrollView>
 
+      {/* All top selling items — opens from the section "See all" link */}
+      <Modal
+        visible={topAllOpen}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setTopAllOpen(false)}
+      >
+        <SafeAreaView style={styles.modalPage} edges={["top", "bottom"]}>
+          <View style={styles.modalStickyHead}>
+            <View style={styles.modalHead}>
+              <View style={styles.modalHeadTopRow}>
+                <Text style={styles.modalEyebrow} numberOfLines={1}>
+                  {t("dashboard_top_products")} · {periodLabel}
+                </Text>
+                <Pressable
+                  accessibilityLabel="Close"
+                  onPress={() => {
+                    haptic.selection();
+                    setTopAllOpen(false);
+                  }}
+                  style={({ pressed }) => [styles.modalClose, pressed && styles.pressed]}
+                  hitSlop={8}
+                >
+                  <Ionicons name="close" size={18} color={TEXT} />
+                </Pressable>
+              </View>
+              <Text style={styles.modalTitle} numberOfLines={1}>
+                {topAll.length > 0
+                  ? `${topAll.length} ${topAll.length === 1 ? "item" : "items"}`
+                  : topAllLoading
+                    ? "Loading…"
+                    : "No items"}
+              </Text>
+            </View>
+          </View>
+
+          {topAllLoading ? (
+            <View style={{ padding: SCREEN_PADDING, gap: 10 }}>
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <Skeleton key={i} height={60} radius={12} />
+              ))}
+            </View>
+          ) : topAllError ? (
+            <View style={styles.emptyBlock}>
+              <Ionicons name="alert-circle-outline" size={26} color={DANGER} />
+              <Text style={styles.emptyText}>{topAllError}</Text>
+            </View>
+          ) : topAll.length === 0 ? (
+            <View style={styles.emptyBlock}>
+              <Ionicons name="cube-outline" size={26} color={TEXT_DIM} />
+              <Text style={styles.emptyText}>No items sold for this period.</Text>
+            </View>
+          ) : (
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={styles.modalScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.topList}>
+                {(() => {
+                  const maxUnits = Math.max(...topAll.map((p) => p.units), 1);
+                  return topAll.map((p, i) => {
+                    const pct = Math.max(0.04, p.units / maxUnits);
+                    const initial = (p.name?.trim()?.[0] ?? "?").toUpperCase();
+                    return (
+                      <Pressable
+                        key={`${p.id}-${i}`}
+                        accessibilityLabel={`${p.name}, ${p.units} sold`}
+                        onPress={() => {
+                          haptic.light();
+                          setTopAllOpen(false);
+                          router.push("/(tabs)/products");
+                        }}
+                        style={({ pressed }) => [
+                          styles.topRow,
+                          i !== topAll.length - 1 && styles.topRowDivider,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Text style={styles.topAllRank}>{i + 1}</Text>
+                        <View style={styles.topThumb}>
+                          {p.image ? (
+                            <Image
+                              source={{ uri: p.image }}
+                              style={styles.topThumbImage}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <Text style={styles.topThumbText}>{initial}</Text>
+                          )}
+                        </View>
+                        <View style={styles.topBody}>
+                          <View style={styles.topBodyRow}>
+                            <Text style={styles.topName} numberOfLines={1}>
+                              {p.name}
+                            </Text>
+                            <Text style={styles.topUnits}>{p.units}</Text>
+                          </View>
+                          <View style={styles.topBarTrack}>
+                            <View
+                              style={[
+                                styles.topBarFill,
+                                { width: `${Math.round(pct * 100)}%` },
+                              ]}
+                            />
+                          </View>
+                        </View>
+                      </Pressable>
+                    );
+                  });
+                })()}
+              </View>
+            </ScrollView>
+          )}
+        </SafeAreaView>
+      </Modal>
+
       {/* Detailed chart modal — opens from the hero sparkline */}
       <Modal
         visible={chartOpen}
@@ -1096,47 +1390,49 @@ export default function DashboardScreen() {
           <View style={styles.modalStickyHead}>
             {/* Modal header */}
             <View style={styles.modalHead}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.modalEyebrow}>{currentHero.label}</Text>
-                <Text style={styles.modalTitle} numberOfLines={1}>
-                  ${currentHero.value.toLocaleString(locale, {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
+              <View style={styles.modalHeadTopRow}>
+                <Text style={styles.modalEyebrow} numberOfLines={1}>
+                  {currentHero.label}
                 </Text>
-                <View style={styles.modalSubRow}>
-                  {(() => {
-                    const change = currentHero.change;
-                    const isPositive = change >= 0;
-                    const color = isPositive ? SUCCESS : DANGER;
-                    return (
-                      <View style={styles.heroBadge}>
-                        <Ionicons
-                          name={isPositive ? "trending-up" : "trending-down"}
-                          size={11}
-                          color={color}
-                        />
-                        <Text style={[styles.heroBadgeText, { color }]}>
-                          {isPositive ? "+" : ""}
-                          {change.toFixed(1)}%
-                        </Text>
-                      </View>
-                    );
-                  })()}
-                  <Text style={styles.modalSub}>{heroDateRange}</Text>
-                </View>
+                <Pressable
+                  accessibilityLabel="Close"
+                  onPress={() => {
+                    haptic.selection();
+                    closeChartModal();
+                  }}
+                  style={({ pressed }) => [styles.modalClose, pressed && styles.pressed]}
+                  hitSlop={8}
+                >
+                  <Ionicons name="close" size={18} color={TEXT} />
+                </Pressable>
               </View>
-              <Pressable
-                accessibilityLabel="Close"
-                onPress={() => {
-                  haptic.selection();
-                  closeChartModal();
-                }}
-                style={({ pressed }) => [styles.modalClose, pressed && styles.pressed]}
-                hitSlop={8}
-              >
-                <Ionicons name="close" size={18} color={TEXT} />
-              </Pressable>
+              <Text style={styles.modalTitle} numberOfLines={1}>
+                ${currentHero.value.toLocaleString(locale, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </Text>
+              <View style={styles.modalSubRow}>
+                {(() => {
+                  const change = currentHero.change;
+                  const isPositive = change >= 0;
+                  const color = isPositive ? SUCCESS : DANGER;
+                  return (
+                    <View style={styles.heroBadge}>
+                      <Ionicons
+                        name={isPositive ? "trending-up" : "trending-down"}
+                        size={11}
+                        color={color}
+                      />
+                      <Text style={[styles.heroBadgeText, { color }]}>
+                        {isPositive ? "+" : ""}
+                        {change.toFixed(1)}%
+                      </Text>
+                    </View>
+                  );
+                })()}
+                <Text style={styles.modalSub}>{heroDateRange}</Text>
+              </View>
             </View>
 
             {/* Period segmented tabs */}
@@ -1197,17 +1493,39 @@ export default function DashboardScreen() {
                 (best, p, i) => (p.revenue > displayChart[best].revenue ? i : best),
                 0
               );
-              const worstIdx = displayChart.reduce(
-                (worst, p, i) => (p.revenue < displayChart[worst].revenue ? i : worst),
-                0
-              );
+              // Slowest = lowest non-zero bucket (zero-revenue hours are usually
+              // "shop closed" rather than meaningful slow periods). Falls back to
+              // the absolute min if every bucket is zero.
+              const nonZeroIdxs = displayChart
+                .map((p, i) => (p.revenue > 0 ? i : -1))
+                .filter((i) => i >= 0);
+              const worstIdx =
+                nonZeroIdxs.length > 0
+                  ? nonZeroIdxs.reduce(
+                      (worst, i) =>
+                        displayChart[i].revenue < displayChart[worst].revenue ? i : worst,
+                      nonZeroIdxs[0]
+                    )
+                  : displayChart.reduce(
+                      (worst, p, i) => (p.revenue < displayChart[worst].revenue ? i : worst),
+                      0
+                    );
               const peak = displayChart[peakIdx]?.revenue ?? 0;
               const chartSum = displayChart.reduce((a, p) => a + p.revenue, 0);
               // Use the authoritative hero value as the period total — the chart is a
               // visual breakdown that may not perfectly sum to it (e.g. partial today data).
               const total =
                 currentHero.value > 0 ? currentHero.value : chartSum;
-              const avg = displayChart.length > 0 ? total / displayChart.length : 0;
+              // Average reference line should reflect what the chart actually shows so
+              // the dashed line never floats above the tallest bar. We average across
+              // active (non-zero) buckets — meaningful for sparse intraday data.
+              const activeBuckets = displayChart.filter((p) => p.revenue > 0).length;
+              const avg =
+                activeBuckets > 0
+                  ? chartSum / activeBuckets
+                  : displayChart.length > 0
+                    ? chartSum / displayChart.length
+                    : 0;
 
               // Nice Y-axis ticks: pick a round step so labels read $0/$1.5k/$3k/...
               const tickStep = niceTickStep(displayMax);
@@ -1228,8 +1546,8 @@ export default function DashboardScreen() {
                         <Text style={styles.inspectorLabel}>{inspected.day}</Text>
                         <Text style={styles.inspectorValue}>
                           ${inspected.revenue.toLocaleString(locale, {
-                            minimumFractionDigits: 0,
-                            maximumFractionDigits: 0,
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
                           })}
                         </Text>
                         <Text style={styles.inspectorMeta}>
@@ -1246,116 +1564,43 @@ export default function DashboardScreen() {
                       </>
                     ) : (
                       <Text style={styles.inspectorHint}>
-                        Tap a bar to inspect
+                        Tap a point to inspect
                       </Text>
                     )}
                   </View>
 
-                  <View style={styles.detailChartWrap}>
-                    {/* Y-axis gridlines + nice labels */}
-                    <View style={styles.gridlines} pointerEvents="none">
-                      {ticks.map((v, i) => (
-                        <View key={i} style={styles.gridRow}>
-                          <Text style={styles.gridLabel}>{shortMoney(v)}</Text>
-                          <View style={styles.gridLine} />
-                        </View>
-                      ))}
-                    </View>
-
-                    {/* Bars */}
-                    <View style={styles.detailBars}>
-                      {displayChart.map((p, i) => {
-                        const heightPct = niceMax > 0 ? p.revenue / niceMax : 0;
-                        const finalH = Math.max(barTrackH * heightPct, p.revenue > 0 ? 3 : 0);
-                        const isPeak = i === peakIdx;
-                        const isActive =
+                  <Animated.View
+                    style={{
+                      opacity: chartFadeAnim,
+                      transform: [
+                        {
+                          translateY: chartFadeAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [12, 0],
+                          }),
+                        },
+                      ],
+                    }}
+                  >
+                    <View style={styles.todayChartWrap}>
+                      <TodayLineChart
+                        data={displayChart}
+                        niceMax={niceMax}
+                        ticks={ticks}
+                        avg={avg}
+                        formatMoney={shortMoney}
+                        currentLabel={
                           heroPeriod === "today"
-                            ? p.day === currentTodayBucketLabel
-                            : i === displayChart.length - 1;
-                        const isSelected = selectedBar === i;
-                        const dayLower = p.day.toLowerCase();
-                        const isWeekend =
-                          heroPeriod === "week" &&
-                          (dayLower === "sat" || dayLower === "sun");
-                        return (
-                          <Pressable
-                            key={`detail-${p.day}-${i}`}
-                            accessibilityLabel={`${p.day} ${shortMoney(p.revenue)}`}
-                            onPress={() => {
-                              haptic.selection();
-                              setSelectedBar((prev) => (prev === i ? null : i));
-                            }}
-                            style={[
-                              styles.detailCol,
-                              isWeekend && styles.detailColWeekend,
-                            ]}
-                          >
-                            {p.revenue > 0 ? (
-                              <Text
-                                style={[
-                                  styles.detailValue,
-                                  isPeak && styles.detailValuePeak,
-                                  isSelected && styles.detailValueSelected,
-                                ]}
-                                numberOfLines={1}
-                              >
-                                {shortMoney(p.revenue)}
-                              </Text>
-                            ) : (
-                              <Text style={styles.detailValue}> </Text>
-                            )}
-                            <View
-                              style={styles.detailBarTrack}
-                              onLayout={
-                                i === 0
-                                  ? (e) =>
-                                      setBarTrackH(e.nativeEvent.layout.height)
-                                  : undefined
-                              }
-                            >
-                              {/* Animated current-period bar */}
-                              <Animated.View
-                                style={[
-                                  styles.detailBarFill,
-                                  { height: barAnim.interpolate({
-                                      inputRange: [0, 1],
-                                      outputRange: [0, finalH],
-                                    }) },
-                                  isActive && styles.detailBarFillActive,
-                                  isPeak && styles.detailBarFillPeak,
-                                  isSelected && styles.detailBarFillSelected,
-                                ]}
-                              />
-                            </View>
-                            <Text
-                              style={[
-                                styles.detailLabel,
-                                isActive && styles.detailLabelActive,
-                                isSelected && styles.detailLabelSelected,
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {p.day}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
+                            ? currentTodayBucketLabel
+                            : displayChart[displayChart.length - 1]?.day
+                        }
+                        selectedIndex={selectedBar}
+                        onSelectIndex={setSelectedBar}
+                        height={302}
+                        xLabelEvery={heroPeriod === "today" ? 3 : 1}
+                      />
                     </View>
-
-                    {/* Average reference line (dashed) — rendered above bars */}
-                    {avg > 0 && niceMax > 0 && barTrackH > 0 && (
-                      <View
-                        pointerEvents="none"
-                        style={[
-                          styles.avgLineWrap,
-                          { bottom: 18 + (avg / niceMax) * barTrackH },
-                        ]}
-                      >
-                        <View style={styles.avgLine} />
-                        <Text style={styles.avgLineLabel}>AVG {shortMoney(avg)}</Text>
-                      </View>
-                    )}
-                  </View>
+                  </Animated.View>
 
                   {/* Chart legend */}
                   <View style={styles.chartLegendRow}>
@@ -1364,7 +1609,9 @@ export default function DashboardScreen() {
                       <Text style={styles.legendText}>Revenue</Text>
                     </View>
                     <View style={styles.legendItem}>
-                      <View style={styles.legendDash} />
+                      <View style={styles.legendDashWrap}>
+                        <DashedLine color={SUCCESS} dashWidth={4} dashGap={3} thickness={1.5} />
+                      </View>
                       <Text style={styles.legendText}>Average per period</Text>
                     </View>
                   </View>
@@ -1375,18 +1622,18 @@ export default function DashboardScreen() {
                       <Text style={styles.modalKpiLabel}>Total</Text>
                       <Text style={styles.modalKpiValue}>
                         ${total.toLocaleString(locale, {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 0,
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
                         })}
                       </Text>
                     </View>
                     <View style={styles.modalKpiDivider} />
                     <View style={styles.modalKpi}>
-                      <Text style={styles.modalKpiLabel}>Avg / bucket</Text>
+                      <Text style={styles.modalKpiLabel}>Avg / active</Text>
                       <Text style={styles.modalKpiValue}>
                         ${avg.toLocaleString(locale, {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 0,
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
                         })}
                       </Text>
                     </View>
@@ -1402,8 +1649,8 @@ export default function DashboardScreen() {
                       <Text style={styles.modalKpiLabel}>Peak</Text>
                       <Text style={[styles.modalKpiValue, { color: GOLD }]}>
                         ${peak.toLocaleString(locale, {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 0,
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
                         })}
                       </Text>
                     </Pressable>
@@ -1690,8 +1937,13 @@ const styles = StyleSheet.create({
     gap: 18,
   },
   modalHead: {
+    flexDirection: "column",
+    alignItems: "stretch",
+  },
+  modalHeadTopRow: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
+    justifyContent: "space-between",
     gap: 8,
   },
   modalEyebrow: {
@@ -1700,13 +1952,14 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: 1.5,
     textTransform: "uppercase",
+    flex: 1,
   },
   modalTitle: {
     color: TEXT,
     fontSize: 32,
     fontWeight: "800",
     letterSpacing: -1.2,
-    marginTop: 4,
+    marginTop: 6,
   },
   modalSubRow: {
     flexDirection: "row",
@@ -1762,6 +2015,12 @@ const styles = StyleSheet.create({
     paddingTop: 18,
     paddingLeft: 44,
     paddingRight: 4,
+  },
+  todayChartWrap: {
+    height: 302,
+    paddingTop: 0,
+    paddingLeft: 0,
+    paddingRight: 0,
   },
   gridlines: {
     ...StyleSheet.absoluteFillObject,
@@ -1964,6 +2223,12 @@ const styles = StyleSheet.create({
     borderStyle: "dashed",
     borderColor: SUCCESS,
   },
+  legendDashWrap: {
+    width: 18,
+    height: 1.5,
+    flexDirection: "row",
+    alignItems: "center",
+  },
   chartLegend: {
     flexDirection: "row",
     gap: 14,
@@ -2121,7 +2386,22 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
-  seeAll: { fontSize: 11, color: GOLD, fontWeight: "600", letterSpacing: 0.3 },
+  seeAll: {
+    fontSize: 12,
+    color: TEXT,
+    fontWeight: "500",
+    letterSpacing: 0.1,
+  },
+  seeAllChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+  },
+  seeAllChipPressed: {
+    opacity: 0.5,
+  },
 
   // Modules — horizontal chip row
   moduleRow: { flexDirection: "row", gap: 10 },
@@ -2283,6 +2563,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
+  },
+  topAllRank: {
+    width: 22,
+    textAlign: "center",
+    color: TEXT_DIM,
+    fontSize: 11,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
+    letterSpacing: 0.4,
   },
   topThumbImage: {
     width: "100%",
