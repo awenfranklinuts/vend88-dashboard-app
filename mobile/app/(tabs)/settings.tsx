@@ -25,10 +25,10 @@ try {
   LocalAuth = null;
 }
 import Constants from "expo-constants";
-import { useAuth } from "@/src/context/AuthContext";
-import { Language, useI18n } from "@/src/context/I18nContext";
-import { API_BASE_URL, api } from "@/src/services/api";
-import { haptic } from "@/src/utils/haptics";
+import { useAuth } from "../../src/context/AuthContext";
+import { Language, useI18n } from "../../src/context/I18nContext";
+import { API_BASE_URL, api } from "../../src/services/api";
+import { haptic } from "../../src/utils/haptics";
 import {
   BG,
   CARD,
@@ -39,8 +39,8 @@ import {
   TEXT,
   TEXT_DIM,
   SCREEN_PADDING,
-} from "@/src/theme/tokens";
-import { ScreenHeader } from "@/src/components/ScreenHeader";
+} from "../../src/theme/tokens";
+import { ScreenHeader } from "../../src/components/ScreenHeader";
 
 const BIOMETRIC_KEY = "vend88-biometric-enabled";
 const NOTIFY_KEY = "vend88-notifications-enabled";

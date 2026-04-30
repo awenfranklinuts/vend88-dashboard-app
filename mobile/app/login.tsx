@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -20,8 +20,8 @@ import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as SecureStore from "expo-secure-store";
 import { Ionicons } from "@expo/vector-icons";
-import { useAuth } from "@/src/context/AuthContext";
-import { useI18n } from "@/src/context/I18nContext";
+import { useAuth } from "../src/context/AuthContext";
+import { useI18n } from "../src/context/I18nContext";
 
 type LocalAuthModule = typeof import("expo-local-authentication");
 let LocalAuth: LocalAuthModule | null = null;

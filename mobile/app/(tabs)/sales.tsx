@@ -12,11 +12,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { api } from "@/src/services/api";
-import { AnimatedNumber } from "@/src/components/AnimatedNumber";
-import { Skeleton } from "@/src/components/Skeleton";
-import { SectionLabel } from "@/src/components/SectionLabel";
-import { haptic } from "@/src/utils/haptics";
+import { api } from "../../src/services/api";
+import { AnimatedNumber } from "../../src/components/AnimatedNumber";
+import { Skeleton } from "../../src/components/Skeleton";
+import { SectionLabel } from "../../src/components/SectionLabel";
+import { haptic } from "../../src/utils/haptics";
 import {
   ACCENT,
   ACCENT_DIM,
@@ -31,7 +31,7 @@ import {
   TEXT_DIM,
   TEXT_FAINT,
   WARNING,
-} from "@/src/theme/tokens";
+} from "../../src/theme/tokens";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

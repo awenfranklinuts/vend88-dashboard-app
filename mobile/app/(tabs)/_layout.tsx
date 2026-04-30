@@ -1,11 +1,11 @@
 import React from "react";
 import { View } from "react-native";
 import { Redirect, Tabs } from "expo-router";
-import { useAuth } from "@/src/context/AuthContext";
-import { useI18n } from "@/src/context/I18nContext";
-import { Skeleton } from "@/src/components/Skeleton";
-import { IslandTabBar } from "@/src/components/IslandTabBar";
-import { BG } from "@/src/theme/tokens";
+import { useAuth } from "../../src/context/AuthContext";
+import { useI18n } from "../../src/context/I18nContext";
+import { Skeleton } from "../../src/components/Skeleton";
+import { IslandTabBar } from "../../src/components/IslandTabBar";
+import { BG } from "../../src/theme/tokens";
 
 export default function TabLayout() {
   const { token, loading } = useAuth();

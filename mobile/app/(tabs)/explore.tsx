@@ -10,11 +10,11 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useI18n } from "@/src/context/I18nContext";
-import { api } from "@/src/services/api";
-import { PulsingDot } from "@/src/components/PulsingDot";
-import { Skeleton } from "@/src/components/Skeleton";
-import { haptic } from "@/src/utils/haptics";
+import { useI18n } from "../../src/context/I18nContext";
+import { api } from "../../src/services/api";
+import { PulsingDot } from "../../src/components/PulsingDot";
+import { Skeleton } from "../../src/components/Skeleton";
+import { haptic } from "../../src/utils/haptics";
 import {
   BG,
   CARD,
@@ -24,9 +24,9 @@ import {
   TEXT,
   TEXT_DIM,
   SCREEN_PADDING,
-} from "@/src/theme/tokens";
-import { ScreenHeader } from "@/src/components/ScreenHeader";
-import { SectionLabel } from "@/src/components/SectionLabel";
+} from "../../src/theme/tokens";
+import { ScreenHeader } from "../../src/components/ScreenHeader";
+import { SectionLabel } from "../../src/components/SectionLabel";
 
 interface Module {
   id: string;

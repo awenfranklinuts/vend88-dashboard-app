@@ -15,19 +15,19 @@ import {
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useI18n } from "@/src/context/I18nContext";
-import { useAuth } from "@/src/context/AuthContext";
-import { API_TARGET, api } from "@/src/services/api";
+import { useI18n } from "../../src/context/I18nContext";
+import { useAuth } from "../../src/context/AuthContext";
+import { API_TARGET, api } from "../../src/services/api";
 import {
   fetchOfficialHeroRevenueSeries,
   fetchOfficialMonthRevenueData,
   fetchOfficialRecentOrders,
   fetchOfficialTopSellingItems,
-} from "@/src/services/officialDashboard";
-import { AnimatedNumber } from "@/src/components/AnimatedNumber";
-import { PulsingDot } from "@/src/components/PulsingDot";
-import { Skeleton } from "@/src/components/Skeleton";
-import { haptic } from "@/src/utils/haptics";
+} from "../../src/services/officialDashboard";
+import { AnimatedNumber } from "../../src/components/AnimatedNumber";
+import { PulsingDot } from "../../src/components/PulsingDot";
+import { Skeleton } from "../../src/components/Skeleton";
+import { haptic } from "../../src/utils/haptics";
 import {
   ACCENT,
   ACCENT_DIM,
@@ -45,9 +45,9 @@ import {
   WARNING,
   WARNING_DIM,
   SCREEN_PADDING,
-} from "@/src/theme/tokens";
-import { SectionLabel } from "@/src/components/SectionLabel";
-import { TodayLineChart } from "@/src/components/TodayLineChart";
+} from "../../src/theme/tokens";
+import { SectionLabel } from "../../src/components/SectionLabel";
+import { TodayLineChart } from "../../src/components/TodayLineChart";
 
 type Summary = {
   today_sales: string;
