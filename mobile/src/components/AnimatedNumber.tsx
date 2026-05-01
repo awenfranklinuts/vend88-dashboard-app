@@ -8,6 +8,7 @@ type Props = {
   prefix?: string;
   suffix?: string;
   decimals?: number;
+  maxDecimals?: number;
   separator?: boolean;
 };
 
@@ -20,6 +21,7 @@ export function AnimatedNumber({
   prefix = "",
   suffix = "",
   decimals = 0,
+  maxDecimals,
   separator = true,
 }: Props) {
   const [display, setDisplay] = useState(0);
@@ -45,7 +47,12 @@ export function AnimatedNumber({
   }, [value, duration]);
 
   const formatted = (() => {
-    const fixed = display.toFixed(decimals);
+    let fixed: string;
+    if (maxDecimals !== undefined) {
+      fixed = display.toFixed(maxDecimals).replace(/\.?0+$/, "");
+    } else {
+      fixed = display.toFixed(decimals);
+    }
     if (!separator) return fixed;
     const [int, dec] = fixed.split(".");
     const withSep = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");

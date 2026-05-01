@@ -19,10 +19,12 @@ import { useI18n } from "../../src/context/I18nContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { API_TARGET, api } from "../../src/services/api";
 import {
-  fetchOfficialHeroRevenueSeries,
+  fetchOfficialHeroRevenuePeriod,
   fetchOfficialMonthRevenueData,
   fetchOfficialRecentOrders,
   fetchOfficialTopSellingItems,
+  fetchOfficialDiningOptions,
+  fetchOfficialPosBreakdown,
 } from "../../src/services/officialDashboard";
 import { AnimatedNumber } from "../../src/components/AnimatedNumber";
 import { PulsingDot } from "../../src/components/PulsingDot";
@@ -48,6 +50,7 @@ import {
 } from "../../src/theme/tokens";
 import { SectionLabel } from "../../src/components/SectionLabel";
 import { TodayLineChart } from "../../src/components/TodayLineChart";
+import { DonutChart } from "../../src/components/DonutChart";
 
 type Summary = {
   today_sales: string;
@@ -101,6 +104,12 @@ type Store = {
   orders: number;
   status: string;
   is_aggregate?: boolean;
+};
+
+type DiningOption = {
+  label: string;
+  value: number;
+  color: string;
 };
 
 const MODULE_ROUTE_MAP: Record<string, string> = {
@@ -282,11 +291,42 @@ export default function DashboardScreen() {
   const [topAll, setTopAll] = useState<TopProduct[]>([]);
   const [topAllLoading, setTopAllLoading] = useState(false);
   const [topAllError, setTopAllError] = useState<string | null>(null);
+  const [diningOptions, setDiningOptions] = useState<DiningOption[]>([]);
+  // Once we've shown the dining card, keep it mounted so the period-switch
+  // fade animation always plays even when a period returns empty data.
+  const [diningEverHadData, setDiningEverHadData] = useState(false);
+  const [salesMethods, setSalesMethods] = useState<DiningOption[]>([]);
+  const [salesMethodEverHadData, setSalesMethodEverHadData] = useState(false);
+
+  // Mapping of API dine option names to display labels and colors
+  const dineOptionConfig: Record<string, { label: string; color: string }> = {
+    DINEDIN: { label: "Dine-In", color: "#FF6B6B" },
+    TAKEAWAY: { label: "Takeaway", color: "#4ECDC4" },
+    UBEREATS: { label: "UberEats", color: "#45B7D1" },
+    "IN_STORE": { label: "In-Store", color: "#FF6B6B" },
+    "DELIVERY": { label: "Delivery", color: "#45B7D1" },
+  };
+
+  // Mapping of API payment method names to display labels and colors
+  const salesMethodConfig: Record<string, { label: string; color: string }> = {
+    CASH: { label: "Cash", color: "#22C55E" },
+    ANZNFC: { label: "ANZ NFC", color: "#3B82F6" },
+    CARD: { label: "Card", color: "#3B82F6" },
+    EFTPOS: { label: "EFTPOS", color: "#8B5CF6" },
+    APPLEPAY: { label: "Apple Pay", color: "#A1A1AA" },
+    GOOGLEPAY: { label: "Google Pay", color: "#F59E0B" },
+  };
+  // Fallback color palette for unrecognised method keys.
+  const salesMethodPalette = [
+    "#22C55E",
+    "#3B82F6",
+    "#8B5CF6",
+    "#F59E0B",
+    "#EC4899",
+    "#06B6D4",
+  ];
 
   const fetchAll = async () => {
-    let hasOfficialSummary = false;
-    let hasOfficialRecentOrders = false;
-    let hasOfficialChart = false;
     const currentAuth = { email, token };
 
     if (API_TARGET === "official") {
@@ -298,73 +338,93 @@ export default function DashboardScreen() {
       setSummaryError(null);
       setChartError(null);
 
-      try {
-        const official = await fetchOfficialMonthRevenueData(currentAuth);
-        setSummary(official.summary);
-        hasOfficialSummary = true;
-      } catch {
-        hasOfficialSummary = false;
+      const [summaryResult, ordersResult] = await Promise.allSettled([
+        fetchOfficialMonthRevenueData(currentAuth),
+        fetchOfficialRecentOrders(currentAuth),
+      ]);
+
+      if (summaryResult.status === "fulfilled") {
+        setSummary(summaryResult.value.summary);
+      } else {
         setSummaryError("Unable to load month revenue for this account.");
       }
 
-      try {
-        const officialSeries = await fetchOfficialHeroRevenueSeries(currentAuth);
-        if (officialSeries.week.length > 0) {
-          setChart(officialSeries.week);
-          setMonthChart(officialSeries.month);
-          setTodayChart(officialSeries.today);
-          hasOfficialChart = true;
-        } else {
-          hasOfficialChart = false;
-          setChartError("No week or day revenue found for this account.");
-        }
-      } catch {
-        hasOfficialChart = false;
-        setChartError("Unable to load week or day revenue for this account.");
+      if (ordersResult.status === "fulfilled") {
+        setOrders(ordersResult.value);
       }
 
-      try {
-        const officialOrders = await fetchOfficialRecentOrders(currentAuth);
-        setOrders(officialOrders);
-        hasOfficialRecentOrders = true;
-      } catch {
-        hasOfficialRecentOrders = false;
-      }
-
-      const [m, st] = await Promise.allSettled([
-        api.get<Module[]>("/dashboard/modules"),
-        api.get<Store[]>("/dashboard/stores"),
-      ]);
-
-      if (m.status === "fulfilled") setModules(m.value.data);
-      if (st.status === "fulfilled") setStores(st.value.data);
+      // These endpoints are not available in the current backend.
+      setModules([]);
+      setStores([]);
       return;
     }
 
-    const [s, c, o, m, p, st] = await Promise.allSettled([
+    const [s, o, p] = await Promise.allSettled([
       api.get<Summary>("/dashboard/summary"),
-      api.get<ChartPoint[]>("/dashboard/revenue-chart"),
       api.get<RecentOrder[]>("/dashboard/recent-orders"),
-      api.get<Module[]>("/dashboard/modules"),
       api.get<TopProduct[]>("/dashboard/top-products"),
-      api.get<Store[]>("/dashboard/stores"),
     ]);
 
     if (s.status === "fulfilled") {
       setSummary(s.value.data);
       setSummaryError(null);
     }
-    if (c.status === "fulfilled") {
-      setChart(c.value.data);
-      setChartError(null);
-    }
+    setChart([]);
+    setMonthChart([]);
+    setTodayChart([]);
+    setChartError("Revenue chart endpoint is not configured for this backend.");
     if (o.status === "fulfilled") {
       setOrders(o.value.data);
     }
-    if (m.status === "fulfilled") setModules(m.value.data);
     if (p.status === "fulfilled") setTopProducts(p.value.data);
-    if (st.status === "fulfilled") setStores(st.value.data);
+    setModules([]);
+    setStores([]);
   };
+
+  // Load only the active hero period chart for official API.
+  useEffect(() => {
+    if (API_TARGET !== "official") return;
+    if (authLoading) return;
+
+    const hasDataForPeriod =
+      heroPeriod === "week"
+        ? chart.length > 0
+        : heroPeriod === "month"
+        ? monthChart.length > 0
+        : todayChart.length > 0;
+    if (hasDataForPeriod) return;
+
+    let cancelled = false;
+    const currentAuth = { email, token };
+    setChartError(null);
+
+    (async () => {
+      try {
+        const series = await fetchOfficialHeroRevenuePeriod(heroPeriod, currentAuth);
+        if (cancelled) return;
+
+        if (heroPeriod === "week") setChart(series);
+        else if (heroPeriod === "month") setMonthChart(series);
+        else setTodayChart(series);
+      } catch {
+        if (!cancelled) {
+          setChartError("Unable to load revenue chart for this period.");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authLoading,
+    email,
+    token,
+    heroPeriod,
+    chart.length,
+    monthChart.length,
+    todayChart.length,
+  ]);
 
   // Sparkline fade-cross when heroPeriod changes (number of bars differs per period).
   const sparkAnim = useRef(new Animated.Value(1)).current;
@@ -449,6 +509,132 @@ export default function DashboardScreen() {
       if (finished) setChartOpen(false);
     });
   };
+
+  // Dining Options & Sales Methods — synced to heroPeriod (today/week/month).
+  const diningAnim = useRef(new Animated.Value(1)).current;
+  const salesMethodAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (API_TARGET === "official" && authLoading) {
+      return;
+    }
+    let cancelled = false;
+    const run = async () => {
+      // Fade out both charts in parallel before swapping data.
+      Animated.parallel([
+        Animated.timing(diningAnim, {
+          toValue: 0,
+          duration: 160,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(salesMethodAnim, {
+          toValue: 0,
+          duration: 160,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      const applyDining = (next: DiningOption[]) => {
+        if (cancelled) return;
+        setDiningOptions(next);
+        if (next.length > 0) setDiningEverHadData(true);
+        requestAnimationFrame(() => {
+          if (cancelled) return;
+          Animated.timing(diningAnim, {
+            toValue: 1,
+            duration: 280,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }).start();
+        });
+      };
+
+      const applySalesMethods = (next: DiningOption[]) => {
+        if (cancelled) return;
+        setSalesMethods(next);
+        if (next.length > 0) setSalesMethodEverHadData(true);
+        requestAnimationFrame(() => {
+          if (cancelled) return;
+          Animated.timing(salesMethodAnim, {
+            toValue: 1,
+            duration: 280,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }).start();
+        });
+      };
+
+      const mapDiningEntries = (data: Record<string, number>): DiningOption[] =>
+        Object.entries(data)
+          .map(([key, value]) => {
+            const config = dineOptionConfig[key.toUpperCase()];
+            return {
+              label: config?.label || key,
+              value: value as number,
+              color: config?.color || "#999",
+            };
+          })
+          .filter((item) => item.value > 0)
+          .sort((a, b) => b.value - a.value);
+
+      const mapMethodEntries = (data: Record<string, number>): DiningOption[] =>
+        Object.entries(data)
+          .map(([key, value], idx) => {
+            const config = salesMethodConfig[key.toUpperCase()];
+            return {
+              label: config?.label || key,
+              value: value as number,
+              color:
+                config?.color ||
+                salesMethodPalette[idx % salesMethodPalette.length],
+            };
+          })
+          .filter((item) => item.value > 0)
+          .sort((a, b) => b.value - a.value);
+
+      if (API_TARGET === "official") {
+        try {
+          const breakdown = await fetchOfficialPosBreakdown(heroPeriod, {
+            email,
+            token,
+          });
+          applyDining(mapDiningEntries(breakdown.sales_by_dine_option));
+          applySalesMethods(mapMethodEntries(breakdown.sales_by_method));
+          return;
+        } catch (err) {
+          console.log("[pos-breakdown] fetch failed:", err);
+          applyDining([]);
+          applySalesMethods([]);
+          return;
+        }
+      }
+
+      // For non-official API
+      try {
+        const { data } = await api.get<Record<string, number>>(
+          `/dashboard/dining-options?period=${heroPeriod}`
+        );
+        applyDining(mapDiningEntries(data));
+      } catch {
+        console.log("[dining-options] fetch failed");
+        applyDining([]);
+      }
+      try {
+        const { data } = await api.get<Record<string, number>>(
+          `/dashboard/sales-methods?period=${heroPeriod}`
+        );
+        applySalesMethods(mapMethodEntries(data));
+      } catch {
+        console.log("[sales-methods] fetch failed");
+        applySalesMethods([]);
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, email, heroPeriod, token, diningAnim, salesMethodAnim]);
 
   // Top Selling Items — synced to heroPeriod (today/week/month).
   const topListAnim = useRef(new Animated.Value(1)).current;
@@ -679,6 +865,13 @@ export default function DashboardScreen() {
   const heroChartMax = Math.max(...heroChart.map((p) => p.revenue), 1);
   const currentHeroBucketLabel = (() => {
     void nowTick;
+    if (heroPeriod === "month") {
+      const now = new Date();
+      const day = now.getDate();
+      const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const bucket = Math.min(4, Math.floor(((day - 1) * 4) / daysInMonth) + 1);
+      return `W${bucket}`;
+    }
     if (heroPeriod !== "today") return currentTodayBucketLabel;
     const h = new Date().getHours();
     const slot = Math.floor(h / 3) * 3;
@@ -899,7 +1092,7 @@ export default function DashboardScreen() {
                   <AnimatedNumber
                     value={currentHero.value}
                     prefix="$"
-                    decimals={2}
+                    maxDecimals={2}
                     style={styles.heroValue}
                   />
                 )}
@@ -960,7 +1153,7 @@ export default function DashboardScreen() {
                       const heightPct = Math.max(p.revenue / heroChartMax, 0.08);
                       const isLast = i === heroChart.length - 1;
                       const isActive =
-                        heroPeriod === "today"
+                        heroPeriod === "today" || heroPeriod === "month"
                           ? p.day === currentHeroBucketLabel
                           : isLast;
                       return (
@@ -1140,6 +1333,88 @@ export default function DashboardScreen() {
                       );
                     });
                   })()}
+                </Animated.View>
+              </>
+            )}
+
+            {/* Dining Options */}
+            {(diningOptions.length > 0 || diningEverHadData) && (
+              <>
+                <SectionLabel
+                  label={`${t("dashboard_dining_options")} · ${periodLabel}`}
+                />
+                <Animated.View
+                  style={[
+                    styles.diningCard,
+                    {
+                      opacity: diningAnim,
+                      transform: [
+                        {
+                          scale: diningAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0.96, 1],
+                          }),
+                        },
+                        {
+                          translateY: diningAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [8, 0],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  <View style={styles.diningChartContainer}>
+                    {diningOptions.length > 0 ? (
+                      <DonutChart items={diningOptions} width={240} height={200} radius={50} strokeWidth={28} />
+                    ) : (
+                      <View style={styles.diningEmpty}>
+                        <Text style={styles.diningEmptyText}>{t("dashboard_no_recent_orders")}</Text>
+                      </View>
+                    )}
+                  </View>
+                </Animated.View>
+              </>
+            )}
+
+            {/* Sales Methods */}
+            {(salesMethods.length > 0 || salesMethodEverHadData) && (
+              <>
+                <SectionLabel
+                  label={`${t("dashboard_sales_methods")} · ${periodLabel}`}
+                />
+                <Animated.View
+                  style={[
+                    styles.diningCard,
+                    {
+                      opacity: salesMethodAnim,
+                      transform: [
+                        {
+                          scale: salesMethodAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0.96, 1],
+                          }),
+                        },
+                        {
+                          translateY: salesMethodAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [8, 0],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  <View style={styles.diningChartContainer}>
+                    {salesMethods.length > 0 ? (
+                      <DonutChart items={salesMethods} width={240} height={200} radius={50} strokeWidth={28} />
+                    ) : (
+                      <View style={styles.diningEmpty}>
+                        <Text style={styles.diningEmptyText}>{t("dashboard_no_recent_orders")}</Text>
+                      </View>
+                    )}
+                  </View>
                 </Animated.View>
               </>
             )}
@@ -2611,5 +2886,26 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRadius: 2,
     backgroundColor: GOLD,
+  },
+  diningCard: {
+    backgroundColor: CARD,
+    borderRadius: 22,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: CARD_BORDER,
+  },
+  diningChartContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  diningEmpty: {
+    height: 200,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  diningEmptyText: {
+    color: TEXT_DIM,
+    fontSize: 13,
+    fontWeight: "600",
   },
 });

@@ -571,18 +571,39 @@ type PosDashboardResponse = {
   sales_by_method?: Record<string, number>;
   sales_by_item?: Record<string, number>;
   sales_by_category?: Record<string, number>;
+  sales_by_dine_option?: Record<string, number>;
 };
 
 type StoreStatisticsResponse = {
   status_code?: number;
   financial_summary?: {
+    average_order_value?: number;
+    gross_sales?: number;
+    net_sales?: number;
+    total_credit_added?: number;
+    total_credit_usage?: number;
+    total_discount?: number;
+    total_extra_charge?: number;
+    total_item_sale?: number;
+    total_refunds?: number;
     total_revenue?: number;
+    total_rounding?: number;
+    total_surcharge?: number;
+    total_tax?: number;
   };
   operational_summary?: {
+    guest_sales?: number;
+    member_sales?: number;
+    refund_count?: number;
     total_orders?: number;
   };
   breakdowns?: {
+    category?: Record<string, number>;
+    channel?: Record<string, number>;
+    dining_mode?: Record<string, number>;
     hourly_sales?: Record<string, number>;
+    payment_method?: Record<string, number>;
+    staff_performance?: Record<string, number>;
   };
 };
 
@@ -611,6 +632,9 @@ type StoreStatisticsSnapshot = {
   ordersTotal: number;
   revenueTotal: number;
   hourlySales: Record<string, number>;
+  financial: NonNullable<StoreStatisticsResponse["financial_summary"]>;
+  operational: NonNullable<StoreStatisticsResponse["operational_summary"]>;
+  breakdowns: NonNullable<StoreStatisticsResponse["breakdowns"]>;
 };
 
 async function fetchStoreStatisticsSnapshot(
@@ -638,7 +662,120 @@ async function fetchStoreStatisticsSnapshot(
     ordersTotal: toNumber(data.operational_summary?.total_orders),
     revenueTotal: toNumber(data.financial_summary?.total_revenue),
     hourlySales: data.breakdowns?.hourly_sales ?? {},
+    financial: data.financial_summary ?? {},
+    operational: data.operational_summary ?? {},
+    breakdowns: data.breakdowns ?? {},
   };
+}
+
+export type OfficialStoreStatisticsRange = {
+  orders: number;
+  revenue: number;
+  hourlySales: Record<string, number>;
+  financial: {
+    averageOrderValue: number;
+    grossSales: number;
+    netSales: number;
+    totalCreditAdded: number;
+    totalCreditUsage: number;
+    totalDiscount: number;
+    totalExtraCharge: number;
+    totalItemSale: number;
+    totalRefunds: number;
+    totalRevenue: number;
+    totalRounding: number;
+    totalSurcharge: number;
+    totalTax: number;
+  };
+  operational: {
+    guestSales: number;
+    memberSales: number;
+    refundCount: number;
+    totalOrders: number;
+  };
+  diningMode: Record<string, number>;
+  paymentMethod: Record<string, number>;
+  category: Record<string, number>;
+  channel: Record<string, number>;
+  staffPerformance: Record<string, number>;
+};
+
+export async function fetchOfficialStoreStatisticsRange(
+  start: Date,
+  end: Date,
+  auth?: AuthOverride
+): Promise<OfficialStoreStatisticsRange> {
+  const { token, shopId } = await resolveOfficialShopContext(auth);
+
+  const useExactEnd =
+    end.getHours() !== 23 ||
+    end.getMinutes() !== 59 ||
+    end.getSeconds() !== 59;
+
+  const snapshot = await fetchStoreStatisticsSnapshot(
+    shopId,
+    token,
+    formatBusinessDate(start, false),
+    useExactEnd ? formatBusinessDateExact(end) : formatBusinessDate(end, true)
+  );
+
+  const f = snapshot.financial;
+  const o = snapshot.operational;
+  const b = snapshot.breakdowns;
+
+  return {
+    orders: Math.round(snapshot.ordersTotal),
+    revenue: snapshot.revenueTotal,
+    hourlySales: snapshot.hourlySales,
+    financial: {
+      averageOrderValue: toNumber(f.average_order_value),
+      grossSales: toNumber(f.gross_sales),
+      netSales: toNumber(f.net_sales),
+      totalCreditAdded: toNumber(f.total_credit_added),
+      totalCreditUsage: toNumber(f.total_credit_usage),
+      totalDiscount: toNumber(f.total_discount),
+      totalExtraCharge: toNumber(f.total_extra_charge),
+      totalItemSale: toNumber(f.total_item_sale),
+      totalRefunds: toNumber(f.total_refunds),
+      totalRevenue: toNumber(f.total_revenue),
+      totalRounding: toNumber(f.total_rounding),
+      totalSurcharge: toNumber(f.total_surcharge),
+      totalTax: toNumber(f.total_tax),
+    },
+    operational: {
+      guestSales: toNumber(o.guest_sales),
+      memberSales: toNumber(o.member_sales),
+      refundCount: Math.round(toNumber(o.refund_count)),
+      totalOrders: Math.round(toNumber(o.total_orders)),
+    },
+    diningMode: b.dining_mode ?? {},
+    paymentMethod: b.payment_method ?? {},
+    category: b.category ?? {},
+    channel: b.channel ?? {},
+    staffPerformance: b.staff_performance ?? {},
+  };
+}
+
+export async function fetchOfficialPosItemsSoldRange(
+  start: Date,
+  end: Date,
+  auth?: AuthOverride
+): Promise<number> {
+  const { token, shopId } = await resolveOfficialShopContext(auth);
+
+  const useExactEnd =
+    end.getHours() !== 23 ||
+    end.getMinutes() !== 59 ||
+    end.getSeconds() !== 59;
+
+  const snapshot = await fetchPosDashboardSnapshot(
+    shopId,
+    token,
+    formatBusinessDate(start, false),
+    useExactEnd ? formatBusinessDateExact(end) : formatBusinessDate(end, true)
+  );
+
+  return Math.round(snapshot.itemsTotal);
 }
 
 async function fetchPosDashboardSnapshot(
@@ -734,15 +871,15 @@ const todayHourlyCache = new Map<string, TodayCacheEntry>();
 const dayKey = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-export async function fetchOfficialHeroRevenueSeries(
-  auth?: AuthOverride
-): Promise<OfficialHeroRevenueSeries> {
-  const { token, businessId, shopId } = await resolveOfficialShopContext(auth);
-  const now = new Date();
+export type OfficialHeroPeriod = "week" | "month" | "today";
 
-  // Week: 7 daily buckets ending today.
+async function fetchOfficialWeekRevenueSeries(
+  shopId: string,
+  token: string,
+  now: Date
+): Promise<DashboardChartPoint[]> {
   const weekKeys = buildLastSevenDayKeys(now);
-  const week = await Promise.all(
+  return Promise.all(
     weekKeys.map(async (dateKey) => {
       const dayStart = new Date(`${dateKey}T00:00:00`);
       const dayEnd = new Date(`${dateKey}T23:59:59`);
@@ -758,28 +895,44 @@ export async function fetchOfficialHeroRevenueSeries(
       };
     })
   );
+}
 
-  // Month: 4 API buckets from month start → now.
+async function fetchOfficialMonthRevenueSeries(
+  shopId: string,
+  token: string,
+  now: Date
+): Promise<DashboardChartPoint[]> {
   const monthStartDate = new Date(now.getFullYear(), now.getMonth(), 1);
   const totalDaysElapsed = now.getDate();
-  const month = await Promise.all(
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+
+  return Promise.all(
     Array.from({ length: 4 }, async (_, i) => {
-      const startDay = Math.floor((totalDaysElapsed * i) / 4) + 1;
-      const endDay = i === 3 ? totalDaysElapsed : Math.floor((totalDaysElapsed * (i + 1)) / 4);
+      const startDay = Math.floor((daysInMonth * i) / 4) + 1;
+      const endDay = Math.floor((daysInMonth * (i + 1)) / 4);
+
+      if (startDay > totalDaysElapsed) {
+        return {
+          day: `W${i + 1}`,
+          revenue: 0,
+        };
+      }
 
       const bucketStart = new Date(monthStartDate);
       bucketStart.setDate(startDay);
       bucketStart.setHours(0, 0, 0, 0);
 
+      const cappedEndDay = Math.min(endDay, totalDaysElapsed);
       const bucketEnd = new Date(monthStartDate);
-      bucketEnd.setDate(endDay);
+      bucketEnd.setDate(cappedEndDay);
       bucketEnd.setHours(23, 59, 59, 0);
+      const isCurrentPartialBucket = totalDaysElapsed < endDay;
 
       const revenue = await fetchPosDashboardSalesTotal(
         shopId,
         token,
         formatBusinessDate(bucketStart, false),
-        i === 3 ? formatBusinessDateExact(now) : formatBusinessDate(bucketEnd, true)
+        isCurrentPartialBucket ? formatBusinessDateExact(now) : formatBusinessDate(bucketEnd, true)
       );
 
       return {
@@ -788,11 +941,13 @@ export async function fetchOfficialHeroRevenueSeries(
       };
     })
   );
+}
 
-  // Today: 24 hourly buckets sourced from /search/order_search.
-  // Step 1 — list IDs of all orders that occurred today (ignore_pagination, no detail).
-  // Step 2 — fetch detail ONLY for ids we haven't seen yet (immutable cache).
-  // Step 3 — bucket revenue by the hour parsed from `time`.
+async function fetchOfficialTodayRevenueSeries(
+  token: string,
+  businessId: string,
+  now: Date
+): Promise<DashboardChartPoint[]> {
   const localDayStart = new Date(now);
   localDayStart.setHours(0, 0, 0, 0);
   const localDayEnd = new Date(now);
@@ -802,7 +957,7 @@ export async function fetchOfficialHeroRevenueSeries(
   const cached = todayHourlyCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < TODAY_HOURLY_TTL_MS) {
     console.log("[hero-today] cache hit, age=", Date.now() - cached.ts, "ms");
-    return { week, month, today: cached.data };
+    return cached.data;
   }
 
   const hourlyByHour = new Map<number, number>();
@@ -828,13 +983,11 @@ export async function fetchOfficialHeroRevenueSeries(
         )
       : [];
 
-    // Only fetch detail for ids we haven't already cached this session.
     const newIds = rawIds.filter((id) => !orderDetailCache.has(id));
     console.log(
       `[hero-today] ids total=${rawIds.length} new=${newIds.length} cached=${rawIds.length - newIds.length}`
     );
 
-    // Fetch detail per new id in parallel batches to avoid spamming the network.
     const BATCH = 10;
     for (let i = 0; i < newIds.length; i += BATCH) {
       const slice = newIds.slice(i, i + BATCH);
@@ -884,6 +1037,36 @@ export async function fetchOfficialHeroRevenueSeries(
     data: today,
     knownIds: new Set(orderDetailCache.keys()),
   });
+
+  return today;
+}
+
+export async function fetchOfficialHeroRevenuePeriod(
+  period: OfficialHeroPeriod,
+  auth?: AuthOverride
+): Promise<DashboardChartPoint[]> {
+  const { token, businessId, shopId } = await resolveOfficialShopContext(auth);
+  const now = new Date();
+
+  if (period === "week") {
+    return fetchOfficialWeekRevenueSeries(shopId, token, now);
+  }
+  if (period === "month") {
+    return fetchOfficialMonthRevenueSeries(shopId, token, now);
+  }
+  return fetchOfficialTodayRevenueSeries(token, businessId, now);
+}
+
+export async function fetchOfficialHeroRevenueSeries(
+  auth?: AuthOverride
+): Promise<OfficialHeroRevenueSeries> {
+  const { token, businessId, shopId } = await resolveOfficialShopContext(auth);
+  const now = new Date();
+  const [week, month, today] = await Promise.all([
+    fetchOfficialWeekRevenueSeries(shopId, token, now),
+    fetchOfficialMonthRevenueSeries(shopId, token, now),
+    fetchOfficialTodayRevenueSeries(token, businessId, now),
+  ]);
 
   return { week, month, today };
 }
@@ -1288,16 +1471,14 @@ export async function fetchOfficialWeeklyRevenueChart(
 
 export async function fetchOfficialSalesHistory(
   start: Date,
-  end: Date
+  end: Date,
+  auth?: AuthOverride
 ): Promise<OfficialSaleRecord[]> {
-  const [storedEmail, storedToken] = await Promise.all([
-    SecureStore.getItemAsync(AUTH_EMAIL_KEY),
-    SecureStore.getItemAsync(AUTH_TOKEN_KEY),
-  ]);
-
-  const email = storedEmail ?? process.env.EXPO_PUBLIC_OFFICIAL_EMAIL;
-  const token = storedToken ?? process.env.EXPO_PUBLIC_OFFICIAL_TOKEN;
-  const envBusinessId = process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
+  const { email, token } = await resolveOfficialAuth(auth);
+  const preferAccountScope = Boolean(auth?.email || auth?.token);
+  const envBusinessId = preferAccountScope
+    ? undefined
+    : process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
   const businessId =
     envBusinessId ?? (email && token ? await discoverBusinessId(email, token) : null);
 
@@ -1374,4 +1555,76 @@ export async function fetchOfficialSalesHistory(
       status: mapOrderStatus(order.status),
     };
   });
+}
+
+export async function fetchOfficialDiningOptions(
+  period: "month" | "week" | "today",
+  auth?: AuthOverride
+): Promise<Record<string, number>> {
+  const breakdown = await fetchOfficialPosBreakdown(period, auth);
+  return breakdown.sales_by_dine_option;
+}
+
+export async function fetchOfficialPosBreakdown(
+  period: "month" | "week" | "today",
+  auth?: AuthOverride
+): Promise<{
+  sales_by_dine_option: Record<string, number>;
+  sales_by_method: Record<string, number>;
+}> {
+  const preferAccountScope = Boolean(auth?.email || auth?.token);
+  let businessId = preferAccountScope
+    ? undefined
+    : process.env.EXPO_PUBLIC_OFFICIAL_BUSINESS_ID;
+  const { email, token } = await resolveOfficialAuth(auth);
+
+  if (!email || !token) {
+    throw new Error("Official business sales config missing.");
+  }
+
+  const metaSelections = await discoverSelectionsFromMeta(email, token);
+  const storeId = metaSelections.storeId;
+
+  if (!businessId) {
+    businessId = metaSelections.businessId ?? (await discoverBusinessId(email, token)) ?? undefined;
+  }
+
+  if (!businessId || !storeId) {
+    throw new Error("Unable to resolve business/store for this account.");
+  }
+
+  let startDate: string, endDate: string;
+  const now = new Date();
+
+  if (period === "month") {
+    const range = getMonthRange(now);
+    startDate = range.startDate;
+    endDate = range.endDate;
+  } else if (period === "week") {
+    const range = getWeeklyRange(now);
+    startDate = range.startDate;
+    endDate = range.endDate;
+  } else {
+    const range = getTodayRange(now);
+    startDate = range.startDate;
+    endDate = range.endDate;
+  }
+
+  const response = await api.post<PosDashboardResponse>("/pos/dashboard", {
+    shop_id: storeId,
+    start_date: startDate,
+    end_date: endDate,
+    status: "paid",
+    token,
+  });
+
+  const data = response.data;
+  if (data?.status_code !== 200) {
+    throw new Error("POS dashboard request failed.");
+  }
+
+  return {
+    sales_by_dine_option: data?.sales_by_dine_option ?? {},
+    sales_by_method: data?.sales_by_method ?? {},
+  };
 }

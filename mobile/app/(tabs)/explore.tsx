@@ -11,7 +11,6 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useI18n } from "../../src/context/I18nContext";
-import { api } from "../../src/services/api";
 import { PulsingDot } from "../../src/components/PulsingDot";
 import { Skeleton } from "../../src/components/Skeleton";
 import { haptic } from "../../src/utils/haptics";
@@ -35,6 +34,15 @@ interface Module {
   today_txn: number;
   today_revenue: number;
 }
+
+const DEFAULT_MODULES: Module[] = [
+  { id: "pos", name: "Point of Sale", status: "online", today_txn: 0, today_revenue: 0 },
+  { id: "kds", name: "Kitchen Display", status: "online", today_txn: 0, today_revenue: 0 },
+  { id: "vending", name: "Vending", status: "online", today_txn: 0, today_revenue: 0 },
+  { id: "kiosk", name: "Kiosk", status: "offline", today_txn: 0, today_revenue: 0 },
+  { id: "loyalty", name: "Loyalty", status: "online", today_txn: 0, today_revenue: 0 },
+  { id: "reports", name: "Reports", status: "online", today_txn: 0, today_revenue: 0 },
+];
 
 const MODULE_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   pos: "storefront-outline",
@@ -143,16 +151,10 @@ export default function ModulesScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const fetchModules = useCallback(async () => {
-    try {
-      const res = await api.get("/dashboard/modules");
-      setModules(res.data?.modules ?? res.data ?? []);
-    } catch {
-      // keep previous
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+  const fetchModules = useCallback(() => {
+    setModules(DEFAULT_MODULES);
+    setLoading(false);
+    setRefreshing(false);
   }, []);
 
   useEffect(() => {

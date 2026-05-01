@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
+  Easing,
   PanResponder,
   Pressable,
   RefreshControl,
@@ -12,7 +14,13 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { api } from "../../src/services/api";
+import { useAuth } from "../../src/context/AuthContext";
+import { API_TARGET } from "../../src/services/api";
+import {
+  fetchOfficialSalesHistory,
+  fetchOfficialStoreStatisticsRange,
+  type OfficialStoreStatisticsRange,
+} from "../../src/services/officialDashboard";
 import { AnimatedNumber } from "../../src/components/AnimatedNumber";
 import { Skeleton } from "../../src/components/Skeleton";
 import { SectionLabel } from "../../src/components/SectionLabel";
@@ -36,7 +44,7 @@ import {
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type Sale = {
-  id: number;
+  id: string | number;
   date: string; // ISO or "YYYY-MM-DD HH:mm"
   order_id: string;
   items: number;
@@ -231,13 +239,191 @@ function isInPeriod(
   );
 }
 
+function buildPeriodSummary(sales: Sale[], start: Date, endExclusive: Date): PeriodSummary {
+  const scoped = sales.filter((sale) => {
+    const d = parseDate(sale.date);
+    return d >= start && d < endExclusive;
+  });
+  const revenue = scoped.reduce((sum, sale) => sum + parseMoney(sale.total), 0);
+  const orders = scoped.length;
+  const avg = orders > 0 ? revenue / orders : 0;
+  return {
+    revenue: revenue.toFixed(2),
+    orders,
+    avg: avg.toFixed(2),
+  };
+}
+
+function buildSalesSummary(sales: Sale[], now = new Date()): SalesSummary {
+  const todayStart = startOfDay(now);
+  const tomorrowStart = addDays(todayStart, 1);
+  const thisWeekStart = weekStart(now);
+  const nextWeekStart = addDays(thisWeekStart, 7);
+  const thisMonthStart = monthStart(now);
+  const nextMonthStart = new Date(thisMonthStart.getFullYear(), thisMonthStart.getMonth() + 1, 1);
+
+  return {
+    today: buildPeriodSummary(sales, todayStart, tomorrowStart),
+    this_week: buildPeriodSummary(sales, thisWeekStart, nextWeekStart),
+    this_month: buildPeriodSummary(sales, thisMonthStart, nextMonthStart),
+  };
+}
+
+function getSelectedPeriodBounds(
+  period: Period,
+  selectedDate: Date,
+  selectedWeekStart: Date,
+  selectedMonthStart: Date,
+  now = new Date()
+): { start: Date; endInclusive: Date; endExclusive: Date } {
+  if (period === "today") {
+    const start = startOfDay(selectedDate);
+    const isCurrent = dayKey(start) === dayKey(startOfDay(now));
+    const endInclusive = isCurrent ? new Date(now) : new Date(start.getFullYear(), start.getMonth(), start.getDate(), 23, 59, 59, 0);
+    return {
+      start,
+      endInclusive,
+      endExclusive: addDays(start, 1),
+    };
+  }
+
+  if (period === "this_week") {
+    const start = weekStart(selectedWeekStart);
+    const currentWeekStart = weekStart(now);
+    const isCurrent = dayKey(start) === dayKey(currentWeekStart);
+    const weekEndDate = addDays(start, 6);
+    const endInclusive = isCurrent
+      ? new Date(now)
+      : new Date(weekEndDate.getFullYear(), weekEndDate.getMonth(), weekEndDate.getDate(), 23, 59, 59, 0);
+    return {
+      start,
+      endInclusive,
+      endExclusive: addDays(start, 7),
+    };
+  }
+
+  const start = monthStart(selectedMonthStart);
+  const currentMonth = monthStart(now);
+  const isCurrent =
+    start.getFullYear() === currentMonth.getFullYear() &&
+    start.getMonth() === currentMonth.getMonth();
+  const monthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  const endInclusive = isCurrent
+    ? new Date(now)
+    : new Date(monthEnd.getFullYear(), monthEnd.getMonth(), monthEnd.getDate(), 23, 59, 59, 0);
+  return {
+    start,
+    endInclusive,
+    endExclusive: new Date(start.getFullYear(), start.getMonth() + 1, 1),
+  };
+}
+
+function getPreviousComparisonBounds(bounds: {
+  start: Date;
+  endInclusive: Date;
+  endExclusive: Date;
+}): { start: Date; endInclusive: Date; endExclusive: Date } {
+  const durationMs = Math.max(0, bounds.endInclusive.getTime() - bounds.start.getTime());
+  const endInclusive = new Date(bounds.start.getTime() - 1);
+  const start = new Date(endInclusive.getTime() - durationMs);
+  return {
+    start,
+    endInclusive,
+    endExclusive: new Date(endInclusive.getTime() + 1),
+  };
+}
+
+function calcRevenueChangePct(currentRevenue: number, previousRevenue: number): number {
+  if (previousRevenue <= 0) {
+    return currentRevenue <= 0 ? 0 : 100;
+  }
+  return ((currentRevenue - previousRevenue) / previousRevenue) * 100;
+}
+
+// ─── Statement subcomponents ─────────────────────────────────────────────────
+
+function StatementRow({
+  label,
+  value,
+  emphasis,
+  total,
+  negative,
+}: {
+  label: string;
+  value: string;
+  emphasis?: boolean;
+  total?: boolean;
+  negative?: boolean;
+}) {
+  return (
+    <View style={styles.statementRow}>
+      <Text
+        style={[
+          styles.statementLabel,
+          emphasis && styles.statementLabelEmphasis,
+          total && styles.statementLabelTotal,
+        ]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+      <Text
+        style={[
+          styles.statementValue,
+          emphasis && styles.statementValueEmphasis,
+          total && styles.statementValueTotal,
+          negative && styles.statementValueNegative,
+        ]}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function StatementSubRow({
+  label,
+  value,
+  negative,
+}: {
+  label: string;
+  value: string;
+  negative?: boolean;
+}) {
+  return (
+    <View style={[styles.statementRow, styles.statementSubRow]}>
+      <View style={styles.statementSubLabelWrap}>
+        <Text style={styles.statementSubGlyph}>└</Text>
+        <Text style={styles.statementSubLabel} numberOfLines={1}>
+          {label}
+        </Text>
+      </View>
+      <Text
+        style={[
+          styles.statementSubValue,
+          negative && styles.statementValueNegative,
+        ]}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function StatementDivider() {
+  return <View style={styles.statementDivider} />;
+}
+
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function SalesScreen() {
+  const { email, token, loading: authLoading } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [summary, setSummary] = useState<SalesSummary | null>(null);
-  const [byModule, setByModule] = useState<ModuleStat[]>([]);
   const [chart, setChart] = useState<{ day: string; revenue: number }[]>([]);
+  const [officialPeriodStat, setOfficialPeriodStat] = useState<PeriodSummary | null>(null);
+  const [officialStats, setOfficialStats] = useState<OfficialStoreStatisticsRange | null>(null);
+  const [revenueChangePct, setRevenueChangePct] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState<Period>("this_week");
@@ -395,22 +581,72 @@ export default function SalesScreen() {
     })
   ).current;
 
-  const fetchAll = async () => {
-    const [s, sm, bm, ch] = await Promise.allSettled([
-      api.get<Sale[]>("/sales"),
-      api.get<SalesSummary>("/sales/summary"),
-      api.get<ModuleStat[]>("/sales/by-module"),
-      api.get<{ day: string; revenue: number }[]>("/dashboard/revenue-chart"),
+  const selectedBounds = useMemo(
+    () =>
+      getSelectedPeriodBounds(
+        period,
+        selectedDate,
+        selectedWeekStart,
+        selectedMonthStart
+      ),
+    [period, selectedDate, selectedWeekStart, selectedMonthStart]
+  );
+
+  const fetchAll = useCallback(async () => {
+    const historyResult = await Promise.allSettled([
+      fetchOfficialSalesHistory(
+        selectedBounds.start,
+        selectedBounds.endInclusive,
+        { email, token }
+      ),
     ]);
-    if (s.status === "fulfilled") setSales(s.value.data);
-    if (sm.status === "fulfilled") setSummary(sm.value.data);
-    if (bm.status === "fulfilled") setByModule(bm.value.data);
-    if (ch.status === "fulfilled") setChart(ch.value.data);
-  };
+
+    const firstResult = historyResult[0];
+    if (firstResult.status === "fulfilled") {
+      const mappedSales: Sale[] = firstResult.value.map((sale) => ({
+        id: sale.id,
+        date: sale.date,
+        order_id: sale.order_id,
+        items: sale.items,
+        module: sale.module,
+        payment: sale.payment,
+        total: sale.total,
+        status: sale.status,
+      }));
+      setSales(mappedSales);
+      setSummary(buildSalesSummary(mappedSales));
+
+      const endAnchor = startOfDay(selectedBounds.endInclusive);
+      const dayKeys = Array.from({ length: 7 }, (_, i) =>
+        dayKey(addDays(endAnchor, -(6 - i)))
+      );
+      const byDay = new Map<string, number>();
+      for (const row of mappedSales) {
+        const d = parseDate(row.date);
+        const key = dayKey(startOfDay(d));
+        byDay.set(key, (byDay.get(key) ?? 0) + parseMoney(row.total));
+      }
+      setChart(
+        dayKeys.map((key) => ({
+          day: new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {
+            weekday: "short",
+          }),
+          revenue: byDay.get(key) ?? 0,
+        }))
+      );
+    } else {
+      setSales([]);
+      setSummary(buildSalesSummary([]));
+      setChart([]);
+    }
+  }, [email, token, selectedBounds]);
 
   useEffect(() => {
+    if (API_TARGET === "official" && authLoading) {
+      return;
+    }
     fetchAll().finally(() => setLoading(false));
-  }, []);
+  }, [authLoading, fetchAll]);
 
   const onRefresh = async () => {
     haptic.light();
@@ -420,11 +656,116 @@ export default function SalesScreen() {
     setRefreshing(false);
   };
 
-  const stat = summary ? summary[period] : null;
-  const revenueChange = 12.4; // Optional — surface from API if available
+  useEffect(() => {
+    if (API_TARGET !== "official") {
+      setOfficialPeriodStat(null);
+      setOfficialStats(null);
+      setRevenueChangePct(null);
+      return;
+    }
+    if (authLoading) {
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const previousBounds = getPreviousComparisonBounds(selectedBounds);
+        const [stats, previousStats] = await Promise.all([
+          fetchOfficialStoreStatisticsRange(
+            selectedBounds.start,
+            selectedBounds.endInclusive,
+            { email, token }
+          ),
+          fetchOfficialStoreStatisticsRange(
+            previousBounds.start,
+            previousBounds.endInclusive,
+            { email, token }
+          ),
+        ]);
+        if (cancelled) return;
+        const avg =
+          stats.financial.averageOrderValue > 0
+            ? stats.financial.averageOrderValue
+            : stats.orders > 0
+            ? stats.revenue / stats.orders
+            : 0;
+        setOfficialPeriodStat({
+          revenue: stats.revenue.toFixed(2),
+          orders: stats.orders,
+          avg: avg.toFixed(2),
+        });
+        setOfficialStats(stats);
+        setRevenueChangePct(
+          calcRevenueChangePct(stats.revenue, previousStats.revenue)
+        );
+      } catch (err) {
+        console.log("[sales-period] storeStatistics fetch failed:", err);
+        if (!cancelled) {
+          setOfficialPeriodStat(null);
+          setOfficialStats(null);
+          setRevenueChangePct(null);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, email, token, selectedBounds]);
+
+  // Fade + slide the Statement card whenever fresh stats arrive for a new period.
+  const statementAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!officialStats) return;
+    statementAnim.setValue(0);
+    const id = requestAnimationFrame(() => {
+      Animated.timing(statementAnim, {
+        toValue: 1,
+        duration: 260,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [officialStats, statementAnim]);
+
+  const fallbackStat = useMemo(
+    () => buildPeriodSummary(sales, selectedBounds.start, selectedBounds.endExclusive),
+    [sales, selectedBounds]
+  );
+  const previousBounds = useMemo(
+    () => getPreviousComparisonBounds(selectedBounds),
+    [selectedBounds]
+  );
+  const fallbackPreviousStat = useMemo(
+    () => buildPeriodSummary(sales, previousBounds.start, previousBounds.endExclusive),
+    [sales, previousBounds]
+  );
+  const fallbackRevenueChange = useMemo(
+    () =>
+      calcRevenueChangePct(
+        parseMoney(fallbackStat.revenue),
+        parseMoney(fallbackPreviousStat.revenue)
+      ),
+    [fallbackStat.revenue, fallbackPreviousStat.revenue]
+  );
+
+  const stat =
+    API_TARGET === "official"
+      ? officialPeriodStat ?? fallbackStat
+      : summary
+      ? summary[period]
+      : fallbackStat;
+  const revenueChange =
+    API_TARGET === "official"
+      ? revenueChangePct ?? fallbackRevenueChange
+      : fallbackRevenueChange;
+  const revenueChangeUp = revenueChange >= 0;
+  const revenueChangeTone = revenueChange > 0 ? SUCCESS : revenueChange < 0 ? DANGER : TEXT_DIM;
 
   // Filter + group transactions
-  const { sections, totalFiltered, paymentBreakdown, statusCounts } = useMemo(() => {
+  const { sections, totalFiltered, paymentBreakdown, statusCounts, moduleBreakdown, periodItemsSold } = useMemo(() => {
     const q = search.trim().toLowerCase();
     const filtered = sales.filter((s) => {
       const d = parseDate(s.date);
@@ -442,6 +783,12 @@ export default function SalesScreen() {
       return true;
     });
 
+    // Full period set for KPI totals (matches dashboard behavior, independent of local filters)
+    const periodOnly = sales.filter((s) => {
+      const d = parseDate(s.date);
+      return isInPeriod(d, period, selectedDate, selectedWeekStart, selectedMonthStart);
+    });
+
     // Status counts (within current period + search, before status filter)
     const periodMatched = sales.filter((s) => {
       const d = parseDate(s.date);
@@ -457,6 +804,10 @@ export default function SalesScreen() {
       completed: periodMatched.filter((s) => s.status === "completed").length,
       pending: periodMatched.filter((s) => s.status !== "completed").length,
     };
+    const itemsSold = periodOnly.reduce(
+      (sum, s) => sum + (Number.isFinite(s.items) ? s.items : 0),
+      0
+    );
 
     // Group by day
     const groups = new Map<string, { title: string; date: Date; items: Sale[] }>();
@@ -491,13 +842,37 @@ export default function SalesScreen() {
       }))
       .sort((a, b) => b.value - a.value);
 
+    const moduleMap = new Map<string, { revenue: number; orders: number }>();
+    for (const s of periodMatched) {
+      const current = moduleMap.get(s.module) ?? { revenue: 0, orders: 0 };
+      current.revenue += parseMoney(s.total);
+      current.orders += 1;
+      moduleMap.set(s.module, current);
+    }
+    const moduleTotalRevenue = Array.from(moduleMap.values()).reduce(
+      (sum, row) => sum + row.revenue,
+      0
+    );
+    const moduleArr: ModuleStat[] = Array.from(moduleMap.entries())
+      .map(([module, values]) => ({
+        module,
+        revenue: values.revenue,
+        orders: values.orders,
+        pct: moduleTotalRevenue > 0 ? (values.revenue / moduleTotalRevenue) * 100 : 0,
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+
     return {
       sections: sectionsArr,
       totalFiltered: filtered.length,
       paymentBreakdown: payArr,
       statusCounts: counts,
+      moduleBreakdown: moduleArr,
+      periodItemsSold: itemsSold,
     };
   }, [sales, period, statusFilter, search, selectedDate, selectedWeekStart, selectedMonthStart]);
+
+  const itemsSoldKpi = periodItemsSold;
 
   const maxChart = Math.max(...chart.map((p) => p.revenue), 1);
 
@@ -732,13 +1107,25 @@ export default function SalesScreen() {
                     <AnimatedNumber
                       value={parseMoney(stat?.revenue)}
                       prefix="$"
+                      maxDecimals={2}
                       style={styles.heroValue}
                     />
                     <View style={styles.heroFoot}>
                       <View style={styles.heroBadge}>
-                        <Ionicons name="trending-up" size={11} color={SUCCESS} />
-                        <Text style={[styles.heroBadgeText, { color: SUCCESS }]}>
-                          +{revenueChange}%
+                        <Ionicons
+                          name={
+                            revenueChange > 0
+                              ? "trending-up"
+                              : revenueChange < 0
+                              ? "trending-down"
+                              : "remove"
+                          }
+                          size={11}
+                          color={revenueChangeTone}
+                        />
+                        <Text style={[styles.heroBadgeText, { color: revenueChangeTone }]}>
+                          {revenueChangeUp ? "+" : ""}
+                          {Math.abs(revenueChange).toFixed(1)}%
                         </Text>
                       </View>
                       <Text style={styles.heroHint}>
@@ -773,6 +1160,12 @@ export default function SalesScreen() {
                 {/* KPI Row — flat, divided by hairlines */}
                 <View style={styles.kpiRow}>
                   <View style={styles.kpiCell}>
+                    <Ionicons name="cube-outline" size={16} color={GOLD} />
+                    <AnimatedNumber value={itemsSoldKpi} style={styles.kpiValue} />
+                    <Text style={styles.kpiLabel}>Items sold</Text>
+                  </View>
+                  <View style={styles.kpiDivider} />
+                  <View style={styles.kpiCell}>
                     <Ionicons name="receipt-outline" size={16} color={WARNING} />
                     <AnimatedNumber value={stat?.orders ?? 0} style={styles.kpiValue} />
                     <Text style={styles.kpiLabel}>Orders</Text>
@@ -788,14 +1181,150 @@ export default function SalesScreen() {
                     />
                     <Text style={styles.kpiLabel}>Avg order</Text>
                   </View>
-                  <View style={styles.kpiDivider} />
-                  <View style={styles.kpiCell}>
-                    <Ionicons name="swap-horizontal-outline" size={16} color={GOLD} />
-                    <AnimatedNumber value={totalFiltered} style={styles.kpiValue} />
-                    <Text style={styles.kpiLabel}>Txns</Text>
-                  </View>
                 </View>
               </>
+            )}
+
+            {/* Statement — itemised storeStatistics breakdown */}
+            {loading ? (
+              <Skeleton height={320} radius={16} />
+            ) : (
+              officialStats && (() => {
+                const f = officialStats.financial;
+                const o = officialStats.operational;
+                const periodHint =
+                  period === "today"
+                    ? formatShortDate(selectedDate).toUpperCase()
+                    : period === "this_week"
+                    ? formatWeekPill(selectedWeekStart).toUpperCase()
+                    : formatMonthPill(selectedMonthStart).toUpperCase();
+                const fmt = (n: number) =>
+                  `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}`;
+                const diningEntries = Object.entries(officialStats.diningMode).sort(
+                  (a, b) => b[1] - a[1]
+                );
+                const paymentEntries = Object.entries(
+                  officialStats.paymentMethod
+                ).sort((a, b) => b[1] - a[1]);
+                return (
+                  <View style={styles.block}>
+                    <SectionLabel
+                      label="Statement"
+                      right={<Text style={styles.sectionHint}>{periodHint}</Text>}
+                    />
+
+                    <Animated.View
+                      style={[
+                        styles.statementCard,
+                        {
+                          opacity: statementAnim,
+                          transform: [
+                            {
+                              translateY: statementAnim.interpolate({
+                                inputRange: [0, 1],
+                                outputRange: [8, 0],
+                              }),
+                            },
+                          ],
+                        },
+                      ]}
+                    >
+                      <StatementRow label="Total Orders" value={String(o.totalOrders)} />
+                      <StatementDivider />
+
+                      <StatementRow
+                        label="Gross Sales"
+                        value={fmt(f.grossSales)}
+                        emphasis
+                      />
+                      <StatementSubRow
+                        label="Item Sales"
+                        value={fmt(f.totalItemSale)}
+                      />
+                      <StatementSubRow
+                        label="Credit Recharge"
+                        value={fmt(f.totalCreditAdded)}
+                      />
+                      <StatementSubRow
+                        label="Member Credit"
+                        value={fmt(-f.totalCreditUsage)}
+                        negative={f.totalCreditUsage > 0}
+                      />
+                      <StatementSubRow
+                        label="Rounding"
+                        value={fmt(f.totalRounding)}
+                      />
+
+                      <StatementDivider />
+                      <StatementRow
+                        label="Discounts"
+                        value={fmt(-f.totalDiscount)}
+                        negative={f.totalDiscount > 0}
+                      />
+                      <StatementDivider />
+                      <StatementRow
+                        label={`Refunds (${o.refundCount})`}
+                        value={fmt(-f.totalRefunds)}
+                        negative={f.totalRefunds > 0}
+                      />
+                      <StatementDivider />
+                      <StatementRow
+                        label="Holiday Surcharge"
+                        value={fmt(f.totalExtraCharge)}
+                      />
+                      <StatementDivider />
+                      <StatementRow
+                        label="Payment Surcharge"
+                        value={fmt(f.totalSurcharge)}
+                      />
+                      {f.totalTax > 0 && (
+                        <>
+                          <StatementDivider />
+                          <StatementRow label="Tax" value={fmt(f.totalTax)} />
+                        </>
+                      )}
+                      <StatementDivider />
+                      <StatementRow
+                        label="Total Revenue"
+                        value={fmt(f.totalRevenue)}
+                        total
+                      />
+
+                      {diningEntries.length > 0 && (
+                        <>
+                          <View style={styles.statementSectionHeader}>
+                            <Text style={styles.statementSectionHeaderText}>
+                              DINING MODE
+                            </Text>
+                          </View>
+                          {diningEntries.map(([name, value], idx) => (
+                            <View key={`d-${name}`}>
+                              {idx > 0 && <StatementDivider />}
+                              <StatementRow label={name} value={fmt(value)} />
+                            </View>
+                          ))}
+                        </>
+                      )}
+
+                      {paymentEntries.length > 0 && (
+                        <>
+                          <View style={styles.statementSectionHeader}>
+                            <Text style={styles.statementSectionHeaderText}>
+                              PAYMENT METHODS
+                            </Text>
+                          </View>
+                          {paymentEntries.map(([name, value], idx) => (
+                            <View key={`p-${name}`}>
+                              {idx > 0 && <StatementDivider />}
+                              <StatementRow label={name} value={fmt(value)} />
+                            </View>
+                          ))}
+                        </>
+                      )}
+                    </Animated.View>
+                  </View>
+                );
+              })()
             )}
 
             {/* Payment breakdown */}
@@ -846,16 +1375,16 @@ export default function SalesScreen() {
             {loading ? (
               <Skeleton height={140} radius={16} />
             ) : (
-              byModule.length > 0 && (
+              moduleBreakdown.length > 0 && (
                 <View style={styles.block}>
                   <SectionLabel label="Revenue by Module" />
                   <View style={styles.moduleList}>
-                    {byModule.map((m, i) => (
+                    {moduleBreakdown.map((m, i) => (
                       <View
                         key={m.module}
                         style={[
                           styles.moduleRow,
-                          i !== byModule.length - 1 && styles.moduleRowDivider,
+                          i !== moduleBreakdown.length - 1 && styles.moduleRowDivider,
                         ]}
                       >
                         <View style={styles.moduleLeft}>
@@ -1333,6 +1862,96 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   sectionHint: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
+
+  // Statement card — itemised storeStatistics breakdown
+  statementCard: {
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  statementRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 12,
+    gap: 12,
+  },
+  statementSubRow: {
+    paddingVertical: 8,
+  },
+  statementDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: CARD_BORDER,
+  },
+  statementLabel: {
+    color: TEXT_DIM,
+    fontSize: 13,
+    fontWeight: "500",
+    flexShrink: 1,
+  },
+  statementLabelEmphasis: {
+    color: TEXT,
+    fontWeight: "600",
+  },
+  statementLabelTotal: {
+    color: TEXT,
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  statementValue: {
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "600",
+    fontVariant: ["tabular-nums"],
+  },
+  statementValueEmphasis: {
+    fontWeight: "700",
+  },
+  statementValueTotal: {
+    fontSize: 16,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+  },
+  statementValueNegative: {
+    color: DANGER,
+  },
+  statementSubLabelWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 1,
+  },
+  statementSubGlyph: {
+    color: TEXT_FAINT,
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  statementSubLabel: {
+    color: TEXT_DIM,
+    fontSize: 12,
+    fontWeight: "500",
+    flexShrink: 1,
+  },
+  statementSubValue: {
+    color: TEXT,
+    fontSize: 12,
+    fontWeight: "600",
+    fontVariant: ["tabular-nums"],
+  },
+  statementSectionHeader: {
+    alignItems: "center",
+    paddingTop: 16,
+    paddingBottom: 4,
+  },
+  statementSectionHeaderText: {
+    color: TEXT_FAINT,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 2,
+  },
 
   // Stacked bar / legend
   stackedBar: {

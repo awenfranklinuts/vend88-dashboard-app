@@ -83,14 +83,55 @@ function redact(value: unknown): unknown {
   return out;
 }
 
-function safeStringify(value: unknown, maxLen = 800): string {
-  try {
-    const s = JSON.stringify(redact(value));
-    if (!s) return String(value);
-    return s.length > maxLen ? `${s.slice(0, maxLen)}…[+${s.length - maxLen}]` : s;
-  } catch {
-    return String(value);
+function summarizePayload(value: unknown): string {
+  if (value === null || value === undefined) return "none";
+  if (typeof value === "string") {
+    return value.length > 120 ? `string(len=${value.length})` : `string(${value})`;
   }
+  if (typeof value !== "object") return String(value);
+  if (Array.isArray(value)) return `array(len=${value.length})`;
+
+  const obj = redact(value) as Record<string, unknown>;
+  const keys = Object.keys(obj);
+  const out: Record<string, unknown> = { keys };
+
+  for (const key of [
+    "shop_id",
+    "business_id",
+    "store_id",
+    "status",
+    "start_date",
+    "end_date",
+    "page",
+    "detail",
+    "ignore_pagination",
+    "status_code",
+  ]) {
+    if (key in obj) out[key] = obj[key];
+  }
+
+  const query = obj.query;
+  if (query && typeof query === "object" && !Array.isArray(query)) {
+    out.query_keys = Object.keys(query as Record<string, unknown>);
+  }
+
+  for (const key of [
+    "orders",
+    "sales_by_item",
+    "sales_by_method",
+    "sales_by_dine_option",
+    "daily_statistics",
+    "hourly_sales",
+  ]) {
+    const v = obj[key];
+    if (Array.isArray(v)) {
+      out[`${key}_count`] = v.length;
+    } else if (v && typeof v === "object") {
+      out[`${key}_count`] = Object.keys(v as Record<string, unknown>).length;
+    }
+  }
+
+  return JSON.stringify(out);
 }
 
 if (API_LOG_ENABLED) {
@@ -102,8 +143,8 @@ if (API_LOG_ENABLED) {
     };
     const method = (config.method ?? "get").toUpperCase();
     const url = `${config.baseURL ?? ""}${config.url ?? ""}`;
-    const body = config.data ? ` body=${safeStringify(config.data)}` : "";
-    const params = config.params ? ` params=${safeStringify(config.params)}` : "";
+    const body = config.data ? ` body=${summarizePayload(config.data)}` : "";
+    const params = config.params ? ` params=${summarizePayload(config.params)}` : "";
     console.log(`[api ▶ ${id}] ${method} ${url}${params}${body}`);
     return config;
   });
@@ -116,7 +157,7 @@ if (API_LOG_ENABLED) {
       const ms = meta ? Date.now() - meta.start : -1;
       const url = `${response.config.baseURL ?? ""}${response.config.url ?? ""}`;
       console.log(
-        `[api ◀ ${id}] ${response.status} ${url} ${ms}ms data=${safeStringify(response.data)}`
+        `[api ◀ ${id}] ${response.status} ${url} ${ms}ms data=${summarizePayload(response.data)}`
       );
       return response;
     },
@@ -131,7 +172,7 @@ if (API_LOG_ENABLED) {
       const data = error?.response?.data;
       console.log(
         `[api ✖ ${id}] ${status} ${url} ${ms}ms message=${error?.message ?? ""}` +
-          (data ? ` data=${safeStringify(data)}` : "")
+          (data ? ` data=${summarizePayload(data)}` : "")
       );
       return Promise.reject(error);
     }
