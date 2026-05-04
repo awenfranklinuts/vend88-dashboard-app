@@ -31,6 +31,8 @@ import {
   LoadingModuleBreakdown,
   LoadingTransactionList,
 } from "../../src/components/ShimmerSkeleton";
+import { TopProgressBar } from "../../src/components/TopProgressBar";
+import { FadingContent } from "../../src/components/FadingContent";
 import { SectionLabel } from "../../src/components/SectionLabel";
 import { haptic } from "../../src/utils/haptics";
 import {
@@ -942,18 +944,18 @@ export default function SalesScreen() {
     [period, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd]
   );
 
-  const fetchAll = useCallback(async () => {
-    const historyResult = await Promise.allSettled([
-      fetchOfficialSalesHistory(
+  const fetchAll = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const history = await fetchOfficialSalesHistory(
         selectedBounds.start,
         selectedBounds.endInclusive,
-        { email, token }
-      ),
-    ]);
+        { email, token },
+        signal
+      );
 
-    const firstResult = historyResult[0];
-    if (firstResult.status === "fulfilled") {
-      const mappedSales: Sale[] = firstResult.value.map((sale) => ({
+      if (signal?.aborted) return;
+
+      const mappedSales: Sale[] = history.map((sale) => ({
         id: sale.id,
         date: sale.date,
         order_id: sale.order_id,
@@ -984,7 +986,8 @@ export default function SalesScreen() {
           revenue: byDay.get(key) ?? 0,
         }))
       );
-    } else {
+    } catch {
+      if (signal?.aborted) return;
       setSales([]);
       setSummary(buildSalesSummary([]));
       setChart([]);
@@ -995,11 +998,18 @@ export default function SalesScreen() {
     if (API_TARGET === "official" && authLoading) {
       return;
     }
+    const controller = new AbortController();
+    let active = true;
     setIsFetching(true);
-    fetchAll().finally(() => {
+    fetchAll(controller.signal).finally(() => {
+      if (!active) return;
       setLoading(false);
       setIsFetching(false);
     });
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [authLoading, fetchAll]);
 
   const onRefresh = async () => {
@@ -1298,6 +1308,7 @@ export default function SalesScreen() {
 
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
+      <TopProgressBar visible={isFetching && !loading} />
       <View style={{ flex: 1 }} {...panResponder.panHandlers}>
       <SectionList
         sections={loading ? [] : sections}
@@ -1556,13 +1567,13 @@ export default function SalesScreen() {
             })()}
 
             {/* Hero revenue — flat, dashboard-style */}
-            {loading || isFetching ? (
+            {loading ? (
               <>
                 <LoadingHero />
                 <LoadingKpiRow />
               </>
             ) : (
-              <>
+              <FadingContent fading={isFetching}>
                 <View style={styles.hero}>
                   <View style={styles.heroLeft}>
                     <View style={styles.heroLabelRow}>
@@ -1654,14 +1665,15 @@ export default function SalesScreen() {
                     <Text style={styles.kpiLabel}>Avg order</Text>
                   </View>
                 </View>
-              </>
+              </FadingContent>
             )}
 
             {/* Statement — itemised storeStatistics breakdown */}
-            {loading || isFetching ? (
+            {loading ? (
               <LoadingStatement />
             ) : (
-              officialStats && (() => {
+              <FadingContent fading={isFetching}>
+                {officialStats && (() => {
                 const f = officialStats.financial;
                 const o = officialStats.operational;
                 const periodHint =
@@ -1799,7 +1811,8 @@ export default function SalesScreen() {
                     </Animated.View>
                   </View>
                 );
-              })()
+              })()}
+              </FadingContent>
             )}
 
             {/* Payment breakdown */}
@@ -1847,47 +1860,49 @@ export default function SalesScreen() {
             )}
 
             {/* Module breakdown */}
-            {loading || isFetching ? (
+            {loading ? (
               <LoadingModuleBreakdown />
             ) : (
-              displayModuleBreakdown.length > 0 && (
-                <View style={styles.block}>
-                  <SectionLabel label="Revenue by Module" />
-                  <View style={styles.moduleList}>
-                    {displayModuleBreakdown.map((m, i) => (
-                      <View
-                        key={m.module}
-                        style={[
-                          styles.moduleRow,
-                          i !== displayModuleBreakdown.length - 1 && styles.moduleRowDivider,
-                        ]}
-                      >
-                        <View style={styles.moduleLeft}>
-                          <View
-                            style={[
-                              styles.moduleDot,
-                              { backgroundColor: MODULE_COLORS[m.module] ?? "#64748b" },
-                            ]}
-                          />
-                          <Text style={styles.moduleName}>{m.module}</Text>
+              <FadingContent fading={isFetching}>
+                {displayModuleBreakdown.length > 0 && (
+                  <View style={styles.block}>
+                    <SectionLabel label="Revenue by Module" />
+                    <View style={styles.moduleList}>
+                      {displayModuleBreakdown.map((m, i) => (
+                        <View
+                          key={m.module}
+                          style={[
+                            styles.moduleRow,
+                            i !== displayModuleBreakdown.length - 1 && styles.moduleRowDivider,
+                          ]}
+                        >
+                          <View style={styles.moduleLeft}>
+                            <View
+                              style={[
+                                styles.moduleDot,
+                                { backgroundColor: MODULE_COLORS[m.module] ?? "#64748b" },
+                              ]}
+                            />
+                            <Text style={styles.moduleName}>{m.module}</Text>
+                          </View>
+                          <View style={styles.barWrap}>
+                            <View
+                              style={[
+                                styles.barFill,
+                                {
+                                  width: `${m.pct}%`,
+                                  backgroundColor: MODULE_COLORS[m.module] ?? "#64748b",
+                                },
+                              ]}
+                            />
+                          </View>
+                          <Text style={styles.moduleRevenue}>{formatCurrency(m.revenue, 0)}</Text>
                         </View>
-                        <View style={styles.barWrap}>
-                          <View
-                            style={[
-                              styles.barFill,
-                              {
-                                width: `${m.pct}%`,
-                                backgroundColor: MODULE_COLORS[m.module] ?? "#64748b",
-                              },
-                            ]}
-                          />
-                        </View>
-                        <Text style={styles.moduleRevenue}>{formatCurrency(m.revenue, 0)}</Text>
-                      </View>
-                    ))}
+                      ))}
+                    </View>
                   </View>
-                </View>
-              )
+                )}
+              </FadingContent>
             )}
 
             {/* Search — focus-aware pill */}
@@ -2067,7 +2082,7 @@ export default function SalesScreen() {
         ItemSeparatorComponent={null}
         SectionSeparatorComponent={() => <View style={{ height: 4 }} />}
         ListEmptyComponent={
-          loading || isFetching ? (
+          loading ? (
             <LoadingTransactionList />
           ) : (
             <View style={styles.emptyCard}>

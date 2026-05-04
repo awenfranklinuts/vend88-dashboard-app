@@ -1598,7 +1598,8 @@ export async function fetchOfficialWeeklyRevenueChart(
 export async function fetchOfficialSalesHistory(
   start: Date,
   end: Date,
-  auth?: AuthOverride
+  auth?: AuthOverride,
+  signal?: AbortSignal
 ): Promise<OfficialSaleRecord[]> {
   const { token, businessId, shopId } = await resolveOfficialShopContext(auth);
 
@@ -1609,7 +1610,7 @@ export async function fetchOfficialSalesHistory(
   const requestOrders = async (query: Record<string, unknown>) => {
     const MAX_PAGES_HARD = 80;
     const PAGE_SIZE_GUESS = 10;
-    const PAGE_CONCURRENCY = 6;
+    const PAGE_CONCURRENCY = 3;
 
     const dedupeRows = (rows: Array<OrderSearchItem | string>) => {
       const seen = new Set<string>();
@@ -1641,7 +1642,8 @@ export async function fetchOfficialSalesHistory(
 
       const response = await api.post<OrderSearchResponse>(
         "/search/order_search",
-        payload
+        payload,
+        { signal }
       );
       const rows = Array.isArray(response.data?.orders) ? response.data.orders : [];
       const rawMax = response.data?.max_page;
@@ -1652,35 +1654,18 @@ export async function fetchOfficialSalesHistory(
       return { rows, maxPage };
     };
 
-    // Fast path: if ignore_pagination actually returns the full set, use it.
-    let bulkRows: Array<OrderSearchItem | string> = [];
-    let bulkMaxPage: number | null = null;
-    try {
-      const bulk = await fetchPage(0, true);
-      bulkRows = bulk.rows;
-      bulkMaxPage = bulk.maxPage;
-      if (
-        bulkRows.length > 0 &&
-        (!bulkMaxPage || bulkMaxPage <= 1 || bulkRows.length > PAGE_SIZE_GUESS)
-      ) {
-        return dedupeRows(bulkRows);
-      }
-    } catch {
-      // Fall through to paginated mode.
-    }
-
     let firstPage: { rows: Array<OrderSearchItem | string>; maxPage: number | null };
     try {
       firstPage = await fetchPage(0, false);
     } catch {
-      return dedupeRows(bulkRows);
+      return [];
     }
 
     if (firstPage.rows.length === 0) {
-      return dedupeRows(bulkRows);
+      return [];
     }
 
-    const declaredMax = firstPage.maxPage ?? bulkMaxPage;
+    const declaredMax = firstPage.maxPage;
     const declaredPages = declaredMax != null ? declaredMax + 1 : null;
     const totalPages = Math.max(
       1,
@@ -1712,18 +1697,15 @@ export async function fetchOfficialSalesHistory(
       }
     }
 
-    const bestSource = pageRows.length >= bulkRows.length ? pageRows : bulkRows;
-    return dedupeRows(bestSource);
+    return dedupeRows(pageRows);
   };
 
   let rawOrders: Array<OrderSearchItem | string> = [];
   const scopedQueries = buildScopedQueries(baseQuery, businessId, shopId);
-  for (const query of scopedQueries) {
+  const queries = scopedQueries.length > 0 ? scopedQueries : [baseQuery];
+  for (const query of queries) {
     rawOrders = await requestOrders(query);
     if (rawOrders.length > 0) break;
-  }
-  if (rawOrders.length === 0) {
-    rawOrders = await requestOrders(baseQuery);
   }
 
   const detailedOrders = rawOrders.filter(
@@ -1738,7 +1720,9 @@ export async function fetchOfficialSalesHistory(
   if (orderIds.length > 0) {
     const byIdResults = await Promise.allSettled(
       orderIds.map(async (id) => {
-        const response = await api.get<OrderByIdResponse>(`/order/${id}`);
+        const response = await api.get<OrderByIdResponse>(`/order/${id}`, {
+          signal,
+        });
         if (response.data?.status_code === 200 && response.data.data) {
           return response.data.data;
         }
