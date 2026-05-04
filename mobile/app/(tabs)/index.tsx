@@ -23,7 +23,6 @@ import {
   fetchOfficialMonthRevenueData,
   fetchOfficialRecentOrders,
   fetchOfficialTopSellingItems,
-  fetchOfficialDiningOptions,
   fetchOfficialPosBreakdown,
 } from "../../src/services/officialDashboard";
 import { AnimatedNumber } from "../../src/components/AnimatedNumber";
@@ -359,10 +358,9 @@ export default function DashboardScreen() {
       return;
     }
 
-    const [s, o, p] = await Promise.allSettled([
+    const [s, o] = await Promise.allSettled([
       api.get<Summary>("/dashboard/summary"),
       api.get<RecentOrder[]>("/dashboard/recent-orders"),
-      api.get<TopProduct[]>("/dashboard/top-products"),
     ]);
 
     if (s.status === "fulfilled") {
@@ -376,7 +374,6 @@ export default function DashboardScreen() {
     if (o.status === "fulfilled") {
       setOrders(o.value.data);
     }
-    if (p.status === "fulfilled") setTopProducts(p.value.data);
     setModules([]);
     setStores([]);
   };
@@ -486,18 +483,34 @@ export default function DashboardScreen() {
   // background. The 60s TTL on the order cache keeps this cheap.
   useEffect(() => {
     if (!chartOpen) return;
+    let cancelled = false;
+
+    const refreshTodayChart = async () => {
+      if (API_TARGET !== "official") return;
+      if (heroPeriod !== "today") return;
+      if (authLoading || !email || !token) return;
+      try {
+        const series = await fetchOfficialHeroRevenuePeriod("today", {
+          email,
+          token,
+        });
+        if (!cancelled) {
+          setTodayChart(series);
+        }
+      } catch {
+        // Ignore transient background refresh failures.
+      }
+    };
+
     const id = setInterval(() => {
       setNowTick((t) => t + 1);
-      if (API_TARGET === "official" && heroPeriod === "today") {
-        // Re-fetch today only — fetchAll covers more than we need but is
-        // already memoised at the network layer and incremental at the
-        // detail-fetch layer, so the marginal cost is small.
-        fetchAll();
-      }
+      void refreshTodayChart();
     }, 60_000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartOpen, heroPeriod]);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [authLoading, chartOpen, email, heroPeriod, token]);
 
   const closeChartModal = () => {
     Animated.timing(modalAnim, {
@@ -799,7 +812,8 @@ export default function DashboardScreen() {
     }
     if (heroPeriod === "week") {
       const start = new Date(now);
-      start.setDate(start.getDate() - 6);
+      const dow = start.getDay() || 7; // Mon=1 ... Sun=7
+      start.setDate(start.getDate() - (dow - 1));
       return `${formatShortDate(start, locale)} - ${formatShortDate(now, locale)}`;
     }
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -872,6 +886,9 @@ export default function DashboardScreen() {
       const bucket = Math.min(4, Math.floor(((day - 1) * 4) / daysInMonth) + 1);
       return `W${bucket}`;
     }
+    if (heroPeriod === "week") {
+      return new Date().toLocaleDateString(locale, { weekday: "short" });
+    }
     if (heroPeriod !== "today") return currentTodayBucketLabel;
     const h = new Date().getHours();
     const slot = Math.floor(h / 3) * 3;
@@ -897,9 +914,10 @@ export default function DashboardScreen() {
       : heroPeriod === "week"
       ? Math.round(totalOrders / 4.3)
       : todayDerivedOrders;
-  // Derive period avg from period sales / period orders; fall back to month avg.
+  // Derive period avg from period sales / period orders.
+  // If there are no orders in the selected period, avg order should be zero.
   const avgOrder =
-    periodOrders > 0 ? currentHero.value / periodOrders : monthAvg;
+    periodOrders > 0 ? currentHero.value / periodOrders : 0;
   // Items per order: parse leading qty from recent orders' "item" strings ("3 items · dine-in").
   const itemsPerOrderSamples = orders
     .map((o) => {
@@ -1867,7 +1885,7 @@ export default function DashboardScreen() {
                         currentLabel={
                           heroPeriod === "today"
                             ? currentTodayBucketLabel
-                            : displayChart[displayChart.length - 1]?.day
+                            : currentHeroBucketLabel
                         }
                         selectedIndex={selectedBar}
                         onSelectIndex={setSelectedBar}

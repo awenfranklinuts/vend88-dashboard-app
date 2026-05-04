@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Easing,
+  Modal,
   PanResponder,
   Pressable,
   RefreshControl,
@@ -17,12 +18,19 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../src/context/AuthContext";
 import { API_TARGET } from "../../src/services/api";
 import {
+  fetchOfficialBusinessItemsSoldRange,
   fetchOfficialSalesHistory,
   fetchOfficialStoreStatisticsRange,
   type OfficialStoreStatisticsRange,
 } from "../../src/services/officialDashboard";
 import { AnimatedNumber } from "../../src/components/AnimatedNumber";
-import { Skeleton } from "../../src/components/Skeleton";
+import {
+  LoadingHero,
+  LoadingKpiRow,
+  LoadingStatement,
+  LoadingModuleBreakdown,
+  LoadingTransactionList,
+} from "../../src/components/ShimmerSkeleton";
 import { SectionLabel } from "../../src/components/SectionLabel";
 import { haptic } from "../../src/utils/haptics";
 import {
@@ -88,12 +96,40 @@ const PAYMENT_COLORS: Record<string, string> = {
   Mobile: "#06b6d4",
 };
 
-const PERIODS = ["today", "this_week", "this_month"] as const;
+// Normalise raw payment-method keys returned by the storeStatistics breakdown
+// (e.g. "cash", "card", "eftpos") into the same display labels used elsewhere
+// in the app, so colours and existing rows continue to align.
+function mapPaymentLabel(raw: string): string {
+  const key = (raw ?? "").toLowerCase();
+  if (key === "cash") return "Cash";
+  if (key === "card" || key === "eftpos") return "Card";
+  if (key === "qr") return "QR";
+  if (key === "wallet") return "Wallet";
+  if (key === "mobile") return "Mobile";
+  if (!raw) return "Other";
+  // Title-case unknowns so the legend reads cleanly.
+  return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+}
+
+// Same idea for channel/module keys (pos, kiosk, vending, kds, loyalty…).
+function mapModuleLabel(raw: string): string {
+  const key = (raw ?? "").toLowerCase();
+  if (key === "pos" || key === "table") return "POS";
+  if (key === "kiosk") return "Kiosk";
+  if (key === "vending") return "Vending";
+  if (key === "kds") return "KDS";
+  if (key === "loyalty") return "Loyalty";
+  if (!raw) return "Other";
+  return raw.toUpperCase();
+}
+
+const PERIODS = ["today", "this_week", "this_month", "custom"] as const;
 type Period = (typeof PERIODS)[number];
 const PERIOD_LABELS: Record<Period, string> = {
   today: "Today",
   this_week: "Week",
   this_month: "Month",
+  custom: "Custom",
 };
 
 const STATUS_FILTERS = ["all", "completed", "pending"] as const;
@@ -112,15 +148,36 @@ function parseMoney(v: string | number | undefined): number {
   return Number(String(v).replace(/[^0-9.-]/g, "")) || 0;
 }
 
+function formatCurrency(n: number, fractionDigits = 2): string {
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  const value = abs.toLocaleString(undefined, {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  });
+  return `${sign}$${value}`;
+}
+
 function parseDate(s: string): Date {
-  // Accept ISO or "YYYY-MM-DD HH:mm"
-  const normalized = s.includes("T") ? s : s.replace(" ", "T");
+  // Accept ISO plus API forms like "YYYY-MM-DD HH:mm:ss +1000".
+  const raw = String(s ?? "").trim();
+  const normalized = raw.includes("T")
+    ? raw.replace(" +", "+").replace(" -", "-")
+    : raw.replace(" ", "T").replace(" +", "+").replace(" -", "-");
   const d = new Date(normalized);
-  return isNaN(d.getTime()) ? new Date() : d;
+  if (!isNaN(d.getTime())) return d;
+
+  // Avoid falling back to "now" for unparseable values, which would push
+  // historical records into today/week/month incorrectly.
+  const fallback = new Date(raw);
+  return isNaN(fallback.getTime()) ? new Date(0) : fallback;
 }
 
 function dayKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function relativeDayLabel(d: Date): string {
@@ -225,12 +282,20 @@ function isInPeriod(
   period: Period,
   selectedDate: Date,
   selWeekStart: Date,
-  selMonthStart: Date
+  selMonthStart: Date,
+  customStart?: Date | null,
+  customEnd?: Date | null
 ): boolean {
   if (period === "today") return dayKey(d) === dayKey(selectedDate);
   if (period === "this_week") {
     const end = addDays(selWeekStart, 7); // exclusive
     return d >= selWeekStart && d < end;
+  }
+  if (period === "custom") {
+    if (!customStart || !customEnd) return false;
+    const start = startOfDay(customStart);
+    const endExclusive = addDays(startOfDay(customEnd), 1);
+    return d >= start && d < endExclusive;
   }
   // this_month
   return (
@@ -274,8 +339,24 @@ function getSelectedPeriodBounds(
   selectedDate: Date,
   selectedWeekStart: Date,
   selectedMonthStart: Date,
+  customStart?: Date | null,
+  customEnd?: Date | null,
   now = new Date()
 ): { start: Date; endInclusive: Date; endExclusive: Date } {
+  if (period === "custom" && customStart && customEnd) {
+    const start = startOfDay(customStart);
+    const endDay = startOfDay(customEnd);
+    const todayStart = startOfDay(now);
+    const isCurrent = dayKey(endDay) === dayKey(todayStart);
+    const endInclusive = isCurrent
+      ? new Date(now)
+      : new Date(endDay.getFullYear(), endDay.getMonth(), endDay.getDate(), 23, 59, 59, 0);
+    return {
+      start,
+      endInclusive,
+      endExclusive: addDays(endDay, 1),
+    };
+  }
   if (period === "today") {
     const start = startOfDay(selectedDate);
     const isCurrent = dayKey(start) === dayKey(startOfDay(now));
@@ -414,6 +495,264 @@ function StatementDivider() {
   return <View style={styles.statementDivider} />;
 }
 
+// ─── Date range picker modal ─────────────────────────────────────────────────
+
+const WEEKDAY_LABELS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+
+function buildMonthRows(viewMonth: Date): (Date | null)[][] {
+  const firstOfMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
+  const daysInMonth = new Date(
+    viewMonth.getFullYear(),
+    viewMonth.getMonth() + 1,
+    0
+  ).getDate();
+  // Monday-first index (0..6)
+  const leading = (firstOfMonth.getDay() + 6) % 7;
+  const cells: (Date | null)[] = [];
+  for (let i = 0; i < leading; i++) cells.push(null);
+  for (let day = 1; day <= daysInMonth; day++) {
+    cells.push(new Date(viewMonth.getFullYear(), viewMonth.getMonth(), day));
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+  const rows: (Date | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    rows.push(cells.slice(i, i + 7));
+  }
+  return rows;
+}
+
+function DateRangePickerModal({
+  visible,
+  initialStart,
+  initialEnd,
+  maxDate,
+  onClose,
+  onApply,
+}: {
+  visible: boolean;
+  initialStart: Date | null;
+  initialEnd: Date | null;
+  maxDate: Date;
+  onClose: () => void;
+  onApply: (start: Date, end: Date) => void;
+}) {
+  const [viewMonth, setViewMonth] = useState<Date>(() =>
+    monthStart(initialStart ?? maxDate)
+  );
+  const [pendingStart, setPendingStart] = useState<Date | null>(initialStart);
+  const [pendingEnd, setPendingEnd] = useState<Date | null>(initialEnd);
+
+  // Reset state each time the modal opens
+  useEffect(() => {
+    if (visible) {
+      setPendingStart(initialStart);
+      setPendingEnd(initialEnd);
+      setViewMonth(monthStart(initialStart ?? maxDate));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  const rows = useMemo(() => buildMonthRows(viewMonth), [viewMonth]);
+  const monthLabel = viewMonth.toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric",
+  });
+
+  const canGoNextMonth =
+    viewMonth.getFullYear() < maxDate.getFullYear() ||
+    (viewMonth.getFullYear() === maxDate.getFullYear() &&
+      viewMonth.getMonth() < maxDate.getMonth());
+
+  const handleDayPress = (d: Date) => {
+    haptic.selection();
+    if (!pendingStart || (pendingStart && pendingEnd)) {
+      // start a new range
+      setPendingStart(d);
+      setPendingEnd(null);
+      return;
+    }
+    // pendingStart set, pendingEnd not yet
+    if (d < pendingStart) {
+      setPendingStart(d);
+      return;
+    }
+    setPendingEnd(d);
+  };
+
+  const isSameDay = (a: Date | null, b: Date | null) =>
+    !!a && !!b && dayKey(a) === dayKey(b);
+
+  const inRange = (d: Date) =>
+    pendingStart && pendingEnd && d > pendingStart && d < pendingEnd;
+
+  const canApply = !!(pendingStart && pendingEnd);
+  const rangeSummary =
+    pendingStart && pendingEnd
+      ? `${formatShortDate(pendingStart)} – ${formatShortDate(pendingEnd)}`
+      : pendingStart
+      ? `${formatShortDate(pendingStart)} – select end`
+      : "Select start date";
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <Pressable style={styles.pickerBackdrop} onPress={onClose}>
+        <Pressable style={styles.pickerCard} onPress={() => {}}>
+          <View style={styles.pickerHeader}>
+            <Text style={styles.pickerTitle}>Custom range</Text>
+            <Pressable
+              accessibilityLabel="Close"
+              onPress={onClose}
+              hitSlop={8}
+              style={({ pressed }) => [styles.pickerCloseBtn, pressed && styles.pressed]}
+            >
+              <Ionicons name="close" size={18} color={TEXT} />
+            </Pressable>
+          </View>
+
+          <Text style={styles.pickerSummary}>{rangeSummary}</Text>
+
+          <View style={styles.pickerMonthBar}>
+            <Pressable
+              accessibilityLabel="Previous month"
+              onPress={() => {
+                haptic.selection();
+                setViewMonth((m) => {
+                  const x = new Date(m);
+                  x.setMonth(x.getMonth() - 1);
+                  return x;
+                });
+              }}
+              style={({ pressed }) => [styles.pagerArrow, pressed && styles.pressed]}
+              hitSlop={6}
+            >
+              <Ionicons name="chevron-back" size={18} color={TEXT} />
+            </Pressable>
+            <Text style={styles.pickerMonthLabel}>{monthLabel}</Text>
+            <Pressable
+              accessibilityLabel="Next month"
+              disabled={!canGoNextMonth}
+              onPress={() => {
+                if (!canGoNextMonth) {
+                  haptic.warning();
+                  return;
+                }
+                haptic.selection();
+                setViewMonth((m) => {
+                  const x = new Date(m);
+                  x.setMonth(x.getMonth() + 1);
+                  return x;
+                });
+              }}
+              style={({ pressed }) => [
+                styles.pagerArrow,
+                !canGoNextMonth && styles.pagerArrowDisabled,
+                pressed && canGoNextMonth && styles.pressed,
+              ]}
+              hitSlop={6}
+            >
+              <Ionicons
+                name="chevron-forward"
+                size={18}
+                color={canGoNextMonth ? TEXT : TEXT_FAINT}
+              />
+            </Pressable>
+          </View>
+
+          <View style={styles.pickerWeekHeader}>
+            {WEEKDAY_LABELS.map((w) => (
+              <Text key={w} style={styles.pickerWeekday}>
+                {w}
+              </Text>
+            ))}
+          </View>
+
+          <View style={styles.pickerGrid}>
+            {rows.map((row, ri) => (
+              <View key={`r-${ri}`} style={styles.pickerRow}>
+                {row.map((d, ci) => {
+                  if (!d) {
+                    return <View key={`e-${ri}-${ci}`} style={styles.pickerCell} />;
+                  }
+                  const disabled = d > maxDate;
+                  const isStart = isSameDay(d, pendingStart);
+                  const isEnd = isSameDay(d, pendingEnd);
+                  const between = inRange(d);
+                  const isRangeEdgeStart = isStart && !!pendingEnd;
+                  const isRangeEdgeEnd = isEnd && !!pendingStart;
+                  return (
+                    <View key={dayKey(d)} style={styles.pickerCell}>
+                      {between && <View style={styles.pickerCellRangeBg} />}
+                      {isRangeEdgeStart && <View style={styles.pickerCellRangeBgRight} />}
+                      {isRangeEdgeEnd && <View style={styles.pickerCellRangeBgLeft} />}
+                      <Pressable
+                        disabled={disabled}
+                        onPress={() => handleDayPress(d)}
+                        style={({ pressed }) => [
+                          styles.pickerDay,
+                          (isStart || isEnd) && styles.pickerDayActive,
+                          disabled && styles.pickerDayDisabled,
+                          pressed && !disabled && !isStart && !isEnd && styles.pickerDayPressed,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.pickerDayText,
+                            (isStart || isEnd) && styles.pickerDayTextActive,
+                            disabled && styles.pickerDayTextDisabled,
+                          ]}
+                        >
+                          {d.getDate()}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.pickerActions}>
+            <Pressable
+              accessibilityLabel="Clear range"
+              onPress={() => {
+                haptic.selection();
+                setPendingStart(null);
+                setPendingEnd(null);
+              }}
+              style={({ pressed }) => [styles.pickerSecondaryBtn, pressed && styles.pressed]}
+            >
+              <Text style={styles.pickerSecondaryBtnText}>Clear</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Apply range"
+              disabled={!canApply}
+              onPress={() => {
+                if (!canApply || !pendingStart || !pendingEnd) {
+                  haptic.warning();
+                  return;
+                }
+                onApply(pendingStart, pendingEnd);
+              }}
+              style={({ pressed }) => [
+                styles.pickerPrimaryBtn,
+                !canApply && styles.pickerPrimaryBtnDisabled,
+                pressed && canApply && styles.pressed,
+              ]}
+            >
+              <Text style={styles.pickerPrimaryBtnText}>Apply</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function SalesScreen() {
@@ -423,8 +762,10 @@ export default function SalesScreen() {
   const [chart, setChart] = useState<{ day: string; revenue: number }[]>([]);
   const [officialPeriodStat, setOfficialPeriodStat] = useState<PeriodSummary | null>(null);
   const [officialStats, setOfficialStats] = useState<OfficialStoreStatisticsRange | null>(null);
+  const [officialItemsSold, setOfficialItemsSold] = useState<number | null>(null);
   const [revenueChangePct, setRevenueChangePct] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isFetching, setIsFetching] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState<Period>("this_week");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -433,6 +774,9 @@ export default function SalesScreen() {
   const [selectedDate, setSelectedDate] = useState<Date>(() => startOfDay(new Date()));
   const [selectedWeekStart, setSelectedWeekStart] = useState<Date>(() => weekStart(new Date()));
   const [selectedMonthStart, setSelectedMonthStart] = useState<Date>(() => monthStart(new Date()));
+  const [customStart, setCustomStart] = useState<Date | null>(null);
+  const [customEnd, setCustomEnd] = useState<Date | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const today = useMemo(() => startOfDay(new Date()), []);
   const isSelectedToday = dayKey(selectedDate) === dayKey(today);
@@ -521,6 +865,10 @@ export default function SalesScreen() {
         const p = periodRef.current;
         const today = todayRef.current;
 
+        if (p === "custom") {
+          // Custom range is set via the picker; ignore swipe nav.
+          return;
+        }
         if (p === "today") {
           if (direction === -1) {
             haptic.selection();
@@ -587,9 +935,11 @@ export default function SalesScreen() {
         period,
         selectedDate,
         selectedWeekStart,
-        selectedMonthStart
+        selectedMonthStart,
+        customStart,
+        customEnd
       ),
-    [period, selectedDate, selectedWeekStart, selectedMonthStart]
+    [period, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd]
   );
 
   const fetchAll = useCallback(async () => {
@@ -645,21 +995,31 @@ export default function SalesScreen() {
     if (API_TARGET === "official" && authLoading) {
       return;
     }
-    fetchAll().finally(() => setLoading(false));
+    setIsFetching(true);
+    fetchAll().finally(() => {
+      setLoading(false);
+      setIsFetching(false);
+    });
   }, [authLoading, fetchAll]);
 
   const onRefresh = async () => {
     haptic.light();
     setRefreshing(true);
-    await fetchAll();
-    haptic.success();
-    setRefreshing(false);
+    setIsFetching(true);
+    try {
+      await fetchAll();
+      haptic.success();
+    } finally {
+      setRefreshing(false);
+      setIsFetching(false);
+    }
   };
 
   useEffect(() => {
     if (API_TARGET !== "official") {
       setOfficialPeriodStat(null);
       setOfficialStats(null);
+      setOfficialItemsSold(null);
       setRevenueChangePct(null);
       return;
     }
@@ -671,7 +1031,7 @@ export default function SalesScreen() {
     (async () => {
       try {
         const previousBounds = getPreviousComparisonBounds(selectedBounds);
-        const [stats, previousStats] = await Promise.all([
+        const [stats, previousStats, itemsSold] = await Promise.all([
           fetchOfficialStoreStatisticsRange(
             selectedBounds.start,
             selectedBounds.endInclusive,
@@ -680,6 +1040,11 @@ export default function SalesScreen() {
           fetchOfficialStoreStatisticsRange(
             previousBounds.start,
             previousBounds.endInclusive,
+            { email, token }
+          ),
+          fetchOfficialBusinessItemsSoldRange(
+            selectedBounds.start,
+            selectedBounds.endInclusive,
             { email, token }
           ),
         ]);
@@ -696,6 +1061,7 @@ export default function SalesScreen() {
           avg: avg.toFixed(2),
         });
         setOfficialStats(stats);
+        setOfficialItemsSold(itemsSold);
         setRevenueChangePct(
           calcRevenueChangePct(stats.revenue, previousStats.revenue)
         );
@@ -704,6 +1070,7 @@ export default function SalesScreen() {
         if (!cancelled) {
           setOfficialPeriodStat(null);
           setOfficialStats(null);
+          setOfficialItemsSold(null);
           setRevenueChangePct(null);
         }
       }
@@ -754,7 +1121,7 @@ export default function SalesScreen() {
   const stat =
     API_TARGET === "official"
       ? officialPeriodStat ?? fallbackStat
-      : summary
+      : summary && period !== "custom"
       ? summary[period]
       : fallbackStat;
   const revenueChange =
@@ -769,7 +1136,7 @@ export default function SalesScreen() {
     const q = search.trim().toLowerCase();
     const filtered = sales.filter((s) => {
       const d = parseDate(s.date);
-      if (!isInPeriod(d, period, selectedDate, selectedWeekStart, selectedMonthStart)) return false;
+      if (!isInPeriod(d, period, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd)) return false;
       if (statusFilter !== "all") {
         const wantCompleted = statusFilter === "completed";
         const isCompleted = s.status === "completed";
@@ -786,13 +1153,13 @@ export default function SalesScreen() {
     // Full period set for KPI totals (matches dashboard behavior, independent of local filters)
     const periodOnly = sales.filter((s) => {
       const d = parseDate(s.date);
-      return isInPeriod(d, period, selectedDate, selectedWeekStart, selectedMonthStart);
+      return isInPeriod(d, period, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd);
     });
 
     // Status counts (within current period + search, before status filter)
     const periodMatched = sales.filter((s) => {
       const d = parseDate(s.date);
-      if (!isInPeriod(d, period, selectedDate, selectedWeekStart, selectedMonthStart)) return false;
+      if (!isInPeriod(d, period, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd)) return false;
       if (q) {
         const hay = `${s.order_id} ${s.module} ${s.payment}`.toLowerCase();
         if (!hay.includes(q)) return false;
@@ -870,11 +1237,64 @@ export default function SalesScreen() {
       moduleBreakdown: moduleArr,
       periodItemsSold: itemsSold,
     };
-  }, [sales, period, statusFilter, search, selectedDate, selectedWeekStart, selectedMonthStart]);
+  }, [sales, period, statusFilter, search, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd]);
 
-  const itemsSoldKpi = periodItemsSold;
+  const itemsSoldKpi =
+    API_TARGET === "official" ? officialItemsSold ?? periodItemsSold : periodItemsSold;
 
-  const maxChart = Math.max(...chart.map((p) => p.revenue), 1);
+  // For the official API, the per-period storeStatistics breakdown is the
+  // authoritative source for payment-mix and module (channel) revenue and is
+  // available across all periods (today / week / month). The sales-history
+  // derived fallbacks above only populate when /search/order_search returns
+  // rows for the period, which can be empty for today/month even when the
+  // statistics endpoint has data — so prefer the stats-derived breakdowns.
+  const displayPaymentBreakdown = useMemo(() => {
+    if (API_TARGET === "official" && officialStats) {
+      // Merge raw keys that normalise to the same display label (e.g. "card"
+      // and "eftpos" both map to "Card") so the legend doesn't render two
+      // entries — and React doesn't see duplicate keys.
+      const merged = new Map<string, number>();
+      for (const [rawName, value] of Object.entries(officialStats.paymentMethod)) {
+        if (!(value > 0)) continue;
+        const label = mapPaymentLabel(rawName);
+        merged.set(label, (merged.get(label) ?? 0) + value);
+      }
+      const total = Array.from(merged.values()).reduce((s, v) => s + v, 0) || 1;
+      return Array.from(merged.entries())
+        .map(([name, value]) => ({
+          name,
+          value,
+          pct: (value / total) * 100,
+        }))
+        .sort((a, b) => b.value - a.value);
+    }
+    return paymentBreakdown;
+  }, [officialStats, paymentBreakdown]);
+
+  const displayModuleBreakdown = useMemo<ModuleStat[]>(() => {
+    if (API_TARGET === "official" && officialStats) {
+      // Same dedupe as above — multiple raw channels (e.g. "pos", "table")
+      // collapse to one display module ("POS").
+      const merged = new Map<string, number>();
+      for (const [rawName, value] of Object.entries(officialStats.channel)) {
+        if (!(value > 0)) continue;
+        const label = mapModuleLabel(rawName);
+        merged.set(label, (merged.get(label) ?? 0) + value);
+      }
+      if (merged.size > 0) {
+        const total = Array.from(merged.values()).reduce((s, v) => s + v, 0) || 1;
+        return Array.from(merged.entries())
+          .map(([module, value]) => ({
+            module,
+            revenue: value,
+            orders: 0,
+            pct: (value / total) * 100,
+          }))
+          .sort((a, b) => b.revenue - a.revenue);
+      }
+    }
+    return moduleBreakdown;
+  }, [officialStats, moduleBreakdown]);
 
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
@@ -921,13 +1341,25 @@ export default function SalesScreen() {
                   <Pressable
                     key={p}
                     accessibilityLabel={`Show ${PERIOD_LABELS[p]} data`}
+                    disabled={isFetching}
                     onPress={() => {
                       haptic.selection();
-                      setPeriod(p);
+                      if (p === "custom") {
+                        setPeriod("custom");
+                        setPickerOpen(true);
+                      } else {
+                        setPeriod(p);
+                      }
                     }}
                     style={styles.periodTab}
                   >
-                    <Text style={[styles.periodTabText, active && styles.periodTabTextActive]}>
+                    <Text
+                      style={[
+                        styles.periodTabText,
+                        active && styles.periodTabTextActive,
+                        isFetching && styles.periodTabTextDisabled,
+                      ]}
+                    >
                       {PERIOD_LABELS[p]}
                     </Text>
                     <View
@@ -943,6 +1375,57 @@ export default function SalesScreen() {
 
             {/* Date pager — [<] label [>]  +  Today reset */}
             {(() => {
+              if (period === "custom") {
+                const hasRange = !!(customStart && customEnd);
+                const rangeLabel = hasRange
+                  ? `${formatShortDate(customStart!)} – ${formatShortDate(customEnd!)}`
+                  : "Select date range";
+                return (
+                  <View style={styles.datePager}>
+                    <Pressable
+                      accessibilityLabel="Edit date range"
+                      onPress={() => {
+                        haptic.selection();
+                        setPickerOpen(true);
+                      }}
+                      style={({ pressed }) => [styles.pagerArrow, pressed && styles.pressed]}
+                      hitSlop={8}
+                    >
+                      <Ionicons name="calendar-outline" size={16} color={TEXT} />
+                    </Pressable>
+
+                    <View style={styles.pagerCenter}>
+                      <Text style={styles.pagerLabel} numberOfLines={1}>
+                        {rangeLabel}
+                      </Text>
+                      <Pressable
+                        accessibilityLabel="Change date range"
+                        onPress={() => {
+                          haptic.selection();
+                          setPickerOpen(true);
+                        }}
+                        hitSlop={6}
+                      >
+                        <Text style={styles.pagerJump}>
+                          {hasRange ? "Change range" : "Tap to choose"}
+                        </Text>
+                      </Pressable>
+                    </View>
+
+                    <Pressable
+                      accessibilityLabel="Edit date range"
+                      onPress={() => {
+                        haptic.selection();
+                        setPickerOpen(true);
+                      }}
+                      style={({ pressed }) => [styles.pagerArrow, pressed && styles.pressed]}
+                      hitSlop={8}
+                    >
+                      <Ionicons name="create-outline" size={16} color={TEXT} />
+                    </Pressable>
+                  </View>
+                );
+              }
               const isCurrent =
                 period === "today"
                   ? isSelectedToday
@@ -1073,15 +1556,22 @@ export default function SalesScreen() {
             })()}
 
             {/* Hero revenue — flat, dashboard-style */}
-            {loading ? (
-              <Skeleton height={110} radius={22} />
+            {loading || isFetching ? (
+              <>
+                <LoadingHero />
+                <LoadingKpiRow />
+              </>
             ) : (
               <>
                 <View style={styles.hero}>
                   <View style={styles.heroLeft}>
                     <View style={styles.heroLabelRow}>
                       <Text style={styles.heroLabel}>
-                        {period === "today" && !isSelectedToday
+                        {period === "custom"
+                          ? customStart && customEnd
+                            ? `${formatShortDate(customStart).toUpperCase()} – ${formatShortDate(customEnd).toUpperCase()} · REVENUE`
+                            : "CUSTOM RANGE · REVENUE"
+                          : period === "today" && !isSelectedToday
                           ? `${formatShortDate(selectedDate).toUpperCase()} · REVENUE`
                           : period === "this_week" &&
                             dayKey(selectedWeekStart) !== dayKey(thisWeekStart)
@@ -1101,6 +1591,9 @@ export default function SalesScreen() {
                         />
                         <View
                           style={[styles.heroDot, period === "this_month" && styles.heroDotActive]}
+                        />
+                        <View
+                          style={[styles.heroDot, period === "custom" && styles.heroDotActive]}
                         />
                       </View>
                     </View>
@@ -1134,27 +1627,6 @@ export default function SalesScreen() {
                     </View>
                   </View>
 
-                  {/* Mini spark bars */}
-                  {chart.length > 0 && (
-                    <View style={styles.spark}>
-                      {chart.slice(-7).map((p, i) => {
-                        const slice = chart.slice(-7);
-                        const heightPct = Math.max(p.revenue / maxChart, 0.08);
-                        const isLast = i === slice.length - 1;
-                        return (
-                          <View key={`${p.day}-${i}`} style={styles.sparkCol}>
-                            <View
-                              style={[
-                                styles.sparkBar,
-                                { height: `${Math.round(heightPct * 100)}%` },
-                                isLast && styles.sparkBarActive,
-                              ]}
-                            />
-                          </View>
-                        );
-                      })}
-                    </View>
-                  )}
                 </View>
 
                 {/* KPI Row — flat, divided by hairlines */}
@@ -1186,8 +1658,8 @@ export default function SalesScreen() {
             )}
 
             {/* Statement — itemised storeStatistics breakdown */}
-            {loading ? (
-              <Skeleton height={320} radius={16} />
+            {loading || isFetching ? (
+              <LoadingStatement />
             ) : (
               officialStats && (() => {
                 const f = officialStats.financial;
@@ -1197,9 +1669,12 @@ export default function SalesScreen() {
                     ? formatShortDate(selectedDate).toUpperCase()
                     : period === "this_week"
                     ? formatWeekPill(selectedWeekStart).toUpperCase()
+                    : period === "custom"
+                    ? customStart && customEnd
+                      ? `${formatShortDate(customStart).toUpperCase()} – ${formatShortDate(customEnd).toUpperCase()}`
+                      : "CUSTOM"
                     : formatMonthPill(selectedMonthStart).toUpperCase();
-                const fmt = (n: number) =>
-                  `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}`;
+                const fmt = (n: number) => formatCurrency(n, 2);
                 const diningEntries = Object.entries(officialStats.diningMode).sort(
                   (a, b) => b[1] - a[1]
                 );
@@ -1328,21 +1803,21 @@ export default function SalesScreen() {
             )}
 
             {/* Payment breakdown */}
-            {!loading && paymentBreakdown.length > 0 && (
+            {!loading && displayPaymentBreakdown.length > 0 && (
               <View style={styles.block}>
                 <SectionLabel
                   label="Payment Mix"
                   right={
                     <Text style={styles.sectionHint}>
-                      {paymentBreakdown.length}{" "}
-                      {paymentBreakdown.length === 1 ? "method" : "methods"}
+                      {displayPaymentBreakdown.length}{" "}
+                      {displayPaymentBreakdown.length === 1 ? "method" : "methods"}
                     </Text>
                   }
                 />
 
                 {/* Stacked bar */}
                 <View style={styles.stackedBar}>
-                  {paymentBreakdown.map((p) => (
+                  {displayPaymentBreakdown.map((p) => (
                     <View
                       key={p.name}
                       style={{
@@ -1355,7 +1830,7 @@ export default function SalesScreen() {
 
                 {/* Legend */}
                 <View style={styles.legend}>
-                  {paymentBreakdown.map((p) => (
+                  {displayPaymentBreakdown.map((p) => (
                     <View key={p.name} style={styles.legendItem}>
                       <View
                         style={[
@@ -1372,19 +1847,19 @@ export default function SalesScreen() {
             )}
 
             {/* Module breakdown */}
-            {loading ? (
-              <Skeleton height={140} radius={16} />
+            {loading || isFetching ? (
+              <LoadingModuleBreakdown />
             ) : (
-              moduleBreakdown.length > 0 && (
+              displayModuleBreakdown.length > 0 && (
                 <View style={styles.block}>
                   <SectionLabel label="Revenue by Module" />
                   <View style={styles.moduleList}>
-                    {moduleBreakdown.map((m, i) => (
+                    {displayModuleBreakdown.map((m, i) => (
                       <View
                         key={m.module}
                         style={[
                           styles.moduleRow,
-                          i !== moduleBreakdown.length - 1 && styles.moduleRowDivider,
+                          i !== displayModuleBreakdown.length - 1 && styles.moduleRowDivider,
                         ]}
                       >
                         <View style={styles.moduleLeft}>
@@ -1407,7 +1882,7 @@ export default function SalesScreen() {
                             ]}
                           />
                         </View>
-                        <Text style={styles.moduleRevenue}>${m.revenue.toFixed(0)}</Text>
+                        <Text style={styles.moduleRevenue}>{formatCurrency(m.revenue, 0)}</Text>
                       </View>
                     ))}
                   </View>
@@ -1516,7 +1991,7 @@ export default function SalesScreen() {
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionHeaderText}>{section.title}</Text>
             <Text style={styles.sectionHeaderTotal}>
-              ${(section as any).total.toFixed(2)}
+              {formatCurrency((section as any).total, 2)}
             </Text>
           </View>
         )}
@@ -1526,9 +2001,10 @@ export default function SalesScreen() {
           const payColor = PAYMENT_COLORS[item.payment] ?? "#64748b";
           const isLastInSection = index === section.data.length - 1;
           const done = item.status === "completed";
+          const txnTotal = parseMoney(item.total);
           return (
             <Pressable
-              accessibilityLabel={`Order ${item.order_id}, ${item.status}, ${item.total} dollars`}
+              accessibilityLabel={`Order ${item.order_id}, ${item.status}, ${formatCurrency(txnTotal, 2)}`}
               onPress={() => haptic.light()}
               style={({ pressed }) => [
                 styles.txnRow,
@@ -1567,7 +2043,7 @@ export default function SalesScreen() {
               </View>
 
               <View style={styles.txnRight}>
-                <Text style={styles.txnTotal}>${item.total}</Text>
+                <Text style={styles.txnTotal}>{formatCurrency(txnTotal, 2)}</Text>
                 <View style={styles.statusRow}>
                   <View
                     style={[
@@ -1591,12 +2067,8 @@ export default function SalesScreen() {
         ItemSeparatorComponent={null}
         SectionSeparatorComponent={() => <View style={{ height: 4 }} />}
         ListEmptyComponent={
-          loading ? (
-            <View style={{ gap: 1, paddingTop: 4 }}>
-              {[0, 1, 2, 3].map((i) => (
-                <Skeleton key={i} height={64} radius={0} />
-              ))}
-            </View>
+          loading || isFetching ? (
+            <LoadingTransactionList />
           ) : (
             <View style={styles.emptyCard}>
               <Ionicons name="receipt-outline" size={32} color={TEXT_DIM} />
@@ -1625,6 +2097,20 @@ export default function SalesScreen() {
         }
       />
       </View>
+      <DateRangePickerModal
+        visible={pickerOpen}
+        initialStart={customStart}
+        initialEnd={customEnd}
+        maxDate={today}
+        onClose={() => setPickerOpen(false)}
+        onApply={(s, e) => {
+          setCustomStart(s);
+          setCustomEnd(e);
+          setPeriod("custom");
+          setPickerOpen(false);
+          haptic.success();
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -1695,6 +2181,9 @@ const styles = StyleSheet.create({
   periodTabTextActive: {
     color: TEXT,
     fontWeight: "700",
+  },
+  periodTabTextDisabled: {
+    opacity: 0.5,
   },
   periodTabUnderline: {
     height: 2,
@@ -1805,29 +2294,6 @@ const styles = StyleSheet.create({
   },
   heroBadgeText: { fontSize: 12, fontWeight: "600" },
   heroHint: { color: TEXT_DIM, fontSize: 12, fontWeight: "500" },
-
-  // Sparkline inside hero
-  spark: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 4,
-    height: 64,
-    paddingBottom: 2,
-  },
-  sparkCol: {
-    alignItems: "center",
-    justifyContent: "flex-end",
-    height: "100%",
-  },
-  sparkBar: {
-    width: 5,
-    backgroundColor: "rgba(212,175,55,0.25)",
-    borderRadius: 2,
-    minHeight: 4,
-  },
-  sparkBarActive: {
-    backgroundColor: GOLD,
-  },
 
   // KPI row — flat with hairline dividers
   kpiRow: {
@@ -2013,6 +2479,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
+    marginTop: 30,
   },
   searchRowFocused: {
     borderColor: GOLD,
@@ -2158,4 +2625,177 @@ const styles = StyleSheet.create({
     backgroundColor: GOLD,
   },
   emptyBtnText: { color: "#181e38", fontWeight: "700", fontSize: 12 },
+
+  // Date range picker modal
+  pickerBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  pickerCard: {
+    width: "100%",
+    maxWidth: 380,
+    backgroundColor: BG,
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    gap: 12,
+  },
+  pickerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  pickerTitle: {
+    color: TEXT,
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: -0.2,
+  },
+  pickerCloseBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  pickerSummary: {
+    color: GOLD,
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
+  },
+  pickerMonthBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 4,
+  },
+  pickerMonthLabel: {
+    color: TEXT,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  pickerWeekHeader: {
+    flexDirection: "row",
+  },
+  pickerWeekday: {
+    flex: 1,
+    textAlign: "center",
+    color: TEXT_DIM,
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.4,
+  },
+  pickerGrid: {
+    flexDirection: "column",
+  },
+  pickerRow: {
+    flexDirection: "row",
+  },
+  pickerCell: {
+    flex: 1,
+    aspectRatio: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  pickerCellRangeBg: {
+    position: "absolute",
+    top: 4,
+    bottom: 4,
+    left: 0,
+    right: 0,
+    backgroundColor: GOLD_DIM,
+    opacity: 0.25,
+  },
+  pickerCellRangeBgLeft: {
+    position: "absolute",
+    top: 4,
+    bottom: 4,
+    left: 0,
+    right: "50%",
+    backgroundColor: GOLD_DIM,
+    opacity: 0.25,
+  },
+  pickerCellRangeBgRight: {
+    position: "absolute",
+    top: 4,
+    bottom: 4,
+    left: "50%",
+    right: 0,
+    backgroundColor: GOLD_DIM,
+    opacity: 0.25,
+  },
+  pickerDay: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pickerDayPressed: {
+    backgroundColor: CARD,
+  },
+  pickerDayActive: {
+    backgroundColor: GOLD,
+  },
+  pickerDayDisabled: {
+    opacity: 0.3,
+  },
+  pickerDayText: {
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  pickerDayTextActive: {
+    color: "#181e38",
+    fontWeight: "800",
+  },
+  pickerDayTextDisabled: {
+    color: TEXT_FAINT,
+  },
+  pickerActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 4,
+  },
+  pickerSecondaryBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  pickerSecondaryBtnText: {
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  pickerPrimaryBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: GOLD,
+  },
+  pickerPrimaryBtnDisabled: {
+    opacity: 0.4,
+  },
+  pickerPrimaryBtnText: {
+    color: "#181e38",
+    fontSize: 13,
+    fontWeight: "800",
+  },
 });

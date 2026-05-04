@@ -40,6 +40,7 @@ export default function TabLayout() {
       <Tabs.Screen name="products" options={{ title: t("tab_products") }} />
       <Tabs.Screen name="explore" options={{ title: t("tab_modules") }} />
       <Tabs.Screen name="settings" options={{ title: t("tab_settings") }} />
+      <Tabs.Screen name="handover" options={{ title: t("tab_handover") }} />
     </Tabs>
   );
 }

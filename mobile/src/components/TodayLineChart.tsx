@@ -1,8 +1,10 @@
 // Smooth-curve hourly/daily revenue chart with sticky y-axis, pinch-to-zoom,
 // horizontal swipe, and a draggable selected-point handle. Used by the
 // dashboard detail modal for today/week/month periods.
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
+  Easing,
   GestureResponderEvent,
   LayoutChangeEvent,
   PanResponder,
@@ -26,6 +28,8 @@ import Svg, {
   Path,
   Stop,
 } from "react-native-svg";
+
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 import { CARD_BORDER, GOLD, SUCCESS, TEXT, TEXT_DIM, TEXT_FAINT } from "@/src/theme/tokens";
 import { haptic } from "@/src/utils/haptics";
 
@@ -161,53 +165,94 @@ export function TodayLineChart({
   // Width available for the plot inside the ScrollView (subtract sticky y-axis on the left).
   const viewportPlotW = Math.max(0, outerW - Y_AXIS_W);
 
-  // Intrinsic plot width: at least viewport, else N points * spacing (pinch-controlled).
-  const intrinsicPlotW = Math.max(
-    viewportPlotW,
-    data.length > 1 ? (data.length - 1) * spacing + PADDING_RIGHT : viewportPlotW
-  );
+  // Natural plot width based on point spacing (pinch-controlled).
+  const naturalPlotW =
+    data.length > 1 ? (data.length - 1) * spacing + PADDING_RIGHT : viewportPlotW;
+
+  // When a "now" marker exists, ensure the chart is wide enough that the
+  // current point can sit at the horizontal centre (add half-viewport pad on
+  // each side). Without this, short series (week=7, month=4) would just fit
+  // the viewport and there'd be nothing to scroll/centre.
+  const sidePad =
+    currentLabel && viewportPlotW > 0 ? Math.floor(viewportPlotW / 2) : 0;
+  const intrinsicPlotW = Math.max(viewportPlotW, naturalPlotW + sidePad * 2);
 
   const innerH = Math.max(0, height - PADDING_TOP - PADDING_BOTTOM);
   const safeMax = niceMax > 0 ? niceMax : 1;
 
   const points = useMemo(() => {
     if (data.length === 0 || intrinsicPlotW <= 0 || innerH <= 0) return [];
-    const usableW = Math.max(0, intrinsicPlotW - PADDING_RIGHT);
+    const usableW = Math.max(0, naturalPlotW - PADDING_RIGHT);
     const stepX = data.length > 1 ? usableW / (data.length - 1) : 0;
     return data.map((p, i) => ({
-      x: i * stepX,
+      x: sidePad + i * stepX,
       y: PADDING_TOP + (1 - p.revenue / safeMax) * innerH,
       revenue: p.revenue,
       day: p.day,
     }));
-  }, [data, intrinsicPlotW, innerH, safeMax]);
-
-  const linePath = useMemo(
-    () =>
-      buildSmoothPath(
-        points.map((p) => ({ x: p.x, y: p.y })),
-        PADDING_TOP,
-        PADDING_TOP + innerH
-      ),
-    [points, innerH]
-  );
-
-  const areaPath = useMemo(() => {
-    if (points.length === 0) return "";
-    const baselineY = PADDING_TOP + innerH;
-    const first = points[0];
-    const last = points[points.length - 1];
-    return `${linePath} L ${last.x} ${baselineY} L ${first.x} ${baselineY} Z`;
-  }, [linePath, points, innerH]);
-
-  const avgY =
-    avg > 0 && avg <= safeMax ? PADDING_TOP + (1 - avg / safeMax) * innerH : null;
+  }, [data, intrinsicPlotW, naturalPlotW, sidePad, innerH, safeMax]);
 
   const currentIdx = currentLabel
     ? data.findIndex((p) => p.day === currentLabel)
     : -1;
 
+  // Only draw the line/area up to the current-time bucket so future periods
+  // aren't rendered as flat-line zeros stretching to the end of the period.
+  const linePoints = useMemo(() => {
+    if (currentIdx < 0) return points;
+    return points.slice(0, currentIdx + 1);
+  }, [points, currentIdx]);
+
+  const linePath = useMemo(
+    () =>
+      buildSmoothPath(
+        linePoints.map((p) => ({ x: p.x, y: p.y })),
+        PADDING_TOP,
+        PADDING_TOP + innerH
+      ),
+    [linePoints, innerH]
+  );
+
+  const areaPath = useMemo(() => {
+    if (linePoints.length === 0) return "";
+    const baselineY = PADDING_TOP + innerH;
+    const first = linePoints[0];
+    const last = linePoints[linePoints.length - 1];
+    return `${linePath} L ${last.x} ${baselineY} L ${first.x} ${baselineY} Z`;
+  }, [linePath, linePoints, innerH]);
+
+  const avgY =
+    avg > 0 && avg <= safeMax ? PADDING_TOP + (1 - avg / safeMax) * innerH : null;
+
   const selected = selectedIndex !== null ? points[selectedIndex] : null;
+  const currentPoint = currentIdx >= 0 ? points[currentIdx] : null;
+
+  // Pulsing ring around the "now" dot to indicate live/ongoing time.
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!currentPoint) return;
+    pulseAnim.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(pulseAnim, {
+        toValue: 1,
+        duration: 1400,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: false,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [currentPoint, pulseAnim]);
+  const pulseR = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [4, 16] });
+  const pulseOpacity = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.55, 0],
+  });
+  const dotPulseScale = pulseAnim.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [1, 1.35, 1],
+  });
+  const dotPulseR = Animated.multiply(dotPulseScale, 4);
 
   // Drag-scrub: while a point is selected, the user can grab a wide handle
   // around the dot/pill and drag horizontally to move the selection across hours.
@@ -284,14 +329,17 @@ export function TodayLineChart({
     Math.ceil(36 / Math.max(spacing, 1))
   );
 
-  // On first measurement, scroll horizontally so "now" is centred in view.
+  // Re-arm auto-scroll whenever the data identity, period, or "now" bucket
+  // changes (e.g. user switches Today/Week/Month tab inside the modal).
+  React.useEffect(() => {
+    didAutoScroll.current = false;
+  }, [data, currentLabel]);
+
+  // On first measurement (and after re-arm), scroll horizontally so "now" is
+  // centred in view.
   React.useEffect(() => {
     if (didAutoScroll.current) return;
     if (currentIdx < 0 || viewportPlotW <= 0 || points.length === 0) return;
-    if (intrinsicPlotW <= viewportPlotW) {
-      didAutoScroll.current = true;
-      return;
-    }
     const targetX = points[currentIdx]?.x ?? 0;
     const offset = Math.max(
       0,
@@ -385,12 +433,16 @@ export function TodayLineChart({
                 />
               )}
 
-              {/* Dots */}
+              {/* Dots — hide future-period dots (after "now") so the
+                  truncated line doesn't have orphaned points trailing it. */}
               {points.map((p, i) => {
                 const isCurrent = i === currentIdx;
                 const isSelected = i === selectedIndex;
+                const isFuture = currentIdx >= 0 && i > currentIdx;
+                if (isFuture && !isSelected) return null;
+                if (isCurrent) return null; // rendered separately as animated pulse
                 const isZero = p.revenue <= 0;
-                const r = isSelected ? 5 : isCurrent ? 4 : 2.5;
+                const r = isSelected ? 5 : 2.5;
                 return (
                   <Circle
                     key={`d-${i}`}
@@ -400,10 +452,31 @@ export function TodayLineChart({
                     fill={isZero ? "#0F1427" : GOLD}
                     stroke={isZero ? TEXT_FAINT : GOLD}
                     strokeWidth={isSelected ? 2 : 1}
-                    opacity={isZero && !isCurrent && !isSelected ? 0.4 : 1}
+                    opacity={isZero && !isSelected ? 0.4 : 1}
                   />
                 );
               })}
+
+              {/* Flashing "now" dot with expanding pulse ring. */}
+              {currentPoint && (
+                <>
+                  <AnimatedCircle
+                    cx={currentPoint.x}
+                    cy={currentPoint.y}
+                    r={pulseR as unknown as number}
+                    fill={GOLD}
+                    opacity={pulseOpacity as unknown as number}
+                  />
+                  <AnimatedCircle
+                    cx={currentPoint.x}
+                    cy={currentPoint.y}
+                    r={dotPulseR as unknown as number}
+                    fill={GOLD}
+                    stroke={GOLD}
+                    strokeWidth={1}
+                  />
+                </>
+              )}
 
               {/* Average dashed line */}
               {avgY !== null && (
