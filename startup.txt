@@ -94,3 +94,8 @@ Note:
 
 
    npx eas build -p android --profile preview
+
+
+cd mobile
+npx expo prebuild --platform ios --clean
+npx expo run:ios

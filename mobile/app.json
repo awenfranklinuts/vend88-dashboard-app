@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.vend88.dashboard",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleDisplayName": "Dashboard"
       }
     },
     "android": {
