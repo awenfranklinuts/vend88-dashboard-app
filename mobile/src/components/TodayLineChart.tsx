@@ -165,16 +165,33 @@ export function TodayLineChart({
   // Width available for the plot inside the ScrollView (subtract sticky y-axis on the left).
   const viewportPlotW = Math.max(0, outerW - Y_AXIS_W);
 
-  // Natural plot width based on point spacing (pinch-controlled).
-  const naturalPlotW =
-    data.length > 1 ? (data.length - 1) * spacing + PADDING_RIGHT : viewportPlotW;
+  // Effective spacing: when the user-controlled spacing would leave the data
+  // narrower than the viewport (e.g. 7 weekday points × 36 px on a wide
+  // phone), expand it so points span the full width by default. Pinch-zooming
+  // in still increases spacing past this fit value; pinching out is bounded
+  // by viewport-fit so the chart can't shrink into a corner.
+  const fitSpacing =
+    data.length > 1 && viewportPlotW > 0
+      ? Math.max(0, viewportPlotW - PADDING_RIGHT) / (data.length - 1)
+      : 0;
+  const effectiveSpacing = Math.max(spacing, fitSpacing);
 
-  // When a "now" marker exists, ensure the chart is wide enough that the
-  // current point can sit at the horizontal centre (add half-viewport pad on
-  // each side). Without this, short series (week=7, month=4) would just fit
-  // the viewport and there'd be nothing to scroll/centre.
+  // Natural plot width based on effective point spacing.
+  const naturalPlotW =
+    data.length > 1
+      ? (data.length - 1) * effectiveSpacing + PADDING_RIGHT
+      : viewportPlotW;
+
+  // When the natural chart is wider than the viewport AND a "now" marker
+  // exists, add half-viewport pad on each side so the current point can sit
+  // at the horizontal centre. If the chart already fits, skip the pad —
+  // otherwise the data would be squashed into the middle with empty space
+  // on either side.
+  const needsScroll = naturalPlotW > viewportPlotW + 0.5;
   const sidePad =
-    currentLabel && viewportPlotW > 0 ? Math.floor(viewportPlotW / 2) : 0;
+    currentLabel && needsScroll && viewportPlotW > 0
+      ? Math.floor(viewportPlotW / 2)
+      : 0;
   const intrinsicPlotW = Math.max(viewportPlotW, naturalPlotW + sidePad * 2);
 
   const innerH = Math.max(0, height - PADDING_TOP - PADDING_BOTTOM);
@@ -326,7 +343,7 @@ export function TodayLineChart({
   // Each label cell is ~36 px wide; ensure ≥ 36 px between visible labels.
   const effectiveLabelEvery = Math.max(
     xLabelEvery,
-    Math.ceil(36 / Math.max(spacing, 1))
+    Math.ceil(36 / Math.max(effectiveSpacing, 1))
   );
 
   // Re-arm auto-scroll whenever the data identity, period, or "now" bucket

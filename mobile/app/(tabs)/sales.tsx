@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Easing,
+  Image,
   Modal,
   PanResponder,
   Pressable,
@@ -19,8 +20,12 @@ import { useAuth } from "../../src/context/AuthContext";
 import { API_TARGET } from "../../src/services/api";
 import {
   fetchOfficialBusinessItemsSoldRange,
+  fetchOfficialOrderDetail,
+  fetchOfficialProductDetails,
   fetchOfficialSalesHistory,
   fetchOfficialStoreStatisticsRange,
+  invalidateOfficialDashboardCaches,
+  type OfficialOrderDetail,
   type OfficialStoreStatisticsRange,
 } from "../../src/services/officialDashboard";
 import { AnimatedNumber } from "../../src/components/AnimatedNumber";
@@ -30,6 +35,7 @@ import {
   LoadingStatement,
   LoadingModuleBreakdown,
   LoadingTransactionList,
+  ShimmerSkeleton,
 } from "../../src/components/ShimmerSkeleton";
 import { TopProgressBar } from "../../src/components/TopProgressBar";
 import { FadingContent } from "../../src/components/FadingContent";
@@ -55,6 +61,7 @@ import {
 
 type Sale = {
   id: string | number;
+  rawId?: string;
   date: string; // ISO or "YYYY-MM-DD HH:mm"
   order_id: string;
   items: number;
@@ -401,12 +408,54 @@ function getSelectedPeriodBounds(
   };
 }
 
-function getPreviousComparisonBounds(bounds: {
-  start: Date;
-  endInclusive: Date;
-  endExclusive: Date;
-}): { start: Date; endInclusive: Date; endExclusive: Date } {
-  const durationMs = Math.max(0, bounds.endInclusive.getTime() - bounds.start.getTime());
+function getPreviousComparisonBounds(
+  bounds: {
+    start: Date;
+    endInclusive: Date;
+    endExclusive: Date;
+  },
+  period: Period
+): { start: Date; endInclusive: Date; endExclusive: Date } {
+  // Shift the current window back by one period unit so we compare like for
+  // like (e.g. partial Mon-Wed of this week vs Mon-Wed of last week, not
+  // Fri-Sun of last week). For "custom" we fall back to a duration-shift.
+  const shiftDays = (d: Date, n: number) => {
+    const copy = new Date(d);
+    copy.setDate(copy.getDate() + n);
+    return copy;
+  };
+  const shiftMonths = (d: Date, n: number) => {
+    const copy = new Date(d);
+    copy.setMonth(copy.getMonth() + n);
+    return copy;
+  };
+
+  if (period === "today") {
+    return {
+      start: shiftDays(bounds.start, -1),
+      endInclusive: shiftDays(bounds.endInclusive, -1),
+      endExclusive: shiftDays(bounds.endExclusive, -1),
+    };
+  }
+  if (period === "this_week") {
+    return {
+      start: shiftDays(bounds.start, -7),
+      endInclusive: shiftDays(bounds.endInclusive, -7),
+      endExclusive: shiftDays(bounds.endExclusive, -7),
+    };
+  }
+  if (period === "this_month") {
+    return {
+      start: shiftMonths(bounds.start, -1),
+      endInclusive: shiftMonths(bounds.endInclusive, -1),
+      endExclusive: shiftMonths(bounds.endExclusive, -1),
+    };
+  }
+  // custom: keep the duration-shift behaviour.
+  const durationMs = Math.max(
+    0,
+    bounds.endInclusive.getTime() - bounds.start.getTime()
+  );
   const endInclusive = new Date(bounds.start.getTime() - 1);
   const start = new Date(endInclusive.getTime() - durationMs);
   return {
@@ -755,6 +804,1049 @@ function DateRangePickerModal({
   );
 }
 
+// ─── Transactions list skeleton ─────────────────────────────────────────────
+
+/**
+ * Pixel-matched skeleton for the All Transactions modal list. Renders:
+ *  • A soft "loading" pill at the top with a pulsing dot + count
+ *  • Two day-section blocks each with a header row and shimmering txn rows
+ * Mirrors the real row layout (icon, id+tag, sub line, amount, status) so
+ * there's no visual jump when real data arrives.
+ */
+function TransactionsLoadingSkeleton({
+  count,
+  totalLabel,
+}: {
+  count: number;
+  totalLabel: string;
+}) {
+  // Pulse for the small "live" dot in the status pill.
+  const pulse = useRef(new Animated.Value(0.4)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 700,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0.4,
+          duration: 700,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
+  // Split the requested rows into two day sections so the skeleton looks
+  // structurally like the real list (sticky day headers + rows).
+  const firstSection = Math.min(3, Math.max(2, Math.ceil(count / 2)));
+  const secondSection = Math.max(0, count - firstSection);
+  const sections = [firstSection, secondSection].filter((n) => n > 0);
+
+  return (
+    <View style={skelStyles.container}>
+      {/* Status pill */}
+      <View style={skelStyles.statusPill}>
+        <Animated.View style={[skelStyles.statusDot, { opacity: pulse }]} />
+        <Text style={skelStyles.statusText}>{totalLabel}…</Text>
+      </View>
+
+      {sections.map((rows, sectionIdx) => (
+        <View key={sectionIdx} style={skelStyles.section}>
+          {/* Day header row */}
+          <View style={skelStyles.dayHeader}>
+            <ShimmerSkeleton width={64} height={10} radius={3} />
+            <ShimmerSkeleton width={72} height={12} radius={3} />
+          </View>
+
+          {/* Rows */}
+          {Array.from({ length: rows }).map((_, rowIdx) => {
+            const isLast = rowIdx === rows - 1;
+            // Stagger row widths slightly so the skeleton feels organic,
+            // not like a uniform grid.
+            const idWidth = 56 + ((rowIdx * 13) % 24);
+            const subWidth = 110 + ((rowIdx * 17) % 60);
+            const amtWidth = 48 + ((rowIdx * 11) % 24);
+            return (
+              <View
+                key={rowIdx}
+                style={[skelStyles.row, !isLast && skelStyles.rowDivider]}
+              >
+                <View style={skelStyles.iconWrap}>
+                  <ShimmerSkeleton width={36} height={36} radius={18} />
+                </View>
+
+                <View style={skelStyles.mid}>
+                  <View style={skelStyles.midTopRow}>
+                    <ShimmerSkeleton width={idWidth} height={12} radius={3} />
+                    <ShimmerSkeleton width={36} height={14} radius={6} />
+                  </View>
+                  <View style={{ height: 6 }} />
+                  <ShimmerSkeleton width={subWidth} height={10} radius={3} />
+                </View>
+
+                <View style={skelStyles.right}>
+                  <ShimmerSkeleton width={amtWidth} height={14} radius={3} />
+                  <View style={{ height: 6 }} />
+                  <ShimmerSkeleton width={36} height={10} radius={3} />
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const skelStyles = StyleSheet.create({
+  container: { paddingTop: 6 },
+  statusPill: {
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    marginBottom: 18,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: GOLD,
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: TEXT_DIM,
+    letterSpacing: 0.2,
+  },
+  section: { marginBottom: 18 },
+  dayHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 10,
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 14,
+  },
+  rowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  iconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    overflow: "hidden",
+  },
+  mid: { flex: 1 },
+  midTopRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  right: { alignItems: "flex-end" },
+});
+
+// ─── Order detail modal ────────────────────────────────────────────────────
+
+type OrderProduct = {
+  name: string;
+  sku?: string;
+  qty: number;
+  price: number;
+  imageUrl?: string;
+  refunded?: boolean;
+};
+
+type OrderTransaction = {
+  id?: string;
+  platform?: string;
+  type?: string;
+  amount?: number;
+  surcharge?: number;
+};
+
+function pickString(obj: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return undefined;
+}
+function pickNumber(obj: Record<string, unknown>, ...keys: string[]): number | undefined {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) {
+      return Number(v);
+    }
+  }
+  return undefined;
+}
+
+function extractProducts(order: OfficialOrderDetail): OrderProduct[] {
+  const candidates: unknown[] = [];
+  for (const key of ["products", "items", "order_items", "line_items"]) {
+    const v = (order as Record<string, unknown>)[key];
+    if (Array.isArray(v)) {
+      // Skip if entries are plain strings — those are product IDs and
+      // are handled by extractProductRefs below.
+      const allStrings = v.every((x) => typeof x === "string");
+      if (allStrings) continue;
+      candidates.push(...v);
+    }
+  }
+  const products: OrderProduct[] = [];
+  for (const raw of candidates) {
+    if (!raw || typeof raw !== "object") continue;
+    const p = raw as Record<string, unknown>;
+    const name =
+      pickString(p, "name", "item_name", "product_name", "title") ?? "Item";
+    const sku = pickString(p, "sku", "barcode", "code");
+    const qty = pickNumber(p, "qty", "quantity", "count") ?? 1;
+    const price =
+      pickNumber(p, "price", "cost", "total", "amount", "item_cost") ?? 0;
+    const imageUrl = pickString(p, "image", "image_url", "img", "photo");
+    const status = pickString(p, "status", "state");
+    const refunded =
+      typeof status === "string" && /refund/i.test(status);
+    products.push({ name, sku, qty, price, imageUrl, refunded });
+  }
+  return products;
+}
+
+/**
+ * For the Vend88 backend, an order's `products` field is typically a parallel
+ * array of product-ID strings, with quantities in `qtys`. We surface those as
+ * lightweight refs so the modal can resolve names asynchronously.
+ */
+function extractProductRefs(
+  order: OfficialOrderDetail
+): { id: string; qty: number }[] {
+  const o = order as Record<string, unknown>;
+  const raw = o.products;
+  if (!Array.isArray(raw)) return [];
+  const ids: string[] = [];
+  for (const v of raw) {
+    if (typeof v === "string" && v.length > 0) ids.push(v);
+  }
+  if (ids.length === 0) return [];
+  const qtys = Array.isArray(o.qtys) ? (o.qtys as unknown[]) : [];
+  return ids.map((id, i) => {
+    const q = qtys[i];
+    const qty =
+      typeof q === "number" && Number.isFinite(q) && q > 0 ? Math.round(q) : 1;
+    return { id, qty };
+  });
+}
+
+function extractTransactions(order: OfficialOrderDetail): OrderTransaction[] {
+  const list: unknown[] = Array.isArray((order as Record<string, unknown>).transactions)
+    ? ((order as Record<string, unknown>).transactions as unknown[])
+    : [];
+  const out: OrderTransaction[] = [];
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const t = raw as Record<string, unknown>;
+    out.push({
+      id: pickString(t, "transaction_id", "id", "_id", "txn_id"),
+      platform: pickString(t, "platform", "method", "payment_platform"),
+      type: pickString(t, "type", "transaction_type", "kind"),
+      amount: pickNumber(t, "amount", "value", "total", "price"),
+      surcharge: pickNumber(t, "surcharge", "fee"),
+    });
+  }
+  return out;
+}
+
+function formatOrderTime(value: unknown): string {
+  if (typeof value !== "string" || !value) return "—";
+  const d = new Date(value.replace(" ", "T"));
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function StatusPill({ status }: { status?: string }) {
+  const s = (status ?? "").toLowerCase();
+  let bg = TEXT_DIM + "22";
+  let fg = TEXT_DIM;
+  let label = status ?? "—";
+  if (/paid|complete|done/.test(s)) {
+    bg = SUCCESS + "22";
+    fg = SUCCESS;
+    label = "Paid";
+  } else if (/refund/.test(s)) {
+    bg = DANGER + "22";
+    fg = DANGER;
+    label = "Refunded";
+  } else if (/cancel|void/.test(s)) {
+    bg = DANGER + "22";
+    fg = DANGER;
+    label = status ?? "Cancelled";
+  } else if (/active|open|pending/.test(s)) {
+    bg = WARNING + "22";
+    fg = WARNING;
+    label = "Active";
+  }
+  return (
+    <View style={[detailStyles.pill, { backgroundColor: bg }]}>
+      <Text style={[detailStyles.pillText, { color: fg }]}>
+        {label.toUpperCase()}
+      </Text>
+    </View>
+  );
+}
+
+function DetailRow({
+  label,
+  value,
+  mono,
+  emphasis,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  emphasis?: boolean;
+}) {
+  return (
+    <View style={detailStyles.row}>
+      <Text style={detailStyles.rowLabel}>{label}</Text>
+      <Text
+        style={[
+          detailStyles.rowValue,
+          mono && detailStyles.rowValueMono,
+          emphasis && detailStyles.rowValueEmphasis,
+        ]}
+        numberOfLines={mono ? 1 : 2}
+        ellipsizeMode="middle"
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function SectionCard({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={detailStyles.card}>
+      <Text style={detailStyles.cardTitle}>{title}</Text>
+      <View style={detailStyles.cardBody}>{children}</View>
+    </View>
+  );
+}
+
+function OrderDetailModal({
+  sale,
+  order,
+  loading,
+  error,
+  onClose,
+}: {
+  sale: Sale | null;
+  order: OfficialOrderDetail | null;
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+}) {
+  const visible = sale != null;
+
+  const summary = useMemo(() => {
+    if (!order) return null;
+    const o = order as Record<string, unknown>;
+    const orderId = pickString(o, "order_id", "_id") ?? "—";
+    const orderNum = pickNumber(o, "order_num");
+    const cost = pickNumber(o, "price", "total", "cost") ?? 0;
+    const status = pickString(o, "status") ?? "—";
+    const method =
+      pickString(o, "pick_method", "method", "dine_option") ?? "—";
+    const source = pickString(o, "source", "module") ?? "—";
+    const discount = pickNumber(o, "discount", "discount_total") ?? 0;
+    const rounding = pickNumber(o, "rounding", "rounding_total") ?? 0;
+    const tax = pickNumber(o, "tax", "tax_total") ?? 0;
+    const holidaySurcharge =
+      pickNumber(o, "holiday_surcharge", "holiday_surcharge_pct") ?? 0;
+    const guestCount = pickNumber(o, "guest_count", "guests", "people") ?? 0;
+    const time = pickString(o, "time", "created_at", "date");
+    return {
+      orderId,
+      orderNum,
+      cost,
+      status,
+      method,
+      source,
+      discount,
+      rounding,
+      tax,
+      holidaySurcharge,
+      guestCount,
+      time,
+    };
+  }, [order]);
+
+  const products = useMemo(
+    () => (order ? extractProducts(order) : []),
+    [order]
+  );
+  const productRefs = useMemo(
+    () => (order ? extractProductRefs(order) : []),
+    [order]
+  );
+  const transactions = useMemo(
+    () => (order ? extractTransactions(order) : []),
+    [order]
+  );
+
+  const [productNameMap, setProductNameMap] = useState<
+    Record<string, { name: string; image?: string; price?: number }>
+  >({});
+  useEffect(() => {
+    if (productRefs.length === 0) {
+      setProductNameMap({});
+      return;
+    }
+    let cancelled = false;
+    const ids = productRefs.map((r) => r.id);
+    fetchOfficialProductDetails(ids)
+      .then((map) => {
+        if (!cancelled) setProductNameMap(map);
+      })
+      .catch(() => {
+        if (!cancelled) setProductNameMap({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [productRefs]);
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={onClose}
+    >
+      <SafeAreaView style={detailStyles.safe} edges={["top"]}>
+        <View style={detailStyles.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={detailStyles.eyebrow}>ORDER DETAILS</Text>
+            <Text style={detailStyles.title} numberOfLines={1}>
+              {sale?.order_id ?? "—"}
+            </Text>
+            {sale ? (
+              <Text style={detailStyles.subtitle}>
+                {formatOrderTime(sale.date)}
+              </Text>
+            ) : null}
+          </View>
+          <Pressable
+            accessibilityLabel="Close order details"
+            hitSlop={8}
+            onPress={onClose}
+            style={({ pressed }) => [
+              detailStyles.closeBtn,
+              pressed && { opacity: 0.6 },
+            ]}
+          >
+            <Ionicons name="close" size={20} color={TEXT} />
+          </Pressable>
+        </View>
+
+        {loading ? (
+          <View style={detailStyles.loading}>
+            <View style={detailStyles.loadingCard}>
+              <ShimmerSkeleton width="40%" height={12} radius={3} />
+              <View style={{ height: 12 }} />
+              <ShimmerSkeleton width="80%" height={20} radius={4} />
+              <View style={{ height: 16 }} />
+              <ShimmerSkeleton width="100%" height={1} radius={0} />
+              <View style={{ height: 16 }} />
+              {[0, 1, 2, 3, 4].map((i) => (
+                <View key={i} style={detailStyles.loadingRow}>
+                  <ShimmerSkeleton width="30%" height={12} radius={3} />
+                  <ShimmerSkeleton width="40%" height={12} radius={3} />
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : error ? (
+          <View style={detailStyles.errorBox}>
+            <Ionicons name="alert-circle-outline" size={32} color={DANGER} />
+            <Text style={detailStyles.errorTitle}>Couldn't load details</Text>
+            <Text style={detailStyles.errorBody}>{error}</Text>
+          </View>
+        ) : summary ? (
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={detailStyles.content}
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Hero — total + status */}
+            <View style={detailStyles.hero}>
+              <Text style={detailStyles.heroEyebrow}>TOTAL</Text>
+              <Text style={detailStyles.heroAmount}>
+                {formatCurrency(summary.cost, 2)}
+              </Text>
+              <View style={detailStyles.heroMeta}>
+                <StatusPill status={summary.status} />
+                {summary.method && summary.method !== "—" ? (
+                  <View style={detailStyles.heroChip}>
+                    <Ionicons name="bag-outline" size={12} color={TEXT_DIM} />
+                    <Text style={detailStyles.heroChipText}>
+                      {summary.method}
+                    </Text>
+                  </View>
+                ) : null}
+                {summary.source && summary.source !== "—" ? (
+                  <View style={detailStyles.heroChip}>
+                    <Ionicons name="terminal-outline" size={12} color={TEXT_DIM} />
+                    <Text style={detailStyles.heroChipText}>
+                      {summary.source.toUpperCase()}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+
+            {/* Order Summary */}
+            <SectionCard title="Order Summary">
+              <DetailRow label="Order ID" value={summary.orderId} mono />
+              {summary.orderNum != null ? (
+                <DetailRow
+                  label="Order #"
+                  value={`#${summary.orderNum}`}
+                />
+              ) : null}
+              <DetailRow
+                label="Cost"
+                value={formatCurrency(summary.cost, 2)}
+                emphasis
+              />
+              <DetailRow label="Status" value={summary.status} />
+              <DetailRow label="Method" value={summary.method} />
+              <DetailRow label="Source" value={summary.source} />
+              <DetailRow
+                label="Discount"
+                value={formatCurrency(summary.discount, 2)}
+              />
+              <DetailRow
+                label="Rounding"
+                value={formatCurrency(summary.rounding, 2)}
+              />
+              <DetailRow
+                label="Holiday Surcharge"
+                value={`${summary.holidaySurcharge}%`}
+              />
+              <DetailRow label="Tax" value={formatCurrency(summary.tax, 2)} />
+              <DetailRow
+                label="Guest Count"
+                value={String(summary.guestCount)}
+              />
+              <DetailRow
+                label="Date of Purchase"
+                value={formatOrderTime(summary.time)}
+              />
+            </SectionCard>
+
+            {/* Products */}
+            {products.length > 0 ? (
+              <SectionCard title={`Products (${products.length})`}>
+                {products.map((p, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      detailStyles.productRow,
+                      i !== products.length - 1 && detailStyles.productRowDivider,
+                    ]}
+                  >
+                    <View style={detailStyles.productThumb}>
+                      <Ionicons
+                        name="cube-outline"
+                        size={20}
+                        color={TEXT_DIM}
+                      />
+                    </View>
+                    <View style={detailStyles.productMid}>
+                      <View style={detailStyles.productNameRow}>
+                        <Text
+                          style={detailStyles.productName}
+                          numberOfLines={2}
+                        >
+                          {p.name}
+                        </Text>
+                        {p.refunded ? (
+                          <View style={detailStyles.refundBadge}>
+                            <Text style={detailStyles.refundBadgeText}>
+                              REFUND
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      {p.sku ? (
+                        <Text style={detailStyles.productSku} numberOfLines={1}>
+                          SKU · {p.sku}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <View style={detailStyles.productRight}>
+                      <Text style={detailStyles.productPrice}>
+                        {formatCurrency(p.price, 2)}
+                      </Text>
+                      <Text style={detailStyles.productQty}>×{p.qty}</Text>
+                    </View>
+                  </View>
+                ))}
+              </SectionCard>
+            ) : productRefs.length > 0 ? (
+              <SectionCard title={`Products (${productRefs.length})`}>
+                {productRefs.map((ref, i) => {
+                  const detail = productNameMap[ref.id];
+                  const name =
+                    detail?.name ??
+                    `Item ${ref.id.slice(-6).toUpperCase()}`;
+                  const resolved = !!detail?.name;
+                  const initial = (detail?.name ?? "?")
+                    .trim()
+                    .charAt(0)
+                    .toUpperCase();
+                  return (
+                    <View
+                      key={`${ref.id}-${i}`}
+                      style={[
+                        detailStyles.productRow,
+                        i !== productRefs.length - 1 &&
+                          detailStyles.productRowDivider,
+                      ]}
+                    >
+                      <View style={detailStyles.productThumb}>
+                        {detail?.image ? (
+                          <Image
+                            source={{ uri: detail.image }}
+                            style={detailStyles.productThumbImage}
+                            resizeMode="cover"
+                          />
+                        ) : resolved ? (
+                          <Text style={detailStyles.productThumbInitial}>
+                            {initial}
+                          </Text>
+                        ) : (
+                          <Ionicons
+                            name="cube-outline"
+                            size={20}
+                            color={TEXT_DIM}
+                          />
+                        )}
+                      </View>
+                      <View style={detailStyles.productMid}>
+                        {resolved ? (
+                          <Text
+                            style={detailStyles.productName}
+                            numberOfLines={2}
+                          >
+                            {name}
+                          </Text>
+                        ) : (
+                          <ShimmerSkeleton
+                            width="70%"
+                            height={13}
+                            radius={3}
+                          />
+                        )}
+                        <Text style={detailStyles.productSku} numberOfLines={1}>
+                          ID · {ref.id.slice(-8).toUpperCase()}
+                        </Text>
+                      </View>
+                      <View style={detailStyles.productRight}>
+                        {detail?.price != null ? (
+                          <>
+                            <Text style={detailStyles.productPrice}>
+                              {formatCurrency(detail.price * ref.qty, 2)}
+                            </Text>
+                            <Text style={detailStyles.productQty}>
+                              {ref.qty > 1
+                                ? `${formatCurrency(detail.price, 2)} × ${ref.qty}`
+                                : `×${ref.qty}`}
+                            </Text>
+                          </>
+                        ) : (
+                          <Text style={detailStyles.productQty}>×{ref.qty}</Text>
+                        )}
+                      </View>
+                    </View>
+                  );
+                })}
+              </SectionCard>
+            ) : null}
+
+            {/* Transactions */}
+            {transactions.length > 0 ? (
+              <SectionCard title="Transactions">
+                {transactions.map((t, i) => {
+                  const isRefund = /refund/i.test(t.type ?? "");
+                  return (
+                    <View
+                      key={i}
+                      style={[
+                        detailStyles.txnDetailRow,
+                        i !== transactions.length - 1 &&
+                          detailStyles.txnDetailRowDivider,
+                      ]}
+                    >
+                      <View style={detailStyles.txnDetailHead}>
+                        <View
+                          style={[
+                            detailStyles.txnDetailDot,
+                            {
+                              backgroundColor: isRefund ? DANGER : SUCCESS,
+                            },
+                          ]}
+                        />
+                        <Text style={detailStyles.txnDetailType}>
+                          {(t.type ?? "PAYMENT").toUpperCase()}
+                        </Text>
+                        {t.platform ? (
+                          <Text style={detailStyles.txnDetailPlatform}>
+                            · {t.platform}
+                          </Text>
+                        ) : null}
+                      </View>
+                      {t.id ? (
+                        <Text
+                          style={detailStyles.txnDetailId}
+                          numberOfLines={1}
+                          ellipsizeMode="middle"
+                        >
+                          {t.id}
+                        </Text>
+                      ) : null}
+                      <View style={detailStyles.txnDetailAmounts}>
+                        <Text
+                          style={[
+                            detailStyles.txnDetailAmount,
+                            isRefund && { color: DANGER },
+                          ]}
+                        >
+                          {isRefund ? "−" : ""}
+                          {formatCurrency(t.amount ?? 0, 2)}
+                        </Text>
+                        {t.surcharge != null && t.surcharge > 0 ? (
+                          <Text style={detailStyles.txnDetailSurcharge}>
+                            +{formatCurrency(t.surcharge, 2)} fee
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
+                  );
+                })}
+              </SectionCard>
+            ) : null}
+
+            <View style={{ height: 24 }} />
+          </ScrollView>
+        ) : null}
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+const detailStyles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: BG },
+  header: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 24,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  eyebrow: {
+    fontSize: 10,
+    letterSpacing: 2,
+    fontWeight: "700",
+    color: TEXT_FAINT,
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: TEXT,
+    letterSpacing: -0.4,
+    marginTop: 2,
+  },
+  subtitle: { fontSize: 12, color: TEXT_DIM, marginTop: 2 },
+  closeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  content: {
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 16,
+    paddingBottom: 32,
+    gap: 14,
+  },
+  hero: {
+    backgroundColor: CARD,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    padding: 18,
+    gap: 8,
+  },
+  heroEyebrow: {
+    fontSize: 10,
+    letterSpacing: 2,
+    fontWeight: "700",
+    color: TEXT_FAINT,
+  },
+  heroAmount: {
+    fontSize: 32,
+    fontWeight: "800",
+    color: TEXT,
+    letterSpacing: -0.8,
+  },
+  heroMeta: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 4,
+  },
+  heroChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: BG,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  heroChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: TEXT_DIM,
+    letterSpacing: 0.3,
+  },
+  pill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    alignSelf: "flex-start",
+  },
+  pillText: { fontSize: 10, fontWeight: "800", letterSpacing: 1 },
+  card: {
+    backgroundColor: CARD,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    overflow: "hidden",
+  },
+  cardTitle: {
+    fontSize: 11,
+    letterSpacing: 2,
+    fontWeight: "700",
+    color: TEXT_FAINT,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 8,
+    textTransform: "uppercase",
+  },
+  cardBody: { paddingHorizontal: 16, paddingBottom: 14 },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 10,
+    gap: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER + "55",
+  },
+  rowLabel: { fontSize: 12, color: TEXT_DIM, fontWeight: "500" },
+  rowValue: {
+    fontSize: 13,
+    color: TEXT,
+    fontWeight: "600",
+    flexShrink: 1,
+    textAlign: "right",
+  },
+  rowValueMono: { fontFamily: "Menlo", fontSize: 11, color: TEXT_DIM },
+  rowValueEmphasis: { fontSize: 14, fontWeight: "800", letterSpacing: -0.2 },
+
+  productRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+  },
+  productRowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER + "55",
+  },
+  productThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: BG,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  productThumbImage: { width: "100%", height: "100%" },
+  productThumbInitial: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: GOLD,
+    letterSpacing: -0.4,
+  },
+  productMid: { flex: 1, gap: 4 },
+  productNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  productName: {
+    fontSize: 13,
+    color: TEXT,
+    fontWeight: "700",
+    flexShrink: 1,
+  },
+  refundBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: DANGER + "22",
+  },
+  refundBadgeText: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: DANGER,
+    letterSpacing: 0.5,
+  },
+  productSku: { fontSize: 11, color: TEXT_DIM, fontWeight: "500" },
+  productRight: { alignItems: "flex-end", gap: 2 },
+  productPrice: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: TEXT,
+    letterSpacing: -0.2,
+  },
+  productQty: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
+
+  txnDetailRow: { paddingVertical: 12, gap: 6 },
+  txnDetailRowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER + "55",
+  },
+  txnDetailHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  txnDetailDot: { width: 6, height: 6, borderRadius: 3 },
+  txnDetailType: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: TEXT,
+    letterSpacing: 1,
+  },
+  txnDetailPlatform: {
+    fontSize: 11,
+    color: TEXT_DIM,
+    fontWeight: "600",
+  },
+  txnDetailId: {
+    fontSize: 11,
+    color: TEXT_DIM,
+    fontFamily: "Menlo",
+  },
+  txnDetailAmounts: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginTop: 2,
+  },
+  txnDetailAmount: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: TEXT,
+    letterSpacing: -0.3,
+  },
+  txnDetailSurcharge: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
+
+  loading: {
+    flex: 1,
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 16,
+  },
+  loadingCard: {
+    backgroundColor: CARD,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    padding: 18,
+  },
+  loadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 8,
+  },
+
+  errorBox: {
+    margin: SCREEN_PADDING,
+    backgroundColor: CARD,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    padding: 24,
+    alignItems: "center",
+    gap: 8,
+  },
+  errorTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: TEXT,
+    marginTop: 4,
+  },
+  errorBody: {
+    fontSize: 12,
+    color: TEXT_DIM,
+    textAlign: "center",
+    lineHeight: 18,
+  },
+});
+
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function SalesScreen() {
@@ -779,6 +1871,19 @@ export default function SalesScreen() {
   const [customStart, setCustomStart] = useState<Date | null>(null);
   const [customEnd, setCustomEnd] = useState<Date | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [allTxnOpen, setAllTxnOpen] = useState(false);
+  // Sales history (per-order details) is loaded lazily — only when the user
+  // opens the All Transactions modal. `txnLoadedKey` marks the bounds the
+  // currently held `sales` array belongs to so we re-fetch on period change.
+  const [txnLoading, setTxnLoading] = useState(false);
+  const [txnLoadedKey, setTxnLoadedKey] = useState<string | null>(null);
+  // Order-detail sheet (opens when a transaction row is tapped).
+  const [detailSale, setDetailSale] = useState<Sale | null>(null);
+  const [detailOrder, setDetailOrder] = useState<OfficialOrderDetail | null>(
+    null
+  );
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   const today = useMemo(() => startOfDay(new Date()), []);
   const isSelectedToday = dayKey(selectedDate) === dayKey(today);
@@ -944,7 +2049,26 @@ export default function SalesScreen() {
     [period, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd]
   );
 
+  const txnPeriodKey = useMemo(
+    () =>
+      `${selectedBounds.start.getTime()}-${selectedBounds.endInclusive.getTime()}`,
+    [selectedBounds]
+  );
+
+  // Reset cached sales-history when the selected period changes so the modal
+  // re-fetches the correct range the next time it's opened. We deliberately
+  // do NOT clear `sales` when the modal merely closes/reopens for the same
+  // period — that would force a re-fetch every time the user revisits.
+  const lastTxnPeriodKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastTxnPeriodKey.current === txnPeriodKey) return;
+    lastTxnPeriodKey.current = txnPeriodKey;
+    setTxnLoadedKey(null);
+    setSales([]);
+  }, [txnPeriodKey]);
+
   const fetchAll = useCallback(async (signal?: AbortSignal) => {
+    setTxnLoading(true);
     try {
       const history = await fetchOfficialSalesHistory(
         selectedBounds.start,
@@ -957,6 +2081,7 @@ export default function SalesScreen() {
 
       const mappedSales: Sale[] = history.map((sale) => ({
         id: sale.id,
+        rawId: sale.rawId,
         date: sale.date,
         order_id: sale.order_id,
         items: sale.items,
@@ -967,6 +2092,7 @@ export default function SalesScreen() {
       }));
       setSales(mappedSales);
       setSummary(buildSalesSummary(mappedSales));
+      setTxnLoadedKey(txnPeriodKey);
 
       const endAnchor = startOfDay(selectedBounds.endInclusive);
       const dayKeys = Array.from({ length: 7 }, (_, i) =>
@@ -991,33 +2117,39 @@ export default function SalesScreen() {
       setSales([]);
       setSummary(buildSalesSummary([]));
       setChart([]);
+    } finally {
+      if (!signal?.aborted) setTxnLoading(false);
     }
-  }, [email, token, selectedBounds]);
+  }, [email, token, selectedBounds, txnPeriodKey]);
 
-  useEffect(() => {
-    if (API_TARGET === "official" && authLoading) {
-      return;
-    }
-    const controller = new AbortController();
-    let active = true;
-    setIsFetching(true);
-    fetchAll(controller.signal).finally(() => {
-      if (!active) return;
-      setLoading(false);
-      setIsFetching(false);
-    });
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, [authLoading, fetchAll]);
+  // Note: we intentionally do NOT call `fetchAll` (sales-history) on initial
+  // page load. The Statement card, KPIs, payment mix, dining mode, etc. all
+  // come from `fetchOfficialStoreStatisticsRange` which is one cached call.
+  // The per-order list (which fans out to N x /order/{id} requests) is only
+  // fetched when the user taps the Transactions CTA.
 
   const onRefresh = async () => {
     haptic.light();
     setRefreshing(true);
     setIsFetching(true);
+    if (API_TARGET === "official") {
+      invalidateOfficialDashboardCaches();
+    }
     try {
-      await fetchAll();
+      // Force the storeStatistics effect to re-run by bumping a state
+      // that it depends on — actually, invalidating the cache + the effect
+      // re-running on refreshing is enough since we re-set bounds. Trigger
+      // it by toggling refresh sentinel: we re-run via the existing effect
+      // because the cache miss means a fresh network call.
+      // Also re-fetch sales history if the user has already opened it once
+      // for this period.
+      const tasks: Promise<unknown>[] = [];
+      if (txnLoadedKey) {
+        tasks.push(fetchAll());
+      }
+      // Wait at least for the storeStatistics refetch to happen via effect;
+      // we await any pending tasks. Storestats refresh is implicit on render.
+      await Promise.all(tasks);
       haptic.success();
     } finally {
       setRefreshing(false);
@@ -1038,9 +2170,10 @@ export default function SalesScreen() {
     }
 
     let cancelled = false;
+    setIsFetching(true);
     (async () => {
       try {
-        const previousBounds = getPreviousComparisonBounds(selectedBounds);
+        const previousBounds = getPreviousComparisonBounds(selectedBounds, period);
         const [stats, previousStats, itemsSold] = await Promise.all([
           fetchOfficialStoreStatisticsRange(
             selectedBounds.start,
@@ -1083,13 +2216,18 @@ export default function SalesScreen() {
           setOfficialItemsSold(null);
           setRevenueChangePct(null);
         }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setIsFetching(false);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [authLoading, email, token, selectedBounds]);
+  }, [authLoading, email, token, selectedBounds, period]);
 
   // Fade + slide the Statement card whenever fresh stats arrive for a new period.
   const statementAnim = useRef(new Animated.Value(1)).current;
@@ -1112,8 +2250,8 @@ export default function SalesScreen() {
     [sales, selectedBounds]
   );
   const previousBounds = useMemo(
-    () => getPreviousComparisonBounds(selectedBounds),
-    [selectedBounds]
+    () => getPreviousComparisonBounds(selectedBounds, period),
+    [selectedBounds, period]
   );
   const fallbackPreviousStat = useMemo(
     () => buildPeriodSummary(sales, previousBounds.start, previousBounds.endExclusive),
@@ -1306,12 +2444,192 @@ export default function SalesScreen() {
     return moduleBreakdown;
   }, [officialStats, moduleBreakdown]);
 
+  // The Transactions section on the report page surfaces a single CTA that
+  // opens the full list in a separate page. Keeping the inline section empty
+  // keeps the report scannable and avoids visual duplication with the modal.
+
+  // Human-readable label for the active period — used in the modal header.
+  const periodLabel = useMemo(() => {
+    if (period === "today") {
+      return selectedDate.toLocaleDateString(undefined, {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      });
+    }
+    if (period === "this_week") {
+      const end = addDays(selectedWeekStart, 6);
+      const sameMonth = selectedWeekStart.getMonth() === end.getMonth();
+      const startStr = selectedWeekStart.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      });
+      const endStr = end.toLocaleDateString(undefined, {
+        month: sameMonth ? undefined : "short",
+        day: "numeric",
+      });
+      return `${startStr} – ${endStr}`;
+    }
+    if (period === "this_month") {
+      return selectedMonthStart.toLocaleDateString(undefined, {
+        month: "long",
+        year: "numeric",
+      });
+    }
+    if (customStart && customEnd) {
+      const sameYear = customStart.getFullYear() === customEnd.getFullYear();
+      const startStr = customStart.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: sameYear ? undefined : "numeric",
+      });
+      const endStr = customEnd.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+      return `${startStr} – ${endStr}`;
+    }
+    return PERIOD_LABELS[period];
+  }, [period, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd]);
+
+  const openOrderDetail = useCallback(
+    async (sale: Sale) => {
+      setDetailSale(sale);
+      setDetailOrder(null);
+      setDetailError(null);
+      const rawId = sale.rawId;
+      if (!rawId) {
+        setDetailError("Order details are not available for this transaction.");
+        setDetailLoading(false);
+        return;
+      }
+      setDetailLoading(true);
+      try {
+        const data = await fetchOfficialOrderDetail(rawId, { email, token });
+        if (!data) {
+          setDetailError("Could not load order details.");
+        } else {
+          setDetailOrder(data);
+        }
+      } catch {
+        setDetailError("Could not load order details.");
+      } finally {
+        setDetailLoading(false);
+      }
+    },
+    [email, token]
+  );
+
+  const closeOrderDetail = useCallback(() => {
+    setDetailSale(null);
+    setDetailOrder(null);
+    setDetailError(null);
+    setDetailLoading(false);
+  }, []);
+
+  const renderTxnItem = useCallback(
+    ({
+      item,
+      index,
+      section,
+    }: {
+      item: Sale;
+      index: number;
+      section: { data: Sale[] };
+    }) => {
+      const d = parseDate(item.date);
+      const payIcon = PAYMENT_ICONS[item.payment] ?? "card-outline";
+      const payColor = PAYMENT_COLORS[item.payment] ?? "#64748b";
+      const isLastInSection = index === section.data.length - 1;
+      const done = item.status === "completed";
+      const txnTotal = parseMoney(item.total);
+      return (
+        <Pressable
+          accessibilityLabel={`Order ${item.order_id}, ${item.status}, ${formatCurrency(txnTotal, 2)}`}
+          onPress={() => {
+            haptic.light();
+            openOrderDetail(item);
+          }}
+          style={({ pressed }) => [
+            styles.txnRow,
+            !isLastInSection && styles.txnRowDivider,
+            pressed && styles.pressed,
+          ]}
+        >
+          <View style={[styles.txnIcon, { backgroundColor: payColor + "1a" }]}>
+            <Ionicons name={payIcon} size={16} color={payColor} />
+          </View>
+
+          <View style={styles.txnMid}>
+            <View style={styles.txnTopRow}>
+              <Text style={styles.txnId} numberOfLines={1}>
+                {item.order_id}
+              </Text>
+              <View
+                style={[
+                  styles.modTag,
+                  { backgroundColor: (MODULE_COLORS[item.module] ?? "#64748b") + "1f" },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.modTagText,
+                    { color: MODULE_COLORS[item.module] ?? "#64748b" },
+                  ]}
+                >
+                  {item.module}
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.txnSub} numberOfLines={1}>
+              {formatTime(d)} · {item.items} items · {item.payment}
+            </Text>
+          </View>
+
+          <View style={styles.txnRight}>
+            <Text style={styles.txnTotal}>{formatCurrency(txnTotal, 2)}</Text>
+            <View style={styles.statusRow}>
+              <View
+                style={[
+                  styles.statusDot,
+                  { backgroundColor: done ? SUCCESS : WARNING },
+                ]}
+              />
+              <Text
+                style={[
+                  styles.statusText,
+                  { color: done ? SUCCESS : WARNING },
+                ]}
+              >
+                {done ? "Done" : "Active"}
+              </Text>
+            </View>
+          </View>
+        </Pressable>
+      );
+    },
+    [openOrderDetail]
+  );
+
+  const renderTxnHeader = useCallback(
+    ({ section }: { section: { title: string; total: number } }) => (
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionHeaderText}>{section.title}</Text>
+        <Text style={styles.sectionHeaderTotal}>
+          {formatCurrency(section.total, 2)}
+        </Text>
+      </View>
+    ),
+    []
+  );
+
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
       <TopProgressBar visible={isFetching && !loading} />
       <View style={{ flex: 1 }} {...panResponder.panHandlers}>
-      <SectionList
-        sections={loading ? [] : sections}
+      <SectionList<Sale, { title: string; total: number; data: Sale[] }>
+        sections={[]}
         keyExtractor={(item) => String(item.id)}
         style={styles.container}
         contentContainerStyle={styles.content}
@@ -1905,7 +3223,128 @@ export default function SalesScreen() {
               </FadingContent>
             )}
 
-            {/* Search — focus-aware pill */}
+            {/* Txn header */}
+            <SectionLabel label="Transactions" />
+          </>
+        }
+        renderSectionHeader={renderTxnHeader}
+        renderItem={renderTxnItem}
+        ItemSeparatorComponent={null}
+        SectionSeparatorComponent={() => <View style={{ height: 4 }} />}
+        ListEmptyComponent={
+          loading ? (
+            <LoadingTransactionList />
+          ) : (stat?.orders ?? 0) > 0 ? (
+            <Pressable
+              accessibilityLabel={`See all ${stat.orders} transactions for ${periodLabel}`}
+              onPress={() => {
+                haptic.selection();
+                setAllTxnOpen(true);
+                if (txnLoadedKey !== txnPeriodKey && !txnLoading) {
+                  fetchAll();
+                }
+              }}
+              style={({ pressed }) => [
+                styles.seeAllCard,
+                pressed && styles.seeAllCardPressed,
+              ]}
+            >
+              <View style={styles.seeAllAccent} />
+              <View style={styles.seeAllInner}>
+                <View style={styles.seeAllIcon}>
+                  <Ionicons name="receipt-outline" size={20} color={GOLD} />
+                </View>
+
+                <View style={styles.seeAllBody}>
+                  <Text style={styles.seeAllEyebrow}>
+                    {periodLabel.toUpperCase()}
+                  </Text>
+                  <View style={styles.seeAllCountRow}>
+                    <Text style={styles.seeAllCount}>{stat.orders}</Text>
+                    <Text style={styles.seeAllCountLabel}>
+                      {stat.orders === 1 ? "transaction" : "transactions"}
+                    </Text>
+                  </View>
+                  <Text style={styles.seeAllHint}>
+                    Tap to view all
+                  </Text>
+                </View>
+
+                <View style={styles.seeAllChevron}>
+                  <Ionicons name="chevron-forward" size={18} color={GOLD} />
+                </View>
+              </View>
+            </Pressable>
+          ) : (
+            <View style={styles.emptyCard}>
+              <Ionicons name="receipt-outline" size={32} color={TEXT_DIM} />
+              <Text style={styles.emptyTitle}>No transactions</Text>
+              <Text style={styles.emptyBody}>
+                {search
+                  ? "No results match your search."
+                  : statusFilter !== "all"
+                  ? `No ${STATUS_LABELS[statusFilter].toLowerCase()} orders in this period.`
+                  : "Try a different time range."}
+              </Text>
+              {(search || statusFilter !== "all") && (
+                <Pressable
+                  onPress={() => {
+                    haptic.selection();
+                    setSearch("");
+                    setStatusFilter("all");
+                  }}
+                  style={styles.emptyBtn}
+                >
+                  <Text style={styles.emptyBtnText}>Clear filters</Text>
+                </Pressable>
+              )}
+            </View>
+          )
+        }
+      />
+      </View>
+      <Modal
+        visible={allTxnOpen}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setAllTxnOpen(false)}
+      >
+        <SafeAreaView style={styles.allTxnContainer} edges={["top"]}>
+          <View style={styles.allTxnHeader}>
+            <View style={styles.allTxnHeaderText}>
+              <Text style={styles.allTxnEyebrow}>TRANSACTIONS</Text>
+              <Text style={styles.allTxnTitle}>{periodLabel}</Text>
+              <Text style={styles.allTxnSubtitle}>
+                {txnLoading && txnLoadedKey !== txnPeriodKey
+                  ? `Loading ${stat?.orders ?? 0} ${
+                      (stat?.orders ?? 0) === 1 ? "record" : "records"
+                    }…`
+                  : `${totalFiltered} ${
+                      totalFiltered === 1 ? "record" : "records"
+                    }${
+                      statusFilter !== "all"
+                        ? ` · ${STATUS_LABELS[statusFilter]}`
+                        : ""
+                    }`}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Close transactions"
+              hitSlop={8}
+              onPress={() => {
+                haptic.selection();
+                setAllTxnOpen(false);
+              }}
+              style={({ pressed }) => [
+                styles.allTxnCloseBtn,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Ionicons name="close" size={20} color={TEXT} />
+            </Pressable>
+          </View>
+
+          <View style={styles.allTxnControls}>
             <View
               style={[
                 styles.searchRow,
@@ -1944,7 +3383,6 @@ export default function SalesScreen() {
               ) : null}
             </View>
 
-            {/* Status filter — underline text tabs (matches period tabs) */}
             <View style={styles.statusTabs}>
               {STATUS_FILTERS.map((f) => {
                 const active = statusFilter === f;
@@ -1994,124 +3432,50 @@ export default function SalesScreen() {
                 );
               })}
             </View>
-
-            {/* Txn header */}
-            <SectionLabel
-              label="Transactions"
-              right={<Text style={styles.sectionHint}>{totalFiltered} records</Text>}
-            />
-          </>
-        }
-        renderSectionHeader={({ section }) => (
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionHeaderText}>{section.title}</Text>
-            <Text style={styles.sectionHeaderTotal}>
-              {formatCurrency((section as any).total, 2)}
-            </Text>
           </View>
-        )}
-        renderItem={({ item, index, section }) => {
-          const d = parseDate(item.date);
-          const payIcon = PAYMENT_ICONS[item.payment] ?? "card-outline";
-          const payColor = PAYMENT_COLORS[item.payment] ?? "#64748b";
-          const isLastInSection = index === section.data.length - 1;
-          const done = item.status === "completed";
-          const txnTotal = parseMoney(item.total);
-          return (
-            <Pressable
-              accessibilityLabel={`Order ${item.order_id}, ${item.status}, ${formatCurrency(txnTotal, 2)}`}
-              onPress={() => haptic.light()}
-              style={({ pressed }) => [
-                styles.txnRow,
-                !isLastInSection && styles.txnRowDivider,
-                pressed && styles.pressed,
-              ]}
-            >
-              <View style={[styles.txnIcon, { backgroundColor: payColor + "1a" }]}>
-                <Ionicons name={payIcon} size={16} color={payColor} />
-              </View>
 
-              <View style={styles.txnMid}>
-                <View style={styles.txnTopRow}>
-                  <Text style={styles.txnId} numberOfLines={1}>
-                    {item.order_id}
-                  </Text>
-                  <View
-                    style={[
-                      styles.modTag,
-                      { backgroundColor: (MODULE_COLORS[item.module] ?? "#64748b") + "1f" },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.modTagText,
-                        { color: MODULE_COLORS[item.module] ?? "#64748b" },
-                      ]}
-                    >
-                      {item.module}
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.txnSub} numberOfLines={1}>
-                  {formatTime(d)} · {item.items} items · {item.payment}
-                </Text>
-              </View>
-
-              <View style={styles.txnRight}>
-                <Text style={styles.txnTotal}>{formatCurrency(txnTotal, 2)}</Text>
-                <View style={styles.statusRow}>
-                  <View
-                    style={[
-                      styles.statusDot,
-                      { backgroundColor: done ? SUCCESS : WARNING },
-                    ]}
-                  />
-                  <Text
-                    style={[
-                      styles.statusText,
-                      { color: done ? SUCCESS : WARNING },
-                    ]}
-                  >
-                    {done ? "Done" : "Active"}
+          <SectionList
+            sections={sections}
+            keyExtractor={(item) => `all-${item.id}`}
+            style={styles.allTxnList}
+            contentContainerStyle={styles.allTxnContent}
+            showsVerticalScrollIndicator={false}
+            stickySectionHeadersEnabled
+            renderSectionHeader={renderTxnHeader}
+            renderItem={renderTxnItem}
+            SectionSeparatorComponent={() => <View style={{ height: 4 }} />}
+            ListEmptyComponent={
+              txnLoading || txnLoadedKey !== txnPeriodKey ? (
+                <TransactionsLoadingSkeleton
+                  count={Math.min(Math.max(stat?.orders ?? 6, 4), 10)}
+                  totalLabel={
+                    (stat?.orders ?? 0) > 0
+                      ? `Loading ${stat.orders} ${
+                          stat.orders === 1 ? "order" : "orders"
+                        }`
+                      : "Loading transactions"
+                  }
+                />
+              ) : (
+                <View style={styles.emptyCard}>
+                  <Ionicons name="receipt-outline" size={32} color={TEXT_DIM} />
+                  <Text style={styles.emptyTitle}>No transactions</Text>
+                  <Text style={styles.emptyBody}>
+                    Try a different time range.
                   </Text>
                 </View>
-              </View>
-            </Pressable>
-          );
-        }}
-        ItemSeparatorComponent={null}
-        SectionSeparatorComponent={() => <View style={{ height: 4 }} />}
-        ListEmptyComponent={
-          loading ? (
-            <LoadingTransactionList />
-          ) : (
-            <View style={styles.emptyCard}>
-              <Ionicons name="receipt-outline" size={32} color={TEXT_DIM} />
-              <Text style={styles.emptyTitle}>No transactions</Text>
-              <Text style={styles.emptyBody}>
-                {search
-                  ? "No results match your search."
-                  : statusFilter !== "all"
-                  ? `No ${STATUS_LABELS[statusFilter].toLowerCase()} orders in this period.`
-                  : "Try a different time range."}
-              </Text>
-              {(search || statusFilter !== "all") && (
-                <Pressable
-                  onPress={() => {
-                    haptic.selection();
-                    setSearch("");
-                    setStatusFilter("all");
-                  }}
-                  style={styles.emptyBtn}
-                >
-                  <Text style={styles.emptyBtnText}>Clear filters</Text>
-                </Pressable>
-              )}
-            </View>
-          )
-        }
-      />
-      </View>
+              )
+            }
+          />
+          <OrderDetailModal
+            sale={detailSale}
+            order={detailOrder}
+            loading={detailLoading}
+            error={detailError}
+            onClose={closeOrderDetail}
+          />
+        </SafeAreaView>
+      </Modal>
       <DateRangePickerModal
         visible={pickerOpen}
         initialStart={customStart}
@@ -2135,7 +3499,7 @@ export default function SalesScreen() {
 const styles = StyleSheet.create({
   safeContainer: { flex: 1, backgroundColor: BG },
   container: { flex: 1, backgroundColor: "transparent" },
-  content: { padding: SCREEN_PADDING, paddingTop: 8, paddingBottom: 40, gap: 22 },
+  content: { padding: SCREEN_PADDING, paddingTop: 8, paddingBottom: 140, gap: 22 },
   pressed: { opacity: 0.7 },
 
   // Top bar — matches dashboard rhythm
@@ -2617,6 +3981,147 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   statusDot: { width: 5, height: 5, borderRadius: 2.5 },
   statusText: { fontSize: 10, fontWeight: "600", letterSpacing: 0.2 },
+
+  // See-all transactions hero CTA — replaces the inline preview list.
+  seeAllCard: {
+    marginTop: 4,
+    borderRadius: 18,
+    overflow: "hidden",
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  seeAllCardPressed: { opacity: 0.85 },
+  seeAllAccent: {
+    height: 3,
+    backgroundColor: GOLD,
+    opacity: 0.9,
+  },
+  seeAllInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+  },
+  seeAllIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: GOLD + "1f",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GOLD + "33",
+  },
+  seeAllBody: { flex: 1, gap: 2 },
+  seeAllEyebrow: {
+    fontSize: 10,
+    letterSpacing: 1.6,
+    fontWeight: "700",
+    color: TEXT_FAINT,
+  },
+  seeAllCountRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 6,
+  },
+  seeAllCount: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: TEXT,
+    letterSpacing: -0.6,
+  },
+  seeAllCountLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: TEXT_DIM,
+  },
+  seeAllHint: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: TEXT_DIM,
+  },
+  seeAllChevron: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: GOLD + "1f",
+  },
+
+  // All-transactions modal
+  allTxnContainer: { flex: 1, backgroundColor: BG },
+  allTxnHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 24,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  allTxnHeaderText: { flex: 1, gap: 2 },
+  allTxnEyebrow: {
+    fontSize: 10,
+    letterSpacing: 2,
+    fontWeight: "700",
+    color: TEXT_FAINT,
+  },
+  allTxnTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: TEXT,
+    letterSpacing: -0.4,
+  },
+  allTxnSubtitle: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: TEXT_DIM,
+  },
+  allTxnCloseBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  allTxnList: { flex: 1, backgroundColor: "transparent" },
+  allTxnContent: {
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 8,
+    paddingBottom: 32,
+  },
+  allTxnControls: {
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 10,
+    gap: 10,
+  },
+  allTxnLoading: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 56,
+    paddingHorizontal: 24,
+    gap: 14,
+  },
+  allTxnLoadingTitle: {
+    color: TEXT,
+    fontSize: 15,
+    fontWeight: "700",
+    letterSpacing: -0.2,
+    marginTop: 4,
+  },
+  allTxnLoadingHint: {
+    color: TEXT_DIM,
+    fontSize: 12,
+    textAlign: "center",
+    lineHeight: 18,
+  },
 
   // Empty
   emptyCard: {

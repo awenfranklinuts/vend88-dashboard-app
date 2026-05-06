@@ -43,6 +43,7 @@ type AuthOverride = {
 
 export type OfficialSaleRecord = {
   id: string | number;
+  rawId?: string;
   date: string;
   order_id: string;
   items: number;
@@ -50,6 +51,30 @@ export type OfficialSaleRecord = {
   payment: string;
   total: string;
   status: string;
+};
+
+/**
+ * Loose detail shape for a single order, used by the order-detail modal.
+ * The Vend88 backend response contains many optional / undocumented fields,
+ * so we keep this permissive and let the UI pick out what it needs.
+ */
+export type OfficialOrderDetail = Record<string, unknown> & {
+  order_id?: string;
+  order_num?: number | string;
+  status?: string;
+  source?: string;
+  pick_method?: string;
+  price?: number;
+  discount?: number;
+  rounding?: number;
+  tax?: number;
+  holiday_surcharge?: number;
+  guest_count?: number;
+  time?: string;
+  qtys?: number[];
+  products?: unknown;
+  items?: unknown;
+  transactions?: unknown;
 };
 
 type BusinessSalesDay = {
@@ -757,48 +782,64 @@ export async function fetchOfficialStoreStatisticsRange(
     end.getMinutes() !== 59 ||
     end.getSeconds() !== 59;
 
-  const snapshot = await fetchStoreStatisticsSnapshot(
-    shopId,
-    token,
-    formatBusinessDate(start, false),
-    useExactEnd ? formatBusinessDateExact(end) : formatBusinessDate(end, true)
-  );
+  const startKey = formatBusinessDate(start, false);
+  const endKey = useExactEnd ? formatBusinessDateExact(end) : formatBusinessDate(end, true);
+  const cacheKey = `${shopId}|${startKey}|${endKey}`;
 
-  const f = snapshot.financial;
-  const o = snapshot.operational;
-  const b = snapshot.breakdowns;
+  const cached = storeStatsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < SALES_TTL_MS) {
+    return cached.data;
+  }
+  const inFlight = storeStatsInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
 
-  return {
-    orders: Math.round(snapshot.ordersTotal),
-    revenue: snapshot.revenueTotal,
-    hourlySales: snapshot.hourlySales,
-    financial: {
-      averageOrderValue: toNumber(f.average_order_value),
-      grossSales: toNumber(f.gross_sales),
-      netSales: toNumber(f.net_sales),
-      totalCreditAdded: toNumber(f.total_credit_added),
-      totalCreditUsage: toNumber(f.total_credit_usage),
-      totalDiscount: toNumber(f.total_discount),
-      totalExtraCharge: toNumber(f.total_extra_charge),
-      totalItemSale: toNumber(f.total_item_sale),
-      totalRefunds: toNumber(f.total_refunds),
-      totalRevenue: toNumber(f.total_revenue),
-      totalRounding: toNumber(f.total_rounding),
-      totalSurcharge: toNumber(f.total_surcharge),
-      totalTax: toNumber(f.total_tax),
-    },
-    operational: {
-      guestSales: toNumber(o.guest_sales),
-      memberSales: toNumber(o.member_sales),
-      refundCount: Math.round(toNumber(o.refund_count)),
-      totalOrders: Math.round(toNumber(o.total_orders)),
-    },
-    diningMode: b.dining_mode ?? {},
-    paymentMethod: b.payment_method ?? {},
-    category: b.category ?? {},
-    channel: b.channel ?? {},
-    staffPerformance: b.staff_performance ?? {},
-  };
+  const promise = (async () => {
+    const snapshot = await fetchStoreStatisticsSnapshot(shopId, token, startKey, endKey);
+
+    const f = snapshot.financial;
+    const o = snapshot.operational;
+    const b = snapshot.breakdowns;
+
+    const result: OfficialStoreStatisticsRange = {
+      orders: Math.round(snapshot.ordersTotal),
+      revenue: snapshot.revenueTotal,
+      hourlySales: snapshot.hourlySales,
+      financial: {
+        averageOrderValue: toNumber(f.average_order_value),
+        grossSales: toNumber(f.gross_sales),
+        netSales: toNumber(f.net_sales),
+        totalCreditAdded: toNumber(f.total_credit_added),
+        totalCreditUsage: toNumber(f.total_credit_usage),
+        totalDiscount: toNumber(f.total_discount),
+        totalExtraCharge: toNumber(f.total_extra_charge),
+        totalItemSale: toNumber(f.total_item_sale),
+        totalRefunds: toNumber(f.total_refunds),
+        totalRevenue: toNumber(f.total_revenue),
+        totalRounding: toNumber(f.total_rounding),
+        totalSurcharge: toNumber(f.total_surcharge),
+        totalTax: toNumber(f.total_tax),
+      },
+      operational: {
+        guestSales: toNumber(o.guest_sales),
+        memberSales: toNumber(o.member_sales),
+        refundCount: Math.round(toNumber(o.refund_count)),
+        totalOrders: Math.round(toNumber(o.total_orders)),
+      },
+      diningMode: b.dining_mode ?? {},
+      paymentMethod: b.payment_method ?? {},
+      category: b.category ?? {},
+      channel: b.channel ?? {},
+      staffPerformance: b.staff_performance ?? {},
+    };
+
+    storeStatsCache.set(cacheKey, { ts: Date.now(), data: result });
+    return result;
+  })().finally(() => {
+    storeStatsInFlight.delete(cacheKey);
+  });
+
+  storeStatsInFlight.set(cacheKey, promise);
+  return promise;
 }
 
 export async function fetchOfficialBusinessItemsSoldRange(
@@ -813,22 +854,42 @@ export async function fetchOfficialBusinessItemsSoldRange(
     end.getMinutes() !== 59 ||
     end.getSeconds() !== 59;
 
-  const response = await api.post<BusinessSalesResponse>(
-    "/dashboard/business_sales",
-    {
-      business_id: businessId,
-      start_date: formatBusinessDate(start, false),
-      end_date: useExactEnd ? formatBusinessDateExact(end) : formatBusinessDate(end, true),
-      token,
-    }
-  );
+  const startKey = formatBusinessDate(start, false);
+  const endKey = useExactEnd ? formatBusinessDateExact(end) : formatBusinessDate(end, true);
+  const cacheKey = `${businessId}|${startKey}|${endKey}`;
 
-  const data = response.data;
-  if (data?.status_code !== 200) {
-    throw new Error("Business sales request failed.");
+  const cached = businessItemsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < SALES_TTL_MS) {
+    return cached.data;
   }
+  const inFlight = businessItemsInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
 
-  return Math.round(toNumber(data.total_orders?.num_products));
+  const promise = (async () => {
+    const response = await api.post<BusinessSalesResponse>(
+      "/dashboard/business_sales",
+      {
+        business_id: businessId,
+        start_date: startKey,
+        end_date: endKey,
+        token,
+      }
+    );
+
+    const data = response.data;
+    if (data?.status_code !== 200) {
+      throw new Error("Business sales request failed.");
+    }
+
+    const value = Math.round(toNumber(data.total_orders?.num_products));
+    businessItemsCache.set(cacheKey, { ts: Date.now(), data: value });
+    return value;
+  })().finally(() => {
+    businessItemsInFlight.delete(cacheKey);
+  });
+
+  businessItemsInFlight.set(cacheKey, promise);
+  return promise;
 }
 
 export async function fetchOfficialPosItemsSoldRange(
@@ -1019,6 +1080,102 @@ type TodayCacheEntry = {
 const todayHourlyCache = new Map<string, TodayCacheEntry>();
 const dayKey = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+// ── Shared /pos/dashboard cache ─────────────────────────────────────────────
+// The dashboard's "Top selling items" and "Dining options / Sales methods"
+// charts each call /pos/dashboard with identical params per period. Without
+// memoisation each period switch fires two redundant POSTs. We share the
+// single response across consumers and dedupe in-flight requests so a rapid
+// chip toggle (today → week → month → today) never re-hits the network for
+// the same period within the TTL.
+const POS_DASHBOARD_TTL_MS = 60_000;
+type PosDashboardCacheEntry = { ts: number; data: PosDashboardResponse };
+const posDashboardCache = new Map<string, PosDashboardCacheEntry>();
+const posDashboardInFlight = new Map<string, Promise<PosDashboardResponse>>();
+
+async function fetchPosDashboardCached(
+  shopId: string,
+  token: string,
+  period: TopItemsPeriod
+): Promise<PosDashboardResponse> {
+  const { startDate, endDate } = getRangeForPeriod(period);
+  const key = `${shopId}|${period}|${startDate}|${endDate}`;
+
+  const cached = posDashboardCache.get(key);
+  if (cached && Date.now() - cached.ts < POS_DASHBOARD_TTL_MS) {
+    return cached.data;
+  }
+
+  const inFlight = posDashboardInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    const response = await api.post<PosDashboardResponse>("/pos/dashboard", {
+      shop_id: shopId,
+      start_date: startDate,
+      end_date: endDate,
+      status: "paid",
+      token,
+    });
+    const data = response.data ?? {};
+    if (data.status_code === 200) {
+      posDashboardCache.set(key, { ts: Date.now(), data });
+    }
+    return data;
+  })()
+    .finally(() => {
+      posDashboardInFlight.delete(key);
+    });
+
+  posDashboardInFlight.set(key, promise);
+  return promise;
+}
+
+// ── Top items result cache ─────────────────────────────────────────────────
+// Caches the fully-resolved top items (including product detail names/images)
+// per shop+period+limit so repeat clicks on the same chip are instant.
+const TOP_ITEMS_TTL_MS = 60_000;
+type TopItemsCacheEntry = { ts: number; data: DashboardTopItem[] };
+const topItemsCache = new Map<string, TopItemsCacheEntry>();
+
+// ── Hero series cache ──────────────────────────────────────────────────────
+// Week/month hero series make 4–7 parallel /pos/dashboard sales-total calls.
+// A short module-level TTL cache keeps tab/period flips snappy across remounts.
+const HERO_SERIES_TTL_MS = 60_000;
+type HeroSeriesCacheEntry = { ts: number; data: DashboardChartPoint[] };
+const heroSeriesCache = new Map<string, HeroSeriesCacheEntry>();
+const heroSeriesInFlight = new Map<string, Promise<DashboardChartPoint[]>>();
+
+// ── Sales-page (Reports) caches ─────────────────────────────────────────────
+// The Reports/Sales tab fires three independent network calls per period
+// switch (sales history pagination, store statistics current+previous, and
+// business items-sold). Caching each by absolute start/end timestamps means
+// flipping between Today/Week/Month/Custom is instant once each period has
+// been visited, and the previous-period comparison reuses any prior visit
+// to that same range.
+const SALES_TTL_MS = 60_000;
+
+type StoreStatsCacheEntry = { ts: number; data: OfficialStoreStatisticsRange };
+const storeStatsCache = new Map<string, StoreStatsCacheEntry>();
+const storeStatsInFlight = new Map<string, Promise<OfficialStoreStatisticsRange>>();
+
+type BusinessItemsCacheEntry = { ts: number; data: number };
+const businessItemsCache = new Map<string, BusinessItemsCacheEntry>();
+const businessItemsInFlight = new Map<string, Promise<number>>();
+
+type SalesHistoryCacheEntry = { ts: number; data: OfficialSaleRecord[] };
+const salesHistoryCache = new Map<string, SalesHistoryCacheEntry>();
+
+// Allow the UI (pull-to-refresh) to force-bypass dashboard caches.
+export function invalidateOfficialDashboardCaches(): void {
+  posDashboardCache.clear();
+  topItemsCache.clear();
+  heroSeriesCache.clear();
+  todayHourlyCache.clear();
+  storeStatsCache.clear();
+  businessItemsCache.clear();
+  salesHistoryCache.clear();
+}
 
 export type OfficialHeroPeriod = "week" | "month" | "today";
 
@@ -1217,13 +1374,33 @@ export async function fetchOfficialHeroRevenuePeriod(
   const { token, businessId, shopId } = await resolveOfficialShopContext(auth);
   const now = new Date();
 
-  if (period === "week") {
-    return fetchOfficialWeekRevenueSeries(shopId, token, now);
+  // "today" already has its own per-hour cache inside the today series fetcher,
+  // so we only memoise week/month at this layer to keep "today" fresh-ish.
+  if (period === "today") {
+    return fetchOfficialTodayRevenueSeries(token, businessId, now);
   }
-  if (period === "month") {
-    return fetchOfficialMonthRevenueSeries(shopId, token, now);
+
+  const key = `${shopId}|${period}|${dayKey(now)}`;
+  const cached = heroSeriesCache.get(key);
+  if (cached && Date.now() - cached.ts < HERO_SERIES_TTL_MS) {
+    return cached.data;
   }
-  return fetchOfficialTodayRevenueSeries(token, businessId, now);
+  const inFlight = heroSeriesInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    const series =
+      period === "week"
+        ? await fetchOfficialWeekRevenueSeries(shopId, token, now)
+        : await fetchOfficialMonthRevenueSeries(shopId, token, now);
+    heroSeriesCache.set(key, { ts: Date.now(), data: series });
+    return series;
+  })().finally(() => {
+    heroSeriesInFlight.delete(key);
+  });
+
+  heroSeriesInFlight.set(key, promise);
+  return promise;
 }
 
 export async function fetchOfficialHeroRevenueSeries(
@@ -1280,11 +1457,11 @@ async function resolveProductDetails(
   shopId: string,
   businessId: string,
   token: string
-): Promise<Record<string, { name: string; image?: string }>> {
+): Promise<Record<string, { name: string; image?: string; price?: number }>> {
   if (ids.length === 0) return {};
   void shopId;
   void businessId;
-  const details: Record<string, { name: string; image?: string }> = {};
+  const details: Record<string, { name: string; image?: string; price?: number }> = {};
 
   try {
     const response = await api.post<ProductSearchResponse>(
@@ -1311,7 +1488,19 @@ async function resolveProductDetails(
           "display_name",
         ]);
         if (!name) continue;
-        details[productId] = { name, image: pickImage(product) };
+        let price: number | undefined;
+        for (const k of ["price", "cost", "default_price", "unit_price", "amount"]) {
+          const v = product[k];
+          if (typeof v === "number" && Number.isFinite(v)) {
+            price = v;
+            break;
+          }
+          if (typeof v === "string" && v.trim() && !Number.isNaN(Number(v))) {
+            price = Number(v);
+            break;
+          }
+        }
+        details[productId] = { name, image: pickImage(product), price };
       }
     }
   } catch (err) {
@@ -1328,17 +1517,13 @@ export async function fetchOfficialTopSellingItems(
 ): Promise<DashboardTopItem[]> {
   const { token, businessId, shopId } = await resolveOfficialShopContext(auth);
 
-  const { startDate, endDate } = getRangeForPeriod(period);
+  const cacheKey = `${shopId}|${period}|${limit}`;
+  const cached = topItemsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < TOP_ITEMS_TTL_MS) {
+    return cached.data;
+  }
 
-  const response = await api.post<PosDashboardResponse>("/pos/dashboard", {
-    shop_id: shopId,
-    start_date: startDate,
-    end_date: endDate,
-    status: "paid",
-    token,
-  });
-
-  const data = response.data;
+  const data = await fetchPosDashboardCached(shopId, token, period);
   console.log(
     "[top-items] pos/dashboard status:",
     data?.status_code,
@@ -1364,7 +1549,7 @@ export async function fetchOfficialTopSellingItems(
     token
   );
 
-  return entries.map((row) => {
+  const result = entries.map((row) => {
     const detail = detailMap[row.id];
     const name = detail?.name ?? `Item ${row.id.slice(-6).toUpperCase()}`;
     return {
@@ -1375,6 +1560,9 @@ export async function fetchOfficialTopSellingItems(
       image: detail?.image,
     };
   });
+
+  topItemsCache.set(cacheKey, { ts: Date.now(), data: result });
+  return result;
 }
 
 
@@ -1595,6 +1783,58 @@ export async function fetchOfficialWeeklyRevenueChart(
   return series.week;
 }
 
+/**
+ * Fetch the full detail payload for a single order. Used by the
+ * order-detail sheet on the Reports/Sales page. Looks up by Mongo `_id`
+ * (the same string returned in the `orders` array of `/search/order_search`).
+ */
+export async function fetchOfficialOrderDetail(
+  rawId: string,
+  auth?: AuthOverride,
+  signal?: AbortSignal
+): Promise<OfficialOrderDetail | null> {
+  if (!rawId || typeof rawId !== "string") return null;
+  const { token } = await resolveOfficialShopContext(auth);
+  const payload: Record<string, unknown> = {
+    detail: true,
+    query: { _id: rawId },
+  };
+  if (token) payload.token = token;
+  try {
+    const resp = await api.post<OrderSearchResponse>(
+      "/search/order_search",
+      payload,
+      { signal }
+    );
+    const orders = resp.data?.orders;
+    if (Array.isArray(orders) && orders.length > 0) {
+      const first = orders[0];
+      if (typeof first === "object" && first !== null) {
+        return first as OfficialOrderDetail;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export async function fetchOfficialProductDetails(
+  ids: string[],
+  auth?: AuthOverride
+): Promise<Record<string, { name: string; image?: string; price?: number }>> {
+  const cleaned = Array.from(
+    new Set(
+      (ids ?? []).filter(
+        (id): id is string => typeof id === "string" && id.length > 0
+      )
+    )
+  );
+  if (cleaned.length === 0) return {};
+  const { token, businessId, shopId } = await resolveOfficialShopContext(auth);
+  return resolveProductDetails(cleaned, shopId, businessId, token);
+}
+
 export async function fetchOfficialSalesHistory(
   start: Date,
   end: Date,
@@ -1603,14 +1843,25 @@ export async function fetchOfficialSalesHistory(
 ): Promise<OfficialSaleRecord[]> {
   const { token, businessId, shopId } = await resolveOfficialShopContext(auth);
 
+  const startKey = formatBusinessDate(start, false);
+  const endKey = formatBusinessDate(end, true);
+  const cacheKey = `${shopId}|${businessId}|${startKey}|${endKey}`;
+
+  if (!signal?.aborted) {
+    const cached = salesHistoryCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < SALES_TTL_MS) {
+      return cached.data;
+    }
+  }
+
   const baseQuery: Record<string, unknown> = {
-    time: [formatBusinessDate(start, false), formatBusinessDate(end, true)],
+    time: [startKey, endKey],
   };
 
   const requestOrders = async (query: Record<string, unknown>) => {
-    const MAX_PAGES_HARD = 80;
+    const MAX_PAGES_HARD = 200;
     const PAGE_SIZE_GUESS = 10;
-    const PAGE_CONCURRENCY = 3;
+    const PAGE_CONCURRENCY = 6;
 
     const dedupeRows = (rows: Array<OrderSearchItem | string>) => {
       const seen = new Set<string>();
@@ -1627,6 +1878,47 @@ export async function fetchOfficialSalesHistory(
       }
       return merged;
     };
+
+    // Fast path: ask for the full ID list in one request (no `detail`).
+    // The Vend88 backend honours `ignore_pagination: true` only when the
+    // response is the lightweight string-ID list — when `detail: true` is
+    // also set the server still caps the response at one page (10 rows),
+    // which is why fetching with detail+ignore_pagination only returned 10
+    // orders even for 269-order weeks. We fetch IDs here, then fan out to
+    // /order/{id} for the per-row details below.
+    try {
+      const idsPayload: Record<string, unknown> = {
+        ignore_pagination: true,
+        query,
+      };
+      if (token) idsPayload.token = token;
+
+      const idsResp = await api.post<OrderSearchResponse>(
+        "/search/order_search",
+        idsPayload,
+        { signal }
+      );
+      const rows = Array.isArray(idsResp.data?.orders)
+        ? idsResp.data!.orders!
+        : [];
+      // Heuristic: if the server returned more than one page worth of rows
+      // (or any non-string row, meaning detail mode kicked in for some
+      // reason), treat it as the canonical list. Otherwise fall back to
+      // paginated detail fetching below.
+      if (rows.length > PAGE_SIZE_GUESS) {
+        return dedupeRows(rows);
+      }
+      // If we got <= one page of string IDs, the server may simply have
+      // that few orders for the range — return them.
+      if (
+        rows.length > 0 &&
+        rows.every((r) => typeof r === "string")
+      ) {
+        return dedupeRows(rows);
+      }
+    } catch {
+      // fall through to paginated path
+    }
 
     const fetchPage = async (
       page: number,
@@ -1654,6 +1946,10 @@ export async function fetchOfficialSalesHistory(
       return { rows, maxPage };
     };
 
+    // Always paginate. The server's `ignore_pagination: true` flag is not
+    // honoured for /search/order_search (it still caps at one page), so we
+    // crawl pages until either `max_page` is reached or a batch returns no
+    // rows. Pages are fetched in parallel batches for speed.
     let firstPage: { rows: Array<OrderSearchItem | string>; maxPage: number | null };
     try {
       firstPage = await fetchPage(0, false);
@@ -1670,7 +1966,7 @@ export async function fetchOfficialSalesHistory(
     const totalPages = Math.max(
       1,
       Math.min(
-        declaredPages ?? (firstPage.rows.length >= PAGE_SIZE_GUESS ? 2 : 1),
+        declaredPages ?? (firstPage.rows.length >= PAGE_SIZE_GUESS ? MAX_PAGES_HARD : 1),
         MAX_PAGES_HARD
       )
     );
@@ -1689,11 +1985,15 @@ export async function fetchOfficialSalesHistory(
             }
           })
         );
+        let batchHadRows = false;
         for (const result of results) {
           if (result.rows.length > 0) {
             pageRows.push(...result.rows);
+            batchHadRows = true;
           }
         }
+        // If the whole batch returned nothing, we're past the last page.
+        if (!batchHadRows) break;
       }
     }
 
@@ -1718,24 +2018,47 @@ export async function fetchOfficialSalesHistory(
 
   let resolvedById: OrderSearchItem[] = [];
   if (orderIds.length > 0) {
-    const byIdResults = await Promise.allSettled(
-      orderIds.map(async (id) => {
-        const response = await api.get<OrderByIdResponse>(`/order/${id}`, {
-          signal,
-        });
-        if (response.data?.status_code === 200 && response.data.data) {
-          return response.data.data;
+    // Throttle the per-id fan-out so we don't open hundreds of sockets at
+    // once on slow mobile networks. 8 in flight is a healthy compromise
+    // between throughput and connection pressure.
+    //
+    // We use POST /search/order_search with `_id` + `detail: true` (the
+    // same path used by hero-today) rather than GET /order/{id}, because
+    // the REST endpoint omits fields like `price` and `qtys` from its
+    // response payload — which previously caused all rows to render as
+    // $0.00 in the transactions list.
+    const ID_CONCURRENCY = 8;
+    const fetchOne = async (id: string) => {
+      const payload: Record<string, unknown> = {
+        detail: true,
+        query: { _id: id },
+      };
+      if (token) payload.token = token;
+      const resp = await api.post<OrderSearchResponse>(
+        "/search/order_search",
+        payload,
+        { signal }
+      );
+      const orders = resp.data?.orders;
+      if (Array.isArray(orders) && orders.length > 0) {
+        const first = orders[0];
+        if (typeof first === "object" && first !== null) {
+          return first as OrderSearchItem;
         }
-        return null;
-      })
-    );
+      }
+      return null;
+    };
 
-    resolvedById = byIdResults
-      .filter(
-        (r): r is PromiseFulfilledResult<OrderSearchItem | null> => r.status === "fulfilled"
-      )
-      .map((r) => r.value)
-      .filter((v): v is OrderSearchItem => v !== null);
+    const collected: OrderSearchItem[] = [];
+    for (let i = 0; i < orderIds.length; i += ID_CONCURRENCY) {
+      if (signal?.aborted) break;
+      const batch = orderIds.slice(i, i + ID_CONCURRENCY);
+      const results = await Promise.allSettled(batch.map(fetchOne));
+      for (const r of results) {
+        if (r.status === "fulfilled" && r.value) collected.push(r.value);
+      }
+    }
+    resolvedById = collected;
   }
 
   const mergedOrders: OrderSearchItem[] = (() => {
@@ -1750,7 +2073,7 @@ export async function fetchOfficialSalesHistory(
     return list;
   })();
 
-  return mergedOrders.map((order, index) => {
+  const result: OfficialSaleRecord[] = mergedOrders.map((order, index) => {
     const items = Array.isArray(order.qtys)
       ? order.qtys.reduce((sum, qty) => sum + (Number.isFinite(qty) ? qty : 0), 0)
       : 0;
@@ -1758,6 +2081,7 @@ export async function fetchOfficialSalesHistory(
     const resolvedDate = resolveOrderTime(order) ?? start.toISOString();
     return {
       id: order.order_num ?? order.order_id ?? index,
+      rawId: typeof order.order_id === "string" ? order.order_id : undefined,
       date: resolvedDate,
       order_id: order.order_num ? `#${order.order_num}` : order.order_id ?? `#${index}`,
       items: items || 1,
@@ -1767,6 +2091,11 @@ export async function fetchOfficialSalesHistory(
       status: mapOrderStatus(order.status),
     };
   });
+
+  if (!signal?.aborted) {
+    salesHistoryCache.set(cacheKey, { ts: Date.now(), data: result });
+  }
+  return result;
 }
 
 export async function fetchOfficialDiningOptions(
@@ -1786,39 +2115,55 @@ export async function fetchOfficialPosBreakdown(
 }> {
   const { token, shopId: storeId } = await resolveOfficialShopContext(auth);
 
-  let startDate: string, endDate: string;
-  const now = new Date();
-
-  if (period === "month") {
-    const range = getMonthRange(now);
-    startDate = range.startDate;
-    endDate = range.endDate;
-  } else if (period === "week") {
-    const range = getWeeklyRange(now);
-    startDate = range.startDate;
-    endDate = range.endDate;
-  } else {
-    const range = getTodayRange(now);
-    startDate = range.startDate;
-    endDate = range.endDate;
-  }
-
-  const response = await api.post<PosDashboardResponse>("/pos/dashboard", {
-    shop_id: storeId,
-    start_date: startDate,
-    end_date: endDate,
-    status: "paid",
-    token,
-  });
-
-  const data = response.data;
+  const data = await fetchPosDashboardCached(storeId, token, period);
   if (data?.status_code !== 200) {
     throw new Error("POS dashboard request failed.");
   }
 
+  let dineOptions: Record<string, number> = data?.sales_by_dine_option ?? {};
+  let methods: Record<string, number> = data?.sales_by_method ?? {};
+
+  // /pos/dashboard occasionally returns empty `sales_by_dine_option` /
+  // `sales_by_method` even when there are paid orders for the period
+  // (e.g. orders with no recorded dine option). The same period's
+  // /dashboard/storeStatistics response carries the authoritative
+  // `breakdowns.dining_mode` / `breakdowns.payment_method` (also used by
+  // the Reports/Sales page), so fall back to it when the POS payload is
+  // empty. The storeStatistics call is cached per range, so this is
+  // typically a no-op once the Reports tab has been opened.
+  const dineEmpty = Object.keys(dineOptions).length === 0;
+  const methodsEmpty = Object.keys(methods).length === 0;
+  if (dineEmpty || methodsEmpty) {
+    try {
+      const now = new Date();
+      const range =
+        period === "month"
+          ? getMonthRange(now)
+          : period === "week"
+          ? getWeeklyRange(now)
+          : getTodayRange(now);
+      // Convert the formatted range strings back to Date for the cached API.
+      const startDate = new Date(range.startDate.replace(" ", "T").replace(" +", "+"));
+      const endDate = new Date(range.endDate.replace(" ", "T").replace(" +", "+"));
+      const stats = await fetchOfficialStoreStatisticsRange(
+        Number.isNaN(startDate.getTime()) ? now : startDate,
+        Number.isNaN(endDate.getTime()) ? now : endDate,
+        auth
+      );
+      if (dineEmpty && Object.keys(stats.diningMode).length > 0) {
+        dineOptions = stats.diningMode;
+      }
+      if (methodsEmpty && Object.keys(stats.paymentMethod).length > 0) {
+        methods = stats.paymentMethod;
+      }
+    } catch (err) {
+      console.log("[pos-breakdown] storeStatistics fallback failed:", err);
+    }
+  }
+
   return {
-    sales_by_dine_option: data?.sales_by_dine_option ?? {},
-    sales_by_method: data?.sales_by_method ?? {},
+    sales_by_dine_option: dineOptions,
+    sales_by_method: methods,
   };
 }
 

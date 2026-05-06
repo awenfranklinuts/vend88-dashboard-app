@@ -24,6 +24,7 @@ import {
   fetchOfficialRecentOrders,
   fetchOfficialTopSellingItems,
   fetchOfficialPosBreakdown,
+  invalidateOfficialDashboardCaches,
 } from "../../src/services/officialDashboard";
 import { AnimatedNumber } from "../../src/components/AnimatedNumber";
 import { PulsingDot } from "../../src/components/PulsingDot";
@@ -741,6 +742,14 @@ export default function DashboardScreen() {
   const onRefresh = async () => {
     haptic.light();
     setRefreshing(true);
+    if (API_TARGET === "official") {
+      invalidateOfficialDashboardCaches();
+      // Clear in-component series so the period-loader re-fetches the
+      // currently-active hero chart after caches are dropped.
+      setChart([]);
+      setMonthChart([]);
+      setTodayChart([]);
+    }
     await fetchAll();
     haptic.success();
     setRefreshing(false);
