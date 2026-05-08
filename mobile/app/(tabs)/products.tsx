@@ -1,17 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactElement } from "react";
 import {
   FlatList,
+  Image,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
+  SectionList,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { api } from "../../src/services/api";
+import { API_TARGET, api } from "../../src/services/api";
+import { useAuth } from "../../src/context/AuthContext";
+import {
+  fetchAllOfficialProducts,
+  fetchOfficialProductCategories,
+} from "../../src/services/officialDashboard";
 import { AnimatedNumber } from "../../src/components/AnimatedNumber";
 import { Skeleton } from "../../src/components/Skeleton";
 import { SectionLabel } from "../../src/components/SectionLabel";
@@ -19,6 +29,7 @@ import { haptic } from "../../src/utils/haptics";
 import {
   ACCENT,
   BG,
+  BG_ELEVATED,
   CARD,
   CARD_BORDER,
   DANGER,
@@ -35,13 +46,45 @@ import {
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type Product = {
-  id: number;
+  id: string;
   name: string;
   category: string;
-  price: string;
+  price: number;
+  imageUrl?: string;
+  sku?: string;
+  description?: string;
+  active: boolean;
+  pricingUnit?: string;
 };
 
 type ViewMode = "grid" | "list";
+
+type SortMode = "category" | "name-asc" | "price-asc" | "price-desc";
+
+type PriceBucketId = "all" | "lt10" | "10to50" | "50to200" | "gte200";
+
+type PriceBucket = {
+  id: PriceBucketId;
+  label: string;
+  match: (price: number) => boolean;
+};
+
+const PRICE_BUCKETS: PriceBucket[] = [
+  { id: "all", label: "Any price", match: () => true },
+  { id: "lt10", label: "Under $10", match: (p) => p < 10 },
+  { id: "10to50", label: "$10 – $50", match: (p) => p >= 10 && p < 50 },
+  { id: "50to200", label: "$50 – $200", match: (p) => p >= 50 && p < 200 },
+  { id: "gte200", label: "$200+", match: (p) => p >= 200 },
+];
+
+const SORT_OPTIONS: Array<{ id: SortMode; label: string }> = [
+  { id: "category", label: "By category" },
+  { id: "name-asc", label: "Name (A–Z)" },
+  { id: "price-asc", label: "Price (low → high)" },
+  { id: "price-desc", label: "Price (high → low)" },
+];
+
+const UNCATEGORIZED = "Uncategorized";
 
 // ─── Category styling ────────────────────────────────────────────────────────
 
@@ -50,11 +93,32 @@ const CATEGORY_META: Record<
   { icon: keyof typeof Ionicons.glyphMap; color: string }
 > = {
   Beverages: { icon: "cafe-outline", color: "#10b981" },
+  Beverage: { icon: "cafe-outline", color: "#10b981" },
+  Drinks: { icon: "wine-outline", color: "#06b6d4" },
+  "Cold drinks": { icon: "snow-outline", color: "#38bdf8" },
+  "Hot drinks": { icon: "flame-outline", color: "#f97316" },
+  Coffee: { icon: "cafe-outline", color: "#92400e" },
+  Tea: { icon: "leaf-outline", color: "#16a34a" },
+  "Milk Tea": { icon: "cafe-outline", color: "#a16207" },
   Bakery: { icon: "pizza-outline", color: "#f59e0b" },
+  Pastries: { icon: "pizza-outline", color: "#f59e0b" },
+  Cake: { icon: "ice-cream-outline", color: "#ec4899" },
   Food: { icon: "restaurant-outline", color: "#ef4444" },
+  Bento: { icon: "fast-food-outline", color: "#dc2626" },
+  Ramen: { icon: "restaurant-outline", color: "#b91c1c" },
+  Sushi: { icon: "fish-outline", color: "#0891b2" },
+  Sashimi: { icon: "fish-outline", color: "#0e7490" },
+  Nigiri: { icon: "fish-outline", color: "#155e75" },
+  Sake: { icon: "wine-outline", color: "#7c3aed" },
+  "Hot Pot": { icon: "flame-outline", color: "#ea580c" },
+  "Stir Fry": { icon: "flame-outline", color: "#dc2626" },
+  "All-day breakfast": { icon: "egg-outline", color: "#facc15" },
   Snacks: { icon: "fast-food-outline", color: "#8b5cf6" },
   Desserts: { icon: "ice-cream-outline", color: "#ec4899" },
+  Clothing: { icon: "shirt-outline", color: "#0ea5e9" },
   Other: { icon: "cube-outline", color: ACCENT },
+  Unknown: { icon: "help-circle-outline", color: TEXT_DIM },
+  [UNCATEGORIZED]: { icon: "cube-outline", color: TEXT_DIM },
 };
 
 function catMeta(cat: string) {
@@ -69,29 +133,82 @@ function parseMoney(v: string | number | undefined): number {
   return Number(String(v).replace(/[^0-9.-]/g, "")) || 0;
 }
 
+function formatPrice(n: number): string {
+  // Show 2 decimals only if needed to avoid noisy ".00" on integer prices.
+  return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
+
+function pickPrimaryCategory(categories: string[] | undefined): string {
+  if (!categories || categories.length === 0) return UNCATEGORIZED;
+  const first = categories.find((c) => c && c.trim().length > 0);
+  return first ?? UNCATEGORIZED;
+}
+
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function ProductsScreen() {
+  const { token, email } = useAuth();
   const [items, setItems] = useState<Product[]>([]);
+  const [serverCategories, setServerCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
   const [category, setCategory] = useState<string>("All");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [sortMode, setSortMode] = useState<SortMode>("category");
+  const [priceBucket, setPriceBucket] = useState<PriceBucketId>("all");
+  const [onlyActive, setOnlyActive] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
 
   const fetchProducts = async () => {
     try {
-      const response = await api.get<Product[]>("/products");
-      setItems(response.data);
+      if (API_TARGET === "official") {
+        const auth = { token: token ?? undefined, email: email ?? undefined };
+        const [products, categories] = await Promise.all([
+          fetchAllOfficialProducts(auth),
+          fetchOfficialProductCategories(auth).catch(() => [] as string[]),
+        ]);
+        const mapped: Product[] = products.map((p) => ({
+          id: p.product_id,
+          name: p.name?.trim() || "Untitled",
+          category: pickPrimaryCategory(p.category),
+          price: typeof p.price === "number" ? p.price : parseMoney(p.price),
+          imageUrl:
+            Array.isArray(p.image_urls) && p.image_urls.length > 0
+              ? p.image_urls[0]
+              : undefined,
+          sku: p.sku?.trim() || undefined,
+          description: p.description?.trim() || undefined,
+          active: p.active !== false,
+          pricingUnit: p.pricing_unit,
+        }));
+        setItems(mapped);
+        setServerCategories(categories);
+      } else {
+        const response = await api.get<
+          Array<{ id: number | string; name: string; category: string; price: string | number }>
+        >("/products");
+        const mapped: Product[] = response.data.map((p) => ({
+          id: String(p.id),
+          name: p.name,
+          category: p.category || UNCATEGORIZED,
+          price: parseMoney(p.price),
+          active: true,
+        }));
+        setItems(mapped);
+        setServerCategories([]);
+      }
     } catch {
       setItems([]);
+      setServerCategories([]);
     }
   };
 
   useEffect(() => {
     fetchProducts().finally(() => setLoading(false));
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   const onRefresh = async () => {
     haptic.light();
@@ -116,12 +233,18 @@ export default function ProductsScreen() {
     let max = 0;
     for (const p of items) {
       counts.set(p.category, (counts.get(p.category) ?? 0) + 1);
-      const price = parseMoney(p.price);
+      const price = p.price;
       sum += price;
       if (price < min) min = price;
       if (price > max) max = price;
     }
-    const cats = ["All", ...Array.from(counts.keys()).sort()];
+    // Build chip list: "All" + categories that actually have products,
+    // sorted by count desc. Server categories are reserved for future use
+    // (e.g. empty-state suggestions) but we don't show empty chips.
+    const usedCats = Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name);
+    const cats = ["All", ...usedCats];
     const total = items.length;
     const breakdown = Array.from(counts.entries())
       .map(([name, count]) => ({
@@ -144,17 +267,66 @@ export default function ProductsScreen() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return items.filter((i) => {
+    const bucket = PRICE_BUCKETS.find((b) => b.id === priceBucket) ?? PRICE_BUCKETS[0];
+    const list = items.filter((i) => {
       if (category !== "All" && i.category !== category) return false;
+      if (onlyActive && !i.active) return false;
+      if (!bucket.match(i.price)) return false;
       if (
         q &&
         !i.name.toLowerCase().includes(q) &&
-        !i.category.toLowerCase().includes(q)
+        !i.category.toLowerCase().includes(q) &&
+        !(i.sku?.toLowerCase().includes(q))
       )
         return false;
       return true;
     });
-  }, [items, search, category]);
+
+    if (sortMode === "name-asc") {
+      list.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sortMode === "price-asc") {
+      list.sort((a, b) => a.price - b.price);
+    } else if (sortMode === "price-desc") {
+      list.sort((a, b) => b.price - a.price);
+    } else {
+      // category sort: by category name (count desc via categoryCounts), then name
+      list.sort((a, b) => {
+        if (a.category !== b.category) {
+          const ca = categoryCounts.get(a.category) ?? 0;
+          const cb = categoryCounts.get(b.category) ?? 0;
+          if (ca !== cb) return cb - ca;
+          return a.category.localeCompare(b.category);
+        }
+        return a.name.localeCompare(b.name);
+      });
+    }
+    return list;
+  }, [items, search, category, onlyActive, priceBucket, sortMode, categoryCounts]);
+
+  // When sort = "category" and not filtering to one category, group rows by category
+  // for SectionList rendering. Otherwise sections is null and we render a flat list.
+  const sections = useMemo(() => {
+    if (sortMode !== "category" || category !== "All") return null;
+    const map = new Map<string, Product[]>();
+    for (const p of filtered) {
+      const arr = map.get(p.category);
+      if (arr) arr.push(p);
+      else map.set(p.category, [p]);
+    }
+    // Order: by count desc using categoryCounts (already used in sort)
+    const ordered = Array.from(map.entries()).sort((a, b) => {
+      const ca = categoryCounts.get(a[0]) ?? 0;
+      const cb = categoryCounts.get(b[0]) ?? 0;
+      if (ca !== cb) return cb - ca;
+      return a[0].localeCompare(b[0]);
+    });
+    return ordered.map(([title, data]) => ({ title, data }));
+  }, [filtered, sortMode, category, categoryCounts]);
+
+  const activeFilterCount =
+    (priceBucket !== "all" ? 1 : 0) +
+    (onlyActive ? 1 : 0) +
+    (sortMode !== "category" ? 1 : 0);
 
   const Header = (
     <>
@@ -166,10 +338,26 @@ export default function ProductsScreen() {
         </View>
         <Pressable
           accessibilityLabel="Filters"
-          onPress={() => haptic.selection()}
-          style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
+          onPress={() => {
+            haptic.selection();
+            setFilterOpen(true);
+          }}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            activeFilterCount > 0 && styles.iconBtnPrimary,
+            pressed && styles.pressed,
+          ]}
         >
-          <Ionicons name="options-outline" size={18} color={TEXT} />
+          <Ionicons
+            name="options-outline"
+            size={18}
+            color={activeFilterCount > 0 ? GOLD : TEXT}
+          />
+          {activeFilterCount > 0 && (
+            <View style={styles.filterBadge}>
+              <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
+            </View>
+          )}
         </Pressable>
         <Pressable
           accessibilityLabel="Add product"
@@ -271,40 +459,6 @@ export default function ProductsScreen() {
             </View>
           </View>
 
-          {/* Category mix — stacked bar with legend */}
-          {categoryBreakdown.length > 0 && (
-            <View style={styles.block}>
-              <SectionLabel
-                label="Category Mix"
-                right={
-                  <Text style={styles.sectionHint}>
-                    {categoryBreakdown.length}{" "}
-                    {categoryBreakdown.length === 1 ? "category" : "categories"}
-                  </Text>
-                }
-              />
-              <View style={styles.stackedBar}>
-                {categoryBreakdown.map((c) => (
-                  <View
-                    key={c.name}
-                    style={{ width: `${c.pct}%`, backgroundColor: c.color }}
-                  />
-                ))}
-              </View>
-              <View style={styles.legend}>
-                {categoryBreakdown.map((c) => (
-                  <View key={c.name} style={styles.legendItem}>
-                    <View
-                      style={[styles.legendDot, { backgroundColor: c.color }]}
-                    />
-                    <Text style={styles.legendName}>{c.name}</Text>
-                    <Text style={styles.legendPct}>{c.pct.toFixed(0)}%</Text>
-                  </View>
-                ))}
-              </View>
-            </View>
-          )}
-
           {/* Search */}
           <View
             style={[styles.searchRow, searchFocused && styles.searchRowFocused]}
@@ -346,6 +500,7 @@ export default function ProductsScreen() {
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
+              style={styles.chipsScroll}
               contentContainerStyle={styles.chipsRow}
             >
               {categories.map((c) => {
@@ -391,7 +546,13 @@ export default function ProductsScreen() {
           {/* Section header for the list */}
           <View style={styles.listHeaderRow}>
             <SectionLabel
-              label={category === "All" ? "All products" : category}
+              label={
+                category === "All"
+                  ? sortMode === "category"
+                    ? "By category"
+                    : "All products"
+                  : category
+              }
               style={{ flex: 1, marginTop: 0, marginBottom: 0 }}
               right={
                 <Text style={styles.sectionHint}>
@@ -452,7 +613,7 @@ export default function ProductsScreen() {
     const isLeft = index % 2 === 0;
     return (
       <Pressable
-        accessibilityLabel={`${item.name}, ${item.category}, ${item.price} dollars`}
+        accessibilityLabel={`${item.name}, ${item.category}, ${formatPrice(item.price)} dollars`}
         onPress={() => haptic.light()}
         style={({ pressed }) => [
           styles.gridCard,
@@ -460,19 +621,34 @@ export default function ProductsScreen() {
           pressed && styles.pressed,
         ]}
       >
-        <View style={styles.gridCardTop}>
-          <View
-            style={[styles.gridIcon, { backgroundColor: meta.color + "1f" }]}
-          >
-            <Ionicons name={meta.icon} size={22} color={meta.color} />
-          </View>
+        <View
+          style={[
+            styles.gridImageWrap,
+            { backgroundColor: meta.color + "14" },
+          ]}
+        >
+          {item.imageUrl ? (
+            <Image
+              source={{ uri: item.imageUrl }}
+              style={styles.gridImage}
+              resizeMode="cover"
+            />
+          ) : (
+            <Ionicons name={meta.icon} size={36} color={meta.color} />
+          )}
           <Pressable
             accessibilityLabel="Product options"
             onPress={() => haptic.selection()}
             hitSlop={10}
+            style={styles.gridMore}
           >
-            <Ionicons name="ellipsis-horizontal" size={16} color={TEXT_DIM} />
+            <Ionicons name="ellipsis-horizontal" size={14} color={TEXT} />
           </Pressable>
+          {!item.active && (
+            <View style={styles.inactiveBadge}>
+              <Text style={styles.inactiveBadgeText}>INACTIVE</Text>
+            </View>
+          )}
         </View>
         <View
           style={[styles.gridTag, { backgroundColor: meta.color + "1a" }]}
@@ -485,10 +661,17 @@ export default function ProductsScreen() {
           {item.name}
         </Text>
         <View style={styles.gridFooter}>
-          <Text style={styles.gridPrice}>${item.price}</Text>
+          <Text style={styles.gridPrice}>${formatPrice(item.price)}</Text>
           <View style={styles.gridStatus}>
-            <View style={[styles.gridStatusDot, { backgroundColor: SUCCESS }]} />
-            <Text style={styles.gridStatusText}>In stock</Text>
+            <View
+              style={[
+                styles.gridStatusDot,
+                { backgroundColor: item.active ? SUCCESS : TEXT_FAINT },
+              ]}
+            />
+            <Text style={styles.gridStatusText}>
+              {item.active ? "Active" : "Inactive"}
+            </Text>
           </View>
         </View>
       </Pressable>
@@ -506,7 +689,7 @@ export default function ProductsScreen() {
     const isLast = index === filtered.length - 1;
     return (
       <Pressable
-        accessibilityLabel={`${item.name}, ${item.category}, ${item.price} dollars`}
+        accessibilityLabel={`${item.name}, ${item.category}, ${formatPrice(item.price)} dollars`}
         onPress={() => haptic.light()}
         style={({ pressed }) => [
           styles.listRow,
@@ -514,8 +697,21 @@ export default function ProductsScreen() {
           pressed && styles.pressed,
         ]}
       >
-        <View style={[styles.listIcon, { backgroundColor: meta.color + "1f" }]}>
-          <Ionicons name={meta.icon} size={16} color={meta.color} />
+        <View
+          style={[
+            styles.listThumb,
+            { backgroundColor: meta.color + "1f" },
+          ]}
+        >
+          {item.imageUrl ? (
+            <Image
+              source={{ uri: item.imageUrl }}
+              style={styles.listThumbImage}
+              resizeMode="cover"
+            />
+          ) : (
+            <Ionicons name={meta.icon} size={18} color={meta.color} />
+          )}
         </View>
         <View style={styles.listMid}>
           <View style={styles.listTopRow}>
@@ -531,12 +727,32 @@ export default function ProductsScreen() {
             </View>
           </View>
           <View style={styles.listSubRow}>
-            <View style={[styles.statusDot, { backgroundColor: SUCCESS }]} />
-            <Text style={[styles.listSub, { color: SUCCESS }]}>In stock</Text>
+            <View
+              style={[
+                styles.statusDot,
+                { backgroundColor: item.active ? SUCCESS : TEXT_FAINT },
+              ]}
+            />
+            <Text
+              style={[
+                styles.listSub,
+                { color: item.active ? SUCCESS : TEXT_DIM },
+              ]}
+            >
+              {item.active ? "Active" : "Inactive"}
+            </Text>
+            {item.sku ? (
+              <>
+                <Text style={styles.listSubDot}>·</Text>
+                <Text style={styles.listSubMuted} numberOfLines={1}>
+                  {item.sku}
+                </Text>
+              </>
+            ) : null}
           </View>
         </View>
         <View style={styles.listRight}>
-          <Text style={styles.listPrice}>${item.price}</Text>
+          <Text style={styles.listPrice}>${formatPrice(item.price)}</Text>
           <Ionicons name="chevron-forward" size={14} color={TEXT_FAINT} />
         </View>
       </Pressable>
@@ -575,6 +791,107 @@ export default function ProductsScreen() {
     </View>
   );
 
+  // For SectionList grid mode: group each section's data into pairs of products
+  // so each rendered "row" is two cards side-by-side.
+  const gridSections = useMemo(() => {
+    if (!sections) return null;
+    return sections.map((s) => {
+      const rows: Array<[Product, Product?]> = [];
+      for (let i = 0; i < s.data.length; i += 2) {
+        rows.push([s.data[i], s.data[i + 1]]);
+      }
+      return { title: s.title, data: rows };
+    });
+  }, [sections]);
+
+  const renderGridSectionRow = ({ item: row }: { item: [Product, Product?] }) => (
+    <View style={styles.gridRow}>
+      <View style={{ flex: 1 }}>
+        {renderGridItemNoMargin(row[0])}
+      </View>
+      <View style={{ flex: 1 }}>
+        {row[1] ? renderGridItemNoMargin(row[1]) : null}
+      </View>
+    </View>
+  );
+
+  const renderGridItemNoMargin = (item: Product) => {
+    const meta = catMeta(item.category);
+    return (
+      <Pressable
+        accessibilityLabel={`${item.name}, ${item.category}, ${formatPrice(item.price)} dollars`}
+        onPress={() => haptic.light()}
+        style={({ pressed }) => [styles.gridCard, pressed && styles.pressed]}
+      >
+        <View
+          style={[
+            styles.gridImageWrap,
+            { backgroundColor: meta.color + "14" },
+          ]}
+        >
+          {item.imageUrl ? (
+            <Image
+              source={{ uri: item.imageUrl }}
+              style={styles.gridImage}
+              resizeMode="cover"
+            />
+          ) : (
+            <Ionicons name={meta.icon} size={36} color={meta.color} />
+          )}
+          <Pressable
+            accessibilityLabel="Product options"
+            onPress={() => haptic.selection()}
+            hitSlop={10}
+            style={styles.gridMore}
+          >
+            <Ionicons name="ellipsis-horizontal" size={14} color={TEXT} />
+          </Pressable>
+          {!item.active && (
+            <View style={styles.inactiveBadge}>
+              <Text style={styles.inactiveBadgeText}>INACTIVE</Text>
+            </View>
+          )}
+        </View>
+        <View
+          style={[styles.gridTag, { backgroundColor: meta.color + "1a" }]}
+        >
+          <Text style={[styles.gridTagText, { color: meta.color }]}>
+            {item.category}
+          </Text>
+        </View>
+        <Text style={styles.gridName} numberOfLines={2}>
+          {item.name}
+        </Text>
+        <View style={styles.gridFooter}>
+          <Text style={styles.gridPrice}>${formatPrice(item.price)}</Text>
+          <View style={styles.gridStatus}>
+            <View
+              style={[
+                styles.gridStatusDot,
+                { backgroundColor: item.active ? SUCCESS : TEXT_FAINT },
+              ]}
+            />
+            <Text style={styles.gridStatusText}>
+              {item.active ? "Active" : "Inactive"}
+            </Text>
+          </View>
+        </View>
+      </Pressable>
+    );
+  };
+
+  const renderSectionHeader = ({ section }: { section: { title: string; data: unknown[] } }) => {
+    const meta = catMeta(section.title);
+    const count = categoryCounts.get(section.title) ?? 0;
+    return (
+      <View style={styles.sectionHeader}>
+        <View style={[styles.sectionHeaderDot, { backgroundColor: meta.color }]} />
+        <Text style={styles.sectionHeaderTitle}>{section.title}</Text>
+        <Text style={styles.sectionHeaderCount}>{count}</Text>
+      </View>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
       {loading ? (
@@ -590,6 +907,50 @@ export default function ProductsScreen() {
             ))}
           </View>
         </ScrollView>
+      ) : sections && gridSections ? (
+        <SectionList
+          key={viewMode}
+          sections={
+            viewMode === "grid"
+              ? (gridSections as unknown as Array<{
+                  title: string;
+                  data: Array<[Product, Product?]>;
+                }>)
+              : (sections as Array<{ title: string; data: Product[] }>)
+          }
+          keyExtractor={(item, index) =>
+            Array.isArray(item)
+              ? `pair-${index}-${item[0]?.id}`
+              : String((item as Product).id)
+          }
+          stickySectionHeadersEnabled={false}
+          style={styles.container}
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={GOLD}
+            />
+          }
+          ListHeaderComponent={Header}
+          renderSectionHeader={renderSectionHeader}
+          renderItem={
+            (viewMode === "grid"
+              ? renderGridSectionRow
+              : renderListItem) as unknown as (info: {
+              item: unknown;
+              index: number;
+            }) => ReactElement
+          }
+          ItemSeparatorComponent={
+            viewMode === "grid"
+              ? () => <View style={{ height: 10 }} />
+              : null
+          }
+          ListEmptyComponent={EmptyState}
+        />
       ) : (
         <FlatList
           key={viewMode}
@@ -618,6 +979,148 @@ export default function ProductsScreen() {
           ListEmptyComponent={EmptyState}
         />
       )}
+
+      {/* ── Filter modal ──────────────────────────────────────────── */}
+      <Modal
+        visible={filterOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFilterOpen(false)}
+      >
+        <Pressable
+          style={styles.filterBackdrop}
+          onPress={() => setFilterOpen(false)}
+        >
+          <Pressable style={styles.filterCard} onPress={() => {}}>
+            <View style={styles.filterHeader}>
+              <Text style={styles.filterTitle}>Filters</Text>
+              <Pressable
+                accessibilityLabel="Close filters"
+                onPress={() => setFilterOpen(false)}
+                hitSlop={8}
+                style={({ pressed }) => [
+                  styles.filterCloseBtn,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Ionicons name="close" size={18} color={TEXT} />
+              </Pressable>
+            </View>
+
+            {/* Sort */}
+            <Text style={styles.filterGroupLabel}>SORT BY</Text>
+            <View style={styles.filterChipsWrap}>
+              {SORT_OPTIONS.map((opt) => {
+                const active = sortMode === opt.id;
+                return (
+                  <Pressable
+                    key={opt.id}
+                    onPress={() => {
+                      haptic.selection();
+                      setSortMode(opt.id);
+                    }}
+                    style={[
+                      styles.filterChip,
+                      active && styles.filterChipActive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.filterChipText,
+                        active && styles.filterChipTextActive,
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Price */}
+            <Text style={styles.filterGroupLabel}>PRICE</Text>
+            <View style={styles.filterChipsWrap}>
+              {PRICE_BUCKETS.map((b) => {
+                const active = priceBucket === b.id;
+                return (
+                  <Pressable
+                    key={b.id}
+                    onPress={() => {
+                      haptic.selection();
+                      setPriceBucket(b.id);
+                    }}
+                    style={[
+                      styles.filterChip,
+                      active && styles.filterChipActive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.filterChipText,
+                        active && styles.filterChipTextActive,
+                      ]}
+                    >
+                      {b.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Active only */}
+            <View style={styles.filterToggleRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.filterToggleLabel}>Active products only</Text>
+                <Text style={styles.filterToggleHint}>
+                  Hide items marked inactive
+                </Text>
+              </View>
+              <Switch
+                value={onlyActive}
+                onValueChange={(v) => {
+                  haptic.selection();
+                  setOnlyActive(v);
+                }}
+                trackColor={{ false: "rgba(255,255,255,0.12)", true: GOLD_DIM }}
+                thumbColor={onlyActive ? GOLD : "#9ca3af"}
+              />
+            </View>
+
+            {/* Actions */}
+            <View style={styles.filterActions}>
+              <Pressable
+                onPress={() => {
+                  haptic.selection();
+                  setSortMode("category");
+                  setPriceBucket("all");
+                  setOnlyActive(false);
+                }}
+                style={({ pressed }) => [
+                  styles.filterSecondaryBtn,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.filterSecondaryBtnText}>Reset</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  haptic.success();
+                  setFilterOpen(false);
+                }}
+                style={({ pressed }) => [
+                  styles.filterPrimaryBtn,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.filterPrimaryBtnText}>
+                  Show {filtered.length}{" "}
+                  {filtered.length === 1 ? "item" : "items"}
+                </Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -777,6 +1280,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
+    marginTop: 8,
   },
   searchRowFocused: {
     borderColor: GOLD,
@@ -793,6 +1297,7 @@ const styles = StyleSheet.create({
 
   // Category chips
   chipsRow: { gap: 8, paddingVertical: 2 },
+  chipsScroll: { marginTop: 14 },
   chip: {
     flexDirection: "row",
     alignItems: "center",
@@ -829,6 +1334,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    marginTop: 16,
+    marginBottom: 4,
   },
   viewToggle: {
     flexDirection: "row",
@@ -869,6 +1376,41 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
+  },
+  gridImageWrap: {
+    width: "100%",
+    aspectRatio: 1.1,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  gridImage: { width: "100%", height: "100%" },
+  gridMore: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  inactiveBadge: {
+    position: "absolute",
+    bottom: 6,
+    left: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
+  inactiveBadgeText: {
+    color: "#fff",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.6,
   },
   gridTag: {
     alignSelf: "flex-start",
@@ -918,6 +1460,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  listThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  listThumbImage: { width: "100%", height: "100%" },
   listMid: { flex: 1, gap: 4 },
   listTopRow: {
     flexDirection: "row",
@@ -941,6 +1492,13 @@ const styles = StyleSheet.create({
   listSubRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   statusDot: { width: 5, height: 5, borderRadius: 2.5 },
   listSub: { fontSize: 11, fontWeight: "600", letterSpacing: 0.2 },
+  listSubDot: { color: TEXT_FAINT, fontSize: 11, fontWeight: "700" },
+  listSubMuted: {
+    color: TEXT_DIM,
+    fontSize: 11,
+    fontWeight: "500",
+    flexShrink: 1,
+  },
   listRight: { alignItems: "flex-end", gap: 4 },
   listPrice: {
     fontSize: 15,
@@ -984,6 +1542,169 @@ const styles = StyleSheet.create({
     color: GOLD,
     fontWeight: "700",
     fontSize: 12,
+    letterSpacing: 0.2,
+  },
+
+  // Filter button badge
+  filterBadge: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    backgroundColor: GOLD,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: BG,
+  },
+  filterBadgeText: { color: BG, fontSize: 9, fontWeight: "900" },
+
+  // Section header (per-category) for SectionList grouped view
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingTop: 14,
+    paddingBottom: 8,
+    backgroundColor: BG,
+  },
+  sectionHeaderDot: { width: 8, height: 8, borderRadius: 4 },
+  sectionHeaderTitle: {
+    flex: 1,
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+  },
+  sectionHeaderCount: {
+    color: TEXT_DIM,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+
+  // Grid row used inside SectionList
+  gridRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  gridFiller: { flex: 1 },
+
+  // Filter modal
+  filterBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    justifyContent: "flex-end",
+  },
+  filterCard: {
+    backgroundColor: BG_ELEVATED,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    paddingBottom: 32,
+    gap: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  filterHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  filterTitle: {
+    flex: 1,
+    color: TEXT,
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+  },
+  filterCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  filterGroupLabel: {
+    color: TEXT_DIM,
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1.5,
+    marginTop: 4,
+  },
+  filterChipsWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  filterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  filterChipActive: {
+    backgroundColor: GOLD_DIM,
+    borderColor: "rgba(212,175,55,0.4)",
+  },
+  filterChipText: { color: TEXT_DIM, fontSize: 12, fontWeight: "700" },
+  filterChipTextActive: { color: GOLD },
+  filterToggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    marginTop: 4,
+  },
+  filterToggleLabel: {
+    color: TEXT,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  filterToggleHint: {
+    color: TEXT_DIM,
+    fontSize: 11,
+    fontWeight: "500",
+    marginTop: 2,
+  },
+  filterActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 8,
+  },
+  filterSecondaryBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  filterSecondaryBtnText: {
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  filterPrimaryBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: GOLD,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  filterPrimaryBtnText: {
+    color: BG,
+    fontSize: 13,
+    fontWeight: "800",
     letterSpacing: 0.2,
   },
 });

@@ -2247,3 +2247,123 @@ export async function fetchOfficialCloseHistory(
 
   return Array.isArray(data.daily_closes) ? data.daily_closes : [];
 }
+
+// ─── Catalog: categories + products ─────────────────────────────────────────
+
+export type OfficialProduct = {
+  product_id: string;
+  name: string;
+  category: string[];
+  price: number;
+  description?: string;
+  image_urls: string[];
+  sku?: string;
+  active: boolean;
+  pricing_unit?: string;
+  prepare_time?: number;
+  calorie?: number;
+};
+
+type AllCategoryResponse = {
+  status_code?: number;
+  categorys?: string[];
+};
+
+type CatalogProductSearchResponse = {
+  status_code?: number;
+  max_page?: number;
+  products?: OfficialProduct[];
+};
+
+const PRODUCT_CATEGORIES_TTL_MS = 60_000;
+const productCategoriesCache = new Map<
+  string,
+  { ts: number; data: string[] }
+>();
+
+export async function fetchOfficialProductCategories(
+  auth?: AuthOverride
+): Promise<string[]> {
+  const { token, businessId } = await resolveOfficialShopContext(auth);
+
+  const cacheKey = businessId;
+  const cached = productCategoriesCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < PRODUCT_CATEGORIES_TTL_MS) {
+    return cached.data;
+  }
+
+  const payload: Record<string, unknown> = { business_id: businessId };
+  if (token) payload.token = token;
+
+  const response = await api.post<AllCategoryResponse>(
+    "/product/all_category",
+    payload
+  );
+
+  const data = response.data;
+  if (data?.status_code !== 200) {
+    throw new Error("Categories request failed.");
+  }
+
+  const categories = Array.isArray(data.categorys) ? data.categorys : [];
+  productCategoriesCache.set(cacheKey, { ts: Date.now(), data: categories });
+  return categories;
+}
+
+export async function fetchOfficialProductPage(
+  pageIdx: number,
+  pageSize: number,
+  auth?: AuthOverride
+): Promise<{ products: OfficialProduct[]; maxPage: number }> {
+  const { token, businessId } = await resolveOfficialShopContext(auth);
+
+  const payload: Record<string, unknown> = {
+    query: { business_id: businessId },
+    detail: true,
+    page_size: pageSize,
+    page_idx: pageIdx,
+  };
+  if (token) payload.token = token;
+
+  const response = await api.post<CatalogProductSearchResponse>(
+    "/search/product_search",
+    payload
+  );
+
+  const data = response.data;
+  if (data?.status_code !== 200) {
+    throw new Error("Product search failed.");
+  }
+
+  return {
+    products: Array.isArray(data.products) ? data.products : [],
+    maxPage: typeof data.max_page === "number" ? data.max_page : 1,
+  };
+}
+
+export async function fetchAllOfficialProducts(
+  auth?: AuthOverride,
+  pageSize = 100
+): Promise<OfficialProduct[]> {
+  const first = await fetchOfficialProductPage(0, pageSize, auth);
+  if (first.maxPage <= 1) return first.products;
+
+  const remaining = await Promise.all(
+    Array.from({ length: first.maxPage - 1 }, (_, i) =>
+      fetchOfficialProductPage(i + 1, pageSize, auth).then((r) => r.products)
+    )
+  );
+
+  const seen = new Set<string>();
+  const merged: OfficialProduct[] = [];
+  for (const list of [first.products, ...remaining]) {
+    for (const p of list) {
+      const key = p.product_id || p.name;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(p);
+    }
+  }
+  return merged;
+}
+
