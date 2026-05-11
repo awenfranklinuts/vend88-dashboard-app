@@ -16,6 +16,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 import { API_TARGET, api } from "../../src/services/api";
 import { useAuth } from "../../src/context/AuthContext";
 import {
@@ -49,6 +50,7 @@ type Product = {
   id: string;
   name: string;
   category: string;
+  categories: string[];
   price: number;
   imageUrl?: string;
   sku?: string;
@@ -144,6 +146,21 @@ function pickPrimaryCategory(categories: string[] | undefined): string {
   return first ?? UNCATEGORIZED;
 }
 
+function normalizeCategories(raw: string[] | string | undefined): string[] {
+  const list = Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const c of list) {
+    const value = String(c ?? "").trim();
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out.length > 0 ? out : [UNCATEGORIZED];
+}
+
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function ProductsScreen() {
@@ -169,10 +186,13 @@ export default function ProductsScreen() {
           fetchAllOfficialProducts(auth),
           fetchOfficialProductCategories(auth).catch(() => [] as string[]),
         ]);
-        const mapped: Product[] = products.map((p) => ({
+        const mapped: Product[] = products.map((p) => {
+          const normalizedCategories = normalizeCategories(p.category);
+          return {
           id: p.product_id,
           name: p.name?.trim() || "Untitled",
-          category: pickPrimaryCategory(p.category),
+          categories: normalizedCategories,
+          category: pickPrimaryCategory(normalizedCategories),
           price: typeof p.price === "number" ? p.price : parseMoney(p.price),
           imageUrl:
             Array.isArray(p.image_urls) && p.image_urls.length > 0
@@ -182,20 +202,25 @@ export default function ProductsScreen() {
           description: p.description?.trim() || undefined,
           active: p.active !== false,
           pricingUnit: p.pricing_unit,
-        }));
+          };
+        });
         setItems(mapped);
         setServerCategories(categories);
       } else {
         const response = await api.get<
           Array<{ id: number | string; name: string; category: string; price: string | number }>
         >("/products");
-        const mapped: Product[] = response.data.map((p) => ({
-          id: String(p.id),
-          name: p.name,
-          category: p.category || UNCATEGORIZED,
-          price: parseMoney(p.price),
-          active: true,
-        }));
+        const mapped: Product[] = response.data.map((p) => {
+          const normalizedCategories = normalizeCategories(p.category);
+          return {
+            id: String(p.id),
+            name: p.name,
+            categories: normalizedCategories,
+            category: pickPrimaryCategory(normalizedCategories),
+            price: parseMoney(p.price),
+            active: true,
+          };
+        });
         setItems(mapped);
         setServerCategories([]);
       }
@@ -232,7 +257,9 @@ export default function ProductsScreen() {
     let min = Number.POSITIVE_INFINITY;
     let max = 0;
     for (const p of items) {
-      counts.set(p.category, (counts.get(p.category) ?? 0) + 1);
+      for (const c of p.categories) {
+        counts.set(c, (counts.get(c) ?? 0) + 1);
+      }
       const price = p.price;
       sum += price;
       if (price < min) min = price;
@@ -246,11 +273,12 @@ export default function ProductsScreen() {
       .map(([name]) => name);
     const cats = ["All", ...usedCats];
     const total = items.length;
+    const assignmentTotal = Array.from(counts.values()).reduce((acc, n) => acc + n, 0);
     const breakdown = Array.from(counts.entries())
       .map(([name, count]) => ({
         name,
         count,
-        pct: total > 0 ? (count / total) * 100 : 0,
+        pct: assignmentTotal > 0 ? (count / assignmentTotal) * 100 : 0,
         color: catMeta(name).color,
       }))
       .sort((a, b) => b.count - a.count);
@@ -269,13 +297,13 @@ export default function ProductsScreen() {
     const q = search.trim().toLowerCase();
     const bucket = PRICE_BUCKETS.find((b) => b.id === priceBucket) ?? PRICE_BUCKETS[0];
     const list = items.filter((i) => {
-      if (category !== "All" && i.category !== category) return false;
+      if (category !== "All" && !i.categories.includes(category)) return false;
       if (onlyActive && !i.active) return false;
       if (!bucket.match(i.price)) return false;
       if (
         q &&
         !i.name.toLowerCase().includes(q) &&
-        !i.category.toLowerCase().includes(q) &&
+        !i.categories.some((c) => c.toLowerCase().includes(q)) &&
         !(i.sku?.toLowerCase().includes(q))
       )
         return false;
@@ -614,7 +642,10 @@ export default function ProductsScreen() {
     return (
       <Pressable
         accessibilityLabel={`${item.name}, ${item.category}, ${formatPrice(item.price)} dollars`}
-        onPress={() => haptic.light()}
+        onPress={() => {
+          haptic.light();
+          router.push(`/product/${item.id}`);
+        }}
         style={({ pressed }) => [
           styles.gridCard,
           { marginRight: isLeft ? 10 : 0, marginLeft: isLeft ? 0 : 10 },
@@ -690,7 +721,10 @@ export default function ProductsScreen() {
     return (
       <Pressable
         accessibilityLabel={`${item.name}, ${item.category}, ${formatPrice(item.price)} dollars`}
-        onPress={() => haptic.light()}
+        onPress={() => {
+          haptic.light();
+          router.push(`/product/${item.id}`);
+        }}
         style={({ pressed }) => [
           styles.listRow,
           !isLast && styles.listRowDivider,
@@ -820,7 +854,10 @@ export default function ProductsScreen() {
     return (
       <Pressable
         accessibilityLabel={`${item.name}, ${item.category}, ${formatPrice(item.price)} dollars`}
-        onPress={() => haptic.light()}
+        onPress={() => {
+          haptic.light();
+          router.push(`/product/${item.id}`);
+        }}
         style={({ pressed }) => [styles.gridCard, pressed && styles.pressed]}
       >
         <View

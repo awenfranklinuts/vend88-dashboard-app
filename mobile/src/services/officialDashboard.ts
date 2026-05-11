@@ -2271,7 +2271,11 @@ type AllCategoryResponse = {
 
 type CatalogProductSearchResponse = {
   status_code?: number;
-  max_page?: number;
+  max_page?: number | string;
+  maxPage?: number | string;
+  total_pages?: number | string;
+  total_page?: number | string;
+  pages?: number | string;
   products?: OfficialProduct[];
 };
 
@@ -2314,7 +2318,7 @@ export async function fetchOfficialProductPage(
   pageIdx: number,
   pageSize: number,
   auth?: AuthOverride
-): Promise<{ products: OfficialProduct[]; maxPage: number }> {
+): Promise<{ products: OfficialProduct[]; maxPageIndex: number | null }> {
   const { token, businessId } = await resolveOfficialShopContext(auth);
 
   const payload: Record<string, unknown> = {
@@ -2335,9 +2339,17 @@ export async function fetchOfficialProductPage(
     throw new Error("Product search failed.");
   }
 
+  const rawMaxPage =
+    data.max_page ?? data.maxPage ?? data.total_pages ?? data.total_page ?? data.pages;
+  const parsedMaxPage = Number(rawMaxPage);
+  const maxPageIndex =
+    Number.isFinite(parsedMaxPage) && parsedMaxPage >= 0
+      ? Math.floor(parsedMaxPage)
+      : null;
+
   return {
     products: Array.isArray(data.products) ? data.products : [],
-    maxPage: typeof data.max_page === "number" ? data.max_page : 1,
+    maxPageIndex,
   };
 }
 
@@ -2345,14 +2357,45 @@ export async function fetchAllOfficialProducts(
   auth?: AuthOverride,
   pageSize = 100
 ): Promise<OfficialProduct[]> {
-  const first = await fetchOfficialProductPage(0, pageSize, auth);
-  if (first.maxPage <= 1) return first.products;
+  const MAX_PAGES_HARD = 200;
+  const PAGE_CONCURRENCY = 6;
 
-  const remaining = await Promise.all(
-    Array.from({ length: first.maxPage - 1 }, (_, i) =>
-      fetchOfficialProductPage(i + 1, pageSize, auth).then((r) => r.products)
-    )
-  );
+  const first = await fetchOfficialProductPage(0, pageSize, auth);
+  if (first.products.length === 0) return [];
+
+  const declaredUpperBoundPages =
+    first.maxPageIndex != null
+      ? Math.min(Math.max(first.maxPageIndex + 1, 1), MAX_PAGES_HARD)
+      : null;
+  const totalPages =
+    declaredUpperBoundPages ??
+    (first.products.length >= pageSize ? MAX_PAGES_HARD : 1);
+
+  const remaining: OfficialProduct[][] = [];
+  if (totalPages > 1) {
+    const pages = Array.from({ length: totalPages - 1 }, (_, i) => i + 1);
+    for (let i = 0; i < pages.length; i += PAGE_CONCURRENCY) {
+      const batch = pages.slice(i, i + PAGE_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (page) => {
+          try {
+            const res = await fetchOfficialProductPage(page, pageSize, auth);
+            return res.products;
+          } catch {
+            return [] as OfficialProduct[];
+          }
+        })
+      );
+      let batchHadRows = false;
+      for (const rows of results) {
+        if (rows.length > 0) {
+          remaining.push(rows);
+          batchHadRows = true;
+        }
+      }
+      if (!batchHadRows) break;
+    }
+  }
 
   const seen = new Set<string>();
   const merged: OfficialProduct[] = [];
@@ -2365,5 +2408,39 @@ export async function fetchAllOfficialProducts(
     }
   }
   return merged;
+}
+
+export type OfficialProductDetail = OfficialProduct & {
+  business_id?: string;
+  options?: unknown[];
+  suffix?: unknown[];
+  tax_required?: boolean;
+};
+
+type ProductDetailResponse = OfficialProductDetail & {
+  status_code?: number;
+  _id?: string;
+};
+
+export async function fetchOfficialProductDetail(
+  productId: string,
+  auth?: AuthOverride
+): Promise<OfficialProductDetail> {
+  const { token } = await resolveOfficialShopContext(auth);
+
+  const payload: Record<string, unknown> = { product_id: productId };
+  if (token) payload.token = token;
+
+  const response = await api.post<ProductDetailResponse>(
+    "/product/detail",
+    payload
+  );
+
+  const data = response.data;
+  if (!data || data.status_code !== 200) {
+    throw new Error("Product detail request failed.");
+  }
+
+  return data;
 }
 
