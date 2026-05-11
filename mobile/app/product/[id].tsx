@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import {
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import { Image as ExpoImage } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
@@ -22,6 +22,7 @@ import { haptic } from "../../src/utils/haptics";
 import {
   ACCENT,
   BG,
+  BG_ELEVATED,
   CARD,
   CARD_BORDER,
   GOLD,
@@ -43,6 +44,9 @@ export default function ProductDetailScreen() {
   const [detail, setDetail] = useState<OfficialProductDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [imageFailed, setImageFailed] = useState(false);
+  const [imageLoading, setImageLoading] = useState(false);
+  const [imageRetryKey, setImageRetryKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,9 +78,21 @@ export default function ProductDetailScreen() {
     detail?.image_urls && detail.image_urls.length > 0
       ? detail.image_urls[0]
       : undefined;
+  const cleanImageUrl = imageUrl ? encodeURI(imageUrl) : undefined;
+  const imageSourceUrl = cleanImageUrl
+    ? imageRetryKey > 0
+      ? `${cleanImageUrl}${cleanImageUrl.includes("?") ? "&" : "?"}_r=${imageRetryKey}`
+      : cleanImageUrl
+    : undefined;
   const categories = Array.isArray(detail?.category)
     ? (detail!.category as string[]).filter((c) => c && c.trim())
     : [];
+
+  useEffect(() => {
+    setImageFailed(false);
+    setImageLoading(false);
+    setImageRetryKey(0);
+  }, [cleanImageUrl]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -120,14 +136,51 @@ export default function ProductDetailScreen() {
         ) : detail ? (
           <>
             <View style={styles.heroImageWrap}>
-              {imageUrl ? (
-                <Image
-                  source={{ uri: imageUrl }}
-                  style={styles.heroImage}
-                  resizeMode="cover"
-                />
+              {imageSourceUrl && !imageFailed ? (
+                <>
+                  <ExpoImage
+                    source={{ uri: imageSourceUrl }}
+                    style={styles.heroImage}
+                    contentFit="cover"
+                    transition={120}
+                    cachePolicy="memory-disk"
+                    onLoadStart={() => {
+                      setImageLoading(true);
+                      setImageFailed(false);
+                    }}
+                    onLoad={() => {
+                      setImageLoading(false);
+                      setImageFailed(false);
+                    }}
+                    onError={() => {
+                      setImageLoading(false);
+                      setImageFailed(true);
+                    }}
+                  />
+                  {imageLoading && (
+                    <View style={styles.imageOverlayLoading}>
+                      <Skeleton height={64} radius={12} style={{ width: 64 } as any} />
+                    </View>
+                  )}
+                </>
               ) : (
+                <View style={styles.imageFallbackWrap}>
                 <Ionicons name="cube-outline" size={64} color={TEXT_FAINT} />
+                {cleanImageUrl ? (
+                  <Pressable
+                    accessibilityLabel="Retry image load"
+                    onPress={() => {
+                      haptic.selection();
+                      setImageFailed(false);
+                      setImageRetryKey((n) => n + 1);
+                    }}
+                    style={({ pressed }) => [styles.retryBtn, pressed && styles.pressed]}
+                  >
+                    <Ionicons name="refresh" size={14} color={TEXT_DIM} />
+                    <Text style={styles.retryBtnText}>Retry image</Text>
+                  </Pressable>
+                ) : null}
+                </View>
               )}
               {!detail.active && (
                 <View style={styles.inactiveBadge}>
@@ -278,7 +331,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   heroImageWrap: {
-    backgroundColor: "#ffffff",
+    backgroundColor: BG_ELEVATED,
     borderRadius: 20,
     aspectRatio: 1,
     alignItems: "center",
@@ -287,6 +340,31 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   heroImage: { width: "100%", height: "100%" },
+  imageOverlayLoading: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.45)",
+  },
+  imageFallbackWrap: {
+    width: "100%",
+    height: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  retryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  retryBtnText: { color: TEXT_DIM, fontSize: 12, fontWeight: "600" },
   inactiveBadge: {
     position: "absolute",
     top: 12,

@@ -1,7 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import * as SecureStore from "expo-secure-store";
+import { isAxiosError } from "axios";
 import { loginWithEmail } from "../services/authService";
-import { api } from "../services/api";
+import { api, setAuthFailureHandler } from "../services/api";
 
 const AUTH_TOKEN_KEY = "vend88-auth-token";
 const AUTH_EMAIL_KEY = "vend88-auth-email";
@@ -40,16 +41,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const activeTokenRef = useRef<string | null>(null);
 
-  const refreshProfile = useCallback(async (authToken: string) => {
+  const clearSession = useCallback(async () => {
+    activeTokenRef.current = null;
+    setToken(null);
+    setEmail(null);
+    setFirstName(null);
+    setLastName(null);
+    await Promise.all([
+      SecureStore.deleteItemAsync(AUTH_TOKEN_KEY),
+      SecureStore.deleteItemAsync(AUTH_EMAIL_KEY),
+      SecureStore.deleteItemAsync(AUTH_FIRST_KEY),
+      SecureStore.deleteItemAsync(AUTH_LAST_KEY),
+    ]);
+  }, []);
+
+  const refreshProfile = useCallback(async (authToken: string): Promise<"ok" | "auth-failed" | "unknown"> => {
     try {
       const response = await api.post<AdminProfileResponse>("/admin/profile", {
         token: authToken,
       });
       if (activeTokenRef.current !== authToken) {
-        return;
+        return "unknown";
       }
       const data = response.data;
-      if (data?.status_code !== 200) return;
+      if (data?.status_code === 401 || data?.status_code === 403) {
+        return "auth-failed";
+      }
+      if (data?.status_code !== 200) return "unknown";
       const nextFirst = data.first_name?.trim() || null;
       const nextLast = data.last_name?.trim() || null;
       const nextEmail = data.email?.trim();
@@ -65,10 +83,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           : SecureStore.deleteItemAsync(AUTH_LAST_KEY),
         nextEmail ? SecureStore.setItemAsync(AUTH_EMAIL_KEY, nextEmail) : Promise.resolve(),
       ]);
-    } catch {
-      // Silent: fall back to cached or email-derived values.
+      return "ok";
+    } catch (error) {
+      // Only clear session on true auth failures; keep session on transient network issues.
+      if (isAxiosError(error)) {
+        const status = error.response?.status;
+        const statusCode = error.response?.data?.status_code;
+        if (status === 401 || status === 403 || statusCode === 401 || statusCode === 403) {
+          return "auth-failed";
+        }
+      }
+      return "unknown";
     }
   }, []);
+
+  useEffect(() => {
+    setAuthFailureHandler(async () => {
+      if (!activeTokenRef.current) {
+        return;
+      }
+      await clearSession();
+    });
+
+    return () => {
+      setAuthFailureHandler(null);
+    };
+  }, [clearSession]);
 
   useEffect(() => {
     let mounted = true;
@@ -89,7 +129,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         activeTokenRef.current = storedToken;
         if (storedToken) {
-          refreshProfile(storedToken);
+          const refreshState = await refreshProfile(storedToken);
+          if (refreshState === "auth-failed") {
+            await clearSession();
+          }
         }
       } finally {
         if (mounted) {
@@ -103,7 +146,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       mounted = false;
     };
-  }, [refreshProfile]);
+  }, [clearSession, refreshProfile]);
 
   const signIn = async (email: string, password: string): Promise<SignInResult> => {
     try {
@@ -126,17 +169,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
-    activeTokenRef.current = null;
-    setToken(null);
-    setEmail(null);
-    setFirstName(null);
-    setLastName(null);
-    await Promise.all([
-      SecureStore.deleteItemAsync(AUTH_TOKEN_KEY),
-      SecureStore.deleteItemAsync(AUTH_EMAIL_KEY),
-      SecureStore.deleteItemAsync(AUTH_FIRST_KEY),
-      SecureStore.deleteItemAsync(AUTH_LAST_KEY),
-    ]);
+    await clearSession();
   };
 
   const value = useMemo(

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import {
   Easing,
   ActivityIndicator,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as SecureStore from "expo-secure-store";
 import { Ionicons } from "@expo/vector-icons";
@@ -66,6 +66,9 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [skipAutoRedirect, setSkipAutoRedirect] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [biometricKind, setBiometricKind] = useState<"face" | "fingerprint" | "biometric">(
+    "biometric"
+  );
 
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const screenOpacity = useRef(new Animated.Value(0)).current;
@@ -142,20 +145,60 @@ export default function LoginScreen() {
     }
   }, [token, skipAutoRedirect, router]);
 
-  useEffect(() => {
-    (async () => {
-      const compatible = LocalAuth
-        ? await LocalAuth.hasHardwareAsync()
-        : false;
-      const enrolled = LocalAuth ? await LocalAuth.isEnrolledAsync() : false;
-      const hasStoredToken = !!(await SecureStore.getItemAsync(AUTH_TOKEN_KEY));
-      const userEnabled =
-        (await SecureStore.getItemAsync(BIOMETRIC_KEY)) === "1";
-      setBiometricAvailable(
-        compatible && enrolled && hasStoredToken && userEnabled
-      );
-    })();
+  const refreshBiometricState = useCallback(async () => {
+    if (!LocalAuth) {
+      setBiometricKind("biometric");
+      setBiometricAvailable(false);
+      return;
+    }
+
+    const [compatible, enrolled, hasStoredToken, userEnabled, supportedTypes] =
+      await Promise.all([
+        LocalAuth.hasHardwareAsync(),
+        LocalAuth.isEnrolledAsync(),
+        SecureStore.getItemAsync(AUTH_TOKEN_KEY).then(Boolean),
+        SecureStore.getItemAsync(BIOMETRIC_KEY).then((v) => v === "1"),
+        LocalAuth.supportedAuthenticationTypesAsync().catch(() => [] as number[]),
+      ]);
+
+    const authTypes = LocalAuth.AuthenticationType;
+    const supportsFace =
+      authTypes?.FACIAL_RECOGNITION !== undefined &&
+      supportedTypes.includes(authTypes.FACIAL_RECOGNITION);
+    const supportsFingerprint =
+      authTypes?.FINGERPRINT !== undefined &&
+      supportedTypes.includes(authTypes.FINGERPRINT);
+
+    if (supportsFace) {
+      setBiometricKind("face");
+    } else if (supportsFingerprint) {
+      setBiometricKind("fingerprint");
+    } else {
+      setBiometricKind("biometric");
+    }
+
+    setBiometricAvailable(compatible && enrolled && hasStoredToken && userEnabled);
   }, []);
+
+  useEffect(() => {
+    void refreshBiometricState();
+  }, [refreshBiometricState]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshBiometricState();
+    }, [refreshBiometricState])
+  );
+
+  const biometricButtonLabel =
+    biometricKind === "face"
+      ? "Use Face ID"
+      : biometricKind === "fingerprint"
+        ? "Use Fingerprint"
+        : "Use Biometric";
+
+  const biometricIcon: keyof typeof Ionicons.glyphMap =
+    biometricKind === "face" ? "scan-outline" : "finger-print";
 
   const triggerError = (msg: string) => {
     setError(msg);
@@ -405,8 +448,8 @@ export default function LoginScreen() {
                       ]}
                       onPress={handleBiometric}
                     >
-                      <Ionicons name="finger-print" size={16} color={C.gold} />
-                      <Text style={styles.biometricText}>Use Fingerprint</Text>
+                      <Ionicons name={biometricIcon} size={16} color={C.gold} />
+                      <Text style={styles.biometricText}>{biometricButtonLabel}</Text>
                     </Pressable>
                   </>
                 ) : null}

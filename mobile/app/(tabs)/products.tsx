@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import {
   FlatList,
@@ -21,6 +21,7 @@ import { API_TARGET, api } from "../../src/services/api";
 import { useAuth } from "../../src/context/AuthContext";
 import {
   fetchAllOfficialProducts,
+  fetchOfficialProductPage,
   fetchOfficialProductCategories,
 } from "../../src/services/officialDashboard";
 import { AnimatedNumber } from "../../src/components/AnimatedNumber";
@@ -161,10 +162,53 @@ function normalizeCategories(raw: string[] | string | undefined): string[] {
   return out.length > 0 ? out : [UNCATEGORIZED];
 }
 
+function mapOfficialProduct(p: {
+  product_id: string;
+  name?: string;
+  category?: string[] | string;
+  price?: number | string;
+  image_urls?: string[];
+  sku?: string;
+  description?: string;
+  active?: boolean;
+  pricing_unit?: string;
+}): Product {
+  const normalizedCategories = normalizeCategories(p.category);
+  return {
+    id: p.product_id,
+    name: p.name?.trim() || "Untitled",
+    categories: normalizedCategories,
+    category: pickPrimaryCategory(normalizedCategories),
+    price: typeof p.price === "number" ? p.price : parseMoney(p.price),
+    imageUrl:
+      Array.isArray(p.image_urls) && p.image_urls.length > 0
+        ? p.image_urls[0]
+        : undefined,
+    sku: p.sku?.trim() || undefined,
+    description: p.description?.trim() || undefined,
+    active: p.active !== false,
+    pricingUnit: p.pricing_unit,
+  };
+}
+
+function mergeUniqueProducts(base: Product[], incoming: Product[]): Product[] {
+  if (incoming.length === 0) return base;
+  const seen = new Set(base.map((p) => p.id));
+  const merged = [...base];
+  for (const p of incoming) {
+    if (seen.has(p.id)) continue;
+    seen.add(p.id);
+    merged.push(p);
+  }
+  return merged;
+}
+
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function ProductsScreen() {
   const { token, email } = useAuth();
+  const fetchRequestIdRef = useRef(0);
+  const refreshInFlightRef = useRef(false);
   const [items, setItems] = useState<Product[]>([]);
   const [serverCategories, setServerCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -178,38 +222,78 @@ export default function ProductsScreen() {
   const [onlyActive, setOnlyActive] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
 
-  const fetchProducts = async () => {
+  const fetchProducts = async (opts?: { fullReload?: boolean; preserveOnError?: boolean }) => {
+    const requestId = ++fetchRequestIdRef.current;
+    const fullReload = opts?.fullReload ?? false;
+    const preserveOnError = opts?.preserveOnError ?? false;
+
     try {
       if (API_TARGET === "official") {
         const auth = { token: token ?? undefined, email: email ?? undefined };
-        const [products, categories] = await Promise.all([
-          fetchAllOfficialProducts(auth),
+        const pageSize = 60;
+
+        if (fullReload) {
+          const [products, categories] = await Promise.all([
+            fetchAllOfficialProducts(auth, pageSize),
+            fetchOfficialProductCategories(auth).catch(() => [] as string[]),
+          ]);
+
+          if (requestId !== fetchRequestIdRef.current) return;
+
+          setItems(products.map(mapOfficialProduct));
+          setServerCategories(categories);
+          return;
+        }
+
+        const [firstPage, categories] = await Promise.all([
+          fetchOfficialProductPage(0, pageSize, auth),
           fetchOfficialProductCategories(auth).catch(() => [] as string[]),
         ]);
-        const mapped: Product[] = products.map((p) => {
-          const normalizedCategories = normalizeCategories(p.category);
-          return {
-          id: p.product_id,
-          name: p.name?.trim() || "Untitled",
-          categories: normalizedCategories,
-          category: pickPrimaryCategory(normalizedCategories),
-          price: typeof p.price === "number" ? p.price : parseMoney(p.price),
-          imageUrl:
-            Array.isArray(p.image_urls) && p.image_urls.length > 0
-              ? p.image_urls[0]
-              : undefined,
-          sku: p.sku?.trim() || undefined,
-          description: p.description?.trim() || undefined,
-          active: p.active !== false,
-          pricingUnit: p.pricing_unit,
-          };
-        });
-        setItems(mapped);
+
+        if (requestId !== fetchRequestIdRef.current) return;
+
+        const firstBatch = (firstPage.products ?? []).map(mapOfficialProduct);
+        setItems(firstBatch);
         setServerCategories(categories);
+
+        const maxPageIndex = firstPage.maxPageIndex ?? 0;
+        if (maxPageIndex > 0) {
+          const PAGE_CONCURRENCY = 4;
+          const pages = Array.from({ length: maxPageIndex }, (_, i) => i + 1);
+
+          void (async () => {
+            for (let i = 0; i < pages.length; i += PAGE_CONCURRENCY) {
+              if (requestId !== fetchRequestIdRef.current) return;
+
+              const batch = pages.slice(i, i + PAGE_CONCURRENCY);
+              const results = await Promise.all(
+                batch.map(async (pageIdx) => {
+                  try {
+                    const res = await fetchOfficialProductPage(pageIdx, pageSize, auth);
+                    return res.products.map(mapOfficialProduct);
+                  } catch {
+                    return [] as Product[];
+                  }
+                })
+              );
+
+              if (requestId !== fetchRequestIdRef.current) return;
+
+              setItems((prev) => {
+                let next = prev;
+                for (const part of results) {
+                  next = mergeUniqueProducts(next, part);
+                }
+                return next;
+              });
+            }
+          })();
+        }
       } else {
         const response = await api.get<
           Array<{ id: number | string; name: string; category: string; price: string | number }>
         >("/products");
+        if (requestId !== fetchRequestIdRef.current) return;
         const mapped: Product[] = response.data.map((p) => {
           const normalizedCategories = normalizeCategories(p.category);
           return {
@@ -225,8 +309,11 @@ export default function ProductsScreen() {
         setServerCategories([]);
       }
     } catch {
-      setItems([]);
-      setServerCategories([]);
+      if (requestId !== fetchRequestIdRef.current) return;
+      if (!preserveOnError) {
+        setItems([]);
+        setServerCategories([]);
+      }
     }
   };
 
@@ -236,11 +323,17 @@ export default function ProductsScreen() {
   }, [token]);
 
   const onRefresh = async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     haptic.light();
     setRefreshing(true);
-    await fetchProducts();
-    haptic.success();
-    setRefreshing(false);
+    try {
+      await fetchProducts({ fullReload: true, preserveOnError: true });
+      haptic.success();
+    } finally {
+      setRefreshing(false);
+      refreshInFlightRef.current = false;
+    }
   };
 
   const {
@@ -1170,7 +1263,7 @@ const styles = StyleSheet.create({
   content: {
     padding: SCREEN_PADDING,
     paddingTop: 8,
-    paddingBottom: 40,
+    paddingBottom: 120,
     gap: 22,
   },
   pressed: { opacity: 0.7 },

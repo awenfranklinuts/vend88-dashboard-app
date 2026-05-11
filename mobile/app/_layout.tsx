@@ -8,12 +8,24 @@ import "react-native-reanimated";
 import { AuthProvider } from "../src/context/AuthContext";
 import { I18nProvider } from "../src/context/I18nContext";
 import { OfflineBanner } from "../src/components/OfflineBanner";
+import { BG } from "../src/theme/tokens";
+
+const navTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    background: BG,
+    card: BG,
+    border: BG,
+    text: "#ffffff",
+  },
+};
 
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <ThemeProvider value={DefaultTheme}>
+        <ThemeProvider value={navTheme}>
           <I18nProvider>
             <AuthProvider>
               <Stack
@@ -21,6 +33,7 @@ export default function RootLayout() {
                   headerShown: false,
                   animation: "fade",
                   animationDuration: 140,
+                contentStyle: { backgroundColor: BG },
                 }}
               >
                 <Stack.Screen name="index" />

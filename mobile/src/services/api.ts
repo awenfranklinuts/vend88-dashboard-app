@@ -59,9 +59,60 @@ export const api = axios.create({
   },
 });
 
+type AuthFailureHandler = (reason: string) => void | Promise<void>;
+
+let authFailureHandler: AuthFailureHandler | null = null;
+let lastAuthFailureAt = 0;
+
+export function setAuthFailureHandler(handler: AuthFailureHandler | null) {
+  authFailureHandler = handler;
+}
+
+function isAuthFailurePayload(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const body = value as { status_code?: unknown; message?: unknown; detail?: unknown };
+  if (body.status_code === 401 || body.status_code === 403) return true;
+
+  const message =
+    typeof body.message === "string"
+      ? body.message
+      : typeof body.detail === "string"
+        ? body.detail
+        : "";
+  if (!message) return false;
+
+  return /unauthor|forbidden|invalid token|token expired|expired token|session expired|login again/i.test(
+    message
+  );
+}
+
+function notifyAuthFailure(reason: string) {
+  if (!authFailureHandler) return;
+
+  // Avoid repeated sign-out cascades when many requests fail at once.
+  const now = Date.now();
+  if (now - lastAuthFailureAt < 2000) return;
+  lastAuthFailureAt = now;
+
+  Promise.resolve(authFailureHandler(reason)).catch(() => {
+    // Never break request chains because sign-out handling failed.
+  });
+}
+
 api.interceptors.response.use(
-  (response) => response,
-  (error) => Promise.reject(error)
+  (response) => {
+    if (isAuthFailurePayload(response.data)) {
+      notifyAuthFailure("response-payload-auth-failure");
+    }
+    return response;
+  },
+  (error) => {
+    const status = error?.response?.status;
+    if (status === 401 || status === 403 || isAuthFailurePayload(error?.response?.data)) {
+      notifyAuthFailure("http-auth-failure");
+    }
+    return Promise.reject(error);
+  }
 );
 
 // ─── API call/response logging ────────────────────────────────────────────────

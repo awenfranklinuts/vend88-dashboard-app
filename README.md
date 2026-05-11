@@ -1,69 +1,52 @@
 # VEND88 Dashboard
 
-POS Dashboard App for Mobile — React frontend + FastAPI backend.
+Mobile-first POS dashboard app using Expo (React Native) with a FastAPI backend.
 
 ## Project Structure
 
 ```
 vend88-dashboard-app/
-├── frontend/          # React app (mobile-first UI)
-│   ├── public/
-│   ├── src/
-│   │   ├── components/   # Shared components (Layout, BottomNav)
-│   │   ├── pages/        # Page components (Dashboard, Sales, Products, Settings)
-│   │   ├── services/     # API client (axios)
-│   │   └── styles/       # CSS files
-│   ├── .env
-│   └── package.json
-├── backend/           # FastAPI server
-│   ├── app/
-│   │   ├── routers/      # API route handlers
-│   │   └── config.py     # App settings
-│   ├── main.py
-│   ├── .env
-│   └── requirements.txt
-└── README.md
+|- mobile/             # Expo app (primary client)
+|- backend/            # FastAPI server
+|- app.json            # Root Expo config (optional)
+|- eas.json            # Root EAS config (optional)
+`- README.md
 ```
 
 ## Getting Started
 
-### Backend (FastAPI)
+### 1) Backend (FastAPI)
 
 ```bash
 cd backend
 python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # macOS/Linux
+venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-API runs at **http://localhost:8000**. Docs at **http://localhost:8000/docs**.
+Backend URL: http://localhost:8000
+API docs: http://localhost:8000/docs
 
-### Frontend (React)
+### 2) Mobile App (Expo)
 
 ```bash
-cd frontend
+cd mobile
 npm install
 npm start
 ```
 
-App runs at **http://localhost:3000**.
-
-## API Target Switch (Official vs Custom)
-
-Use `.env.example` as template and configure:
+Then run on device/simulator with:
 
 ```bash
-REACT_APP_API_TARGET=official
+npm run android
 # or
-REACT_APP_API_TARGET=custom
-
-REACT_APP_OFFICIAL_API_URL=https://dev.vend88.com
-REACT_APP_CUSTOM_API_URL=http://localhost:8000/api/v1
+npm run ios
 ```
 
-For mobile, configure `mobile/.env`:
+## Mobile API Target Switch
+
+Configure `mobile/.env`:
 
 ```bash
 EXPO_PUBLIC_API_TARGET=official

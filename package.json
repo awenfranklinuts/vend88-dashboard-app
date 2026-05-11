@@ -1,31 +1,12 @@
 {
-  "name": "vend88-dashboard",
-  "version": "0.1.0",
+  "name": "vend88-dashboard-workspace",
+  "version": "1.0.0",
   "private": true,
-  "description": "VEND88 Dashboard - POS Dashboard App for Mobile",
-  "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.20.0",
-    "react-scripts": "5.0.1",
-    "axios": "^1.6.0"
-  },
+  "description": "VEND88 mobile app + FastAPI backend workspace",
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+    "mobile:start": "cd mobile && npm start",
+    "mobile:android": "cd mobile && npm run android",
+    "mobile:ios": "cd mobile && npm run ios",
+    "mobile:lint": "cd mobile && npm run lint"
   }
 }
