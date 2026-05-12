@@ -9,7 +9,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as SecureStore from "expo-secure-store";
 
@@ -27,7 +27,7 @@ try {
 import Constants from "expo-constants";
 import { useAuth } from "../../src/context/AuthContext";
 import { Language, useI18n } from "../../src/context/I18nContext";
-import { API_BASE_URL, api } from "../../src/services/api";
+import { api } from "../../src/services/api";
 import { haptic } from "../../src/utils/haptics";
 import {
   BG,
@@ -128,6 +128,7 @@ function Row({ icon, iconColor = GOLD, label, hint, right, onPress, destructive 
 }
 
 export default function SettingsScreen() {
+  const insets = useSafeAreaInsets();
   const { signOut } = useAuth();
   const { language, languageLabel, setLanguage, t } = useI18n();
   const defaultProfileName = t("settings_app_name");
@@ -257,7 +258,14 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: 132 + Math.max(insets.bottom, 12) },
+        ]}
+        scrollIndicatorInsets={{ bottom: 132 + Math.max(insets.bottom, 12) }}
+        showsVerticalScrollIndicator={false}
+      >
         <ScreenHeader
           eyebrow="ACCOUNT"
           title={t("settings_title")}
@@ -352,12 +360,6 @@ export default function SettingsScreen() {
           <Row icon="git-branch-outline" label={t("settings_version")} hint={version} />
           <View style={styles.divider} />
           <Row
-            icon="link-outline"
-            label={t("settings_api_endpoint")}
-            hint={API_BASE_URL}
-          />
-          <View style={styles.divider} />
-          <Row
             icon="help-circle-outline"
             label={t("settings_help_support")}
             onPress={() => Linking.openURL("mailto:support@vend88.app").catch(() => {})}
@@ -373,8 +375,6 @@ export default function SettingsScreen() {
             onPress={confirmSignOut}
           />
         </View>
-
-        <Text style={styles.footer}>{t("settings_footer")}</Text>
       </ScrollView>
     </SafeAreaView>
   );

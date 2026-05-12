@@ -99,3 +99,7 @@ Note:
 cd mobile
 npx expo prebuild --platform ios --clean
 npx expo run:ios
+
+
+
+npx expo run:ios --device --configuration Release
