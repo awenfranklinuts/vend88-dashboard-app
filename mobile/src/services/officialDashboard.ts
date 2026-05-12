@@ -50,6 +50,7 @@ export type OfficialSaleRecord = {
   module: string;
   payment: string;
   total: string;
+  rawStatus?: string;
   status: string;
 };
 
@@ -671,6 +672,14 @@ type StoreStatisticsResponse = {
     payment_method?: Record<string, number>;
     staff_performance?: Record<string, number>;
   };
+  abnormal_transactions?: {
+    cancelled?: { amount?: number; count?: number };
+    coupons?: { amount?: number; count?: number };
+    credit_paid?: { amount?: number; count?: number };
+    discounts?: { amount?: number; count?: number };
+    refunds?: { amount?: number; count?: number };
+    voided?: { amount?: number; count?: number };
+  };
 };
 
 function sumSalesByMethod(data?: PosDashboardResponse): number {
@@ -705,6 +714,7 @@ type StoreStatisticsSnapshot = {
   financial: NonNullable<StoreStatisticsResponse["financial_summary"]>;
   operational: NonNullable<StoreStatisticsResponse["operational_summary"]>;
   breakdowns: NonNullable<StoreStatisticsResponse["breakdowns"]>;
+  abnormal: NonNullable<StoreStatisticsResponse["abnormal_transactions"]>;
 };
 
 async function fetchStoreStatisticsSnapshot(
@@ -735,6 +745,7 @@ async function fetchStoreStatisticsSnapshot(
     financial: data.financial_summary ?? {},
     operational: data.operational_summary ?? {},
     breakdowns: data.breakdowns ?? {},
+    abnormal: data.abnormal_transactions ?? {},
   };
 }
 
@@ -768,6 +779,14 @@ export type OfficialStoreStatisticsRange = {
   category: Record<string, number>;
   channel: Record<string, number>;
   staffPerformance: Record<string, number>;
+  abnormal: {
+    cancelled: { amount: number; count: number };
+    coupons: { amount: number; count: number };
+    creditPaid: { amount: number; count: number };
+    discounts: { amount: number; count: number };
+    refunds: { amount: number; count: number };
+    voided: { amount: number; count: number };
+  };
 };
 
 export async function fetchOfficialStoreStatisticsRange(
@@ -799,6 +818,13 @@ export async function fetchOfficialStoreStatisticsRange(
     const f = snapshot.financial;
     const o = snapshot.operational;
     const b = snapshot.breakdowns;
+    const a = snapshot.abnormal;
+    const abn = (
+      entry?: { amount?: number; count?: number }
+    ): { amount: number; count: number } => ({
+      amount: toNumber(entry?.amount),
+      count: Math.round(toNumber(entry?.count)),
+    });
 
     const result: OfficialStoreStatisticsRange = {
       orders: Math.round(snapshot.ordersTotal),
@@ -830,6 +856,14 @@ export async function fetchOfficialStoreStatisticsRange(
       category: b.category ?? {},
       channel: b.channel ?? {},
       staffPerformance: b.staff_performance ?? {},
+      abnormal: {
+        cancelled: abn(a.cancelled),
+        coupons: abn(a.coupons),
+        creditPaid: abn(a.credit_paid),
+        discounts: abn(a.discounts),
+        refunds: abn(a.refunds),
+        voided: abn(a.voided),
+      },
     };
 
     storeStatsCache.set(cacheKey, { ts: Date.now(), data: result });
@@ -2088,6 +2122,7 @@ export async function fetchOfficialSalesHistory(
       module: mapOrderModule(order.source),
       payment,
       total: toNumber(order.price).toFixed(2),
+      rawStatus: typeof order.status === "string" ? order.status : undefined,
       status: mapOrderStatus(order.status),
     };
   });
@@ -2442,5 +2477,250 @@ export async function fetchOfficialProductDetail(
   }
 
   return data;
+}
+
+// ─── Shop / store detail ────────────────────────────────────────────────────
+
+export type OpenHourSlot = { start_time: string; end_time: string };
+
+export type OfficialShopOpenHours = {
+  monday: OpenHourSlot[];
+  tuesday: OpenHourSlot[];
+  wednesday: OpenHourSlot[];
+  thursday: OpenHourSlot[];
+  friday: OpenHourSlot[];
+  saturday: OpenHourSlot[];
+  sunday: OpenHourSlot[];
+};
+
+export type OfficialNamedSurcharge = {
+  name: string;
+  date: string;
+  enabled: boolean;
+  percentage: number;
+};
+
+export type OfficialShopStaff = {
+  _id: string;
+  name: string;
+  code?: string;
+  permission?: string[];
+  shop_id?: string;
+};
+
+export type OfficialShopDetail = {
+  _id: string;
+  business_id?: string;
+  shop_key?: string;
+  name?: string;
+  store_name?: string;
+  location?: string;
+  phone?: string;
+  description?: string;
+  warehouse_id?: string;
+  max_perorderday?: number;
+  logo?: string;
+  banner?: string;
+  open_hour: OfficialShopOpenHours;
+  named_surcharges: Record<string, OfficialNamedSurcharge>;
+  surcharge: Record<string, number>;
+  staff: OfficialShopStaff[];
+  raw: Record<string, unknown>;
+};
+
+type ShopSearchResponse = {
+  status_code?: number;
+  shop?: Array<Record<string, unknown>>;
+};
+
+const EMPTY_HOURS: OfficialShopOpenHours = {
+  monday: [],
+  tuesday: [],
+  wednesday: [],
+  thursday: [],
+  friday: [],
+  saturday: [],
+  sunday: [],
+};
+
+function normalizeOpenHours(value: unknown): OfficialShopOpenHours {
+  const out: OfficialShopOpenHours = { ...EMPTY_HOURS };
+  if (!value || typeof value !== "object") return out;
+  const src = value as Record<string, unknown>;
+  for (const day of Object.keys(EMPTY_HOURS) as (keyof OfficialShopOpenHours)[]) {
+    const raw = src[day];
+    if (Array.isArray(raw)) {
+      out[day] = raw
+        .map((slot) => {
+          if (!slot || typeof slot !== "object") return null;
+          const s = slot as Record<string, unknown>;
+          const start = typeof s.start_time === "string" ? s.start_time : "";
+          const end = typeof s.end_time === "string" ? s.end_time : "";
+          if (!start || !end) return null;
+          return { start_time: start, end_time: end } as OpenHourSlot;
+        })
+        .filter((x): x is OpenHourSlot => x !== null);
+    }
+  }
+  return out;
+}
+
+function normalizeNamedSurcharges(
+  value: unknown
+): Record<string, OfficialNamedSurcharge> {
+  const out: Record<string, OfficialNamedSurcharge> = {};
+  if (!value || typeof value !== "object") return out;
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    out[key] = {
+      name: typeof r.name === "string" ? r.name : key,
+      date: typeof r.date === "string" ? r.date : "",
+      enabled: Boolean(r.enabled),
+      percentage: typeof r.percentage === "number" ? r.percentage : 0,
+    };
+  }
+  return out;
+}
+
+function normalizeSurcharge(value: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!value || typeof value !== "object") return out;
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const n = typeof raw === "number" ? raw : Number(raw);
+    if (Number.isFinite(n)) out[key] = n;
+  }
+  return out;
+}
+
+function normalizeStaff(value: unknown): OfficialShopStaff[] {  if (!Array.isArray(value)) return [];
+  return value
+    .map((s) => {
+      if (!s || typeof s !== "object") return null;
+      const r = s as Record<string, unknown>;
+      const id = typeof r._id === "string" ? r._id : "";
+      const name = typeof r.name === "string" ? r.name : "";
+      if (!id && !name) return null;
+      return {
+        _id: id,
+        name,
+        code: typeof r.code === "string" ? r.code : undefined,
+        permission: Array.isArray(r.permission)
+          ? (r.permission.filter((p) => typeof p === "string") as string[])
+          : undefined,
+        shop_id: typeof r.shop_id === "string" ? r.shop_id : undefined,
+      } as OfficialShopStaff;
+    })
+    .filter((x): x is OfficialShopStaff => x !== null);
+}
+
+function normalizeShopDetail(raw: Record<string, unknown>): OfficialShopDetail {
+  const meta =
+    raw.meta && typeof raw.meta === "object"
+      ? (raw.meta as Record<string, unknown>)
+      : {};
+  const logo = typeof meta.logo === "string" ? meta.logo : undefined;
+  const banner = typeof meta.banner === "string" ? meta.banner : undefined;
+
+  return {
+    _id: typeof raw._id === "string" ? raw._id : "",
+    business_id:
+      typeof raw.business_id === "string" ? raw.business_id : undefined,
+    shop_key: typeof raw.shop_key === "string" ? raw.shop_key : undefined,
+    name: typeof raw.name === "string" ? raw.name : undefined,
+    store_name: typeof raw.store_name === "string" ? raw.store_name : undefined,
+    location: typeof raw.location === "string" ? raw.location : undefined,
+    phone: typeof raw.phone === "string" ? raw.phone : undefined,
+    description:
+      typeof raw.description === "string" ? raw.description : undefined,
+    warehouse_id:
+      typeof raw.warehouse_id === "string" ? raw.warehouse_id : undefined,
+    max_perorderday:
+      typeof raw.max_perorderday === "number" ? raw.max_perorderday : undefined,
+    logo,
+    banner,
+    open_hour: normalizeOpenHours(raw.open_hour),
+    named_surcharges: normalizeNamedSurcharges(raw.named_surcharges),
+    surcharge: normalizeSurcharge(raw.surcharge),
+    staff: normalizeStaff(raw.staff),
+    raw,
+  };
+}
+
+/**
+ * Fetches the current store's detail from `/search/shop_search`.
+ *
+ * If `shopId` is omitted, falls back to the active shop discovered via
+ * the user's meta selections (same resolution used by other dashboard calls).
+ */
+export async function fetchOfficialShopDetail(
+  shopId?: string,
+  auth?: AuthOverride
+): Promise<OfficialShopDetail> {
+  const ctx = await resolveOfficialShopContext(auth);
+  const targetId = shopId ?? ctx.shopId;
+
+  const payload: Record<string, unknown> = {
+    query: { _id: targetId },
+    detail: true,
+    token: ctx.token,
+  };
+
+  const response = await api.post<ShopSearchResponse>(
+    "/search/shop_search",
+    payload
+  );
+  const data = response.data;
+  if (!data || data.status_code !== 200 || !Array.isArray(data.shop)) {
+    throw new Error("Shop detail request failed.");
+  }
+
+  const match =
+    data.shop.find((s) => (s as Record<string, unknown>)._id === targetId) ??
+    data.shop[0];
+  if (!match) {
+    throw new Error("Shop not found.");
+  }
+
+  return normalizeShopDetail(match as Record<string, unknown>);
+}
+
+export type UpdateShopPatch = {
+  open_hour?: OfficialShopOpenHours;
+  named_surcharges?: Record<string, OfficialNamedSurcharge>;
+  surcharge?: Record<string, number>;
+  name?: string;
+  description?: string;
+  location?: string;
+  phone?: string;
+};
+
+type UpdateShopResponse = { status_code?: number; message?: string };
+
+/**
+ * Persist edits to a shop record via `/shop/update_shop`.
+ *
+ * Only fields included in `patch` are sent. Required identifiers (`shop_id`,
+ * `token`) are appended automatically based on the active shop context.
+ */
+export async function updateOfficialShop(
+  patch: UpdateShopPatch,
+  auth?: AuthOverride
+): Promise<void> {
+  const ctx = await resolveOfficialShopContext(auth);
+  const payload: Record<string, unknown> = {
+    ...patch,
+    shop_id: ctx.shopId,
+    token: ctx.token,
+  };
+
+  const response = await api.post<UpdateShopResponse>(
+    "/shop/update_shop",
+    payload
+  );
+  const data = response.data;
+  if (!data || data.status_code !== 200) {
+    throw new Error(data?.message ?? "Failed to update store.");
+  }
 }
 

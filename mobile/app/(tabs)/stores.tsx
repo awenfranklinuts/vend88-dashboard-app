@@ -1,0 +1,1870 @@
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import { useI18n } from "../../src/context/I18nContext";
+import { useAuth } from "../../src/context/AuthContext";
+import { ScreenHeader } from "../../src/components/ScreenHeader";
+import { SectionLabel } from "../../src/components/SectionLabel";
+import { haptic } from "../../src/utils/haptics";
+import {
+  fetchOfficialShopDetail,
+  updateOfficialShop,
+  type OfficialNamedSurcharge,
+  type OfficialShopDetail,
+  type OfficialShopOpenHours,
+  type OpenHourSlot,
+} from "../../src/services/officialDashboard";
+import {
+  ACCENT,
+  ACCENT_DIM,
+  BG,
+  CARD,
+  CARD_BORDER,
+  DANGER,
+  GOLD,
+  GOLD_DIM,
+  SCREEN_PADDING,
+  SUCCESS,
+  SUCCESS_DIM,
+  TEXT,
+  TEXT_DIM,
+  TEXT_FAINT,
+} from "../../src/theme/tokens";
+
+const DAYS: (keyof OfficialShopOpenHours)[] = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+];
+
+const DAY_LABELS: Record<keyof OfficialShopOpenHours, string> = {
+  monday: "Monday",
+  tuesday: "Tuesday",
+  wednesday: "Wednesday",
+  thursday: "Thursday",
+  friday: "Friday",
+  saturday: "Saturday",
+  sunday: "Sunday",
+};
+
+// Build the storefront URL from a shop key. Mirrors the web dashboard format.
+function buildStorefrontUrl(shopKey?: string): string | null {
+  if (!shopKey) return null;
+  return `https://${shopKey}.vendappdevelopment.s3-website-ap-southeast-2.amazonaws.com/`;
+}
+
+function formatPercent(n: number): string {
+  const pct = Math.round(n * 100 * 10) / 10;
+  const sign = pct >= 0 ? "+" : "";
+  return `${sign}${pct}%`;
+}
+
+function formatSurchargeDate(iso: string): string {
+  if (!iso) return "—";
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = d.toLocaleString("en-US", { month: "short" });
+  return `${day} ${month} ${d.getFullYear()}`;
+}
+
+// Sanitize an HH:MM input — strip non-digits and re-insert the colon. Keeps
+// partial typing usable (e.g. "9" → "9", "930" → "9:30", "0930" → "09:30").
+function sanitizeTimeInput(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 4);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)}:${digits.slice(2)}`;
+}
+
+function isValidTime(value: string): boolean {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (!m) return false;
+  const h = Number(m[1]);
+  const mm = Number(m[2]);
+  return h >= 0 && h <= 23 && mm >= 0 && mm <= 59;
+}
+
+function padTime(value: string): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (!m) return value;
+  return `${m[1].padStart(2, "0")}:${m[2]}`;
+}
+
+// Auto-format YYYY-MM-DD as the user types digits.
+function sanitizeDateInput(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 8);
+  if (digits.length <= 4) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
+}
+
+function isValidDate(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === mo - 1 &&
+    dt.getUTCDate() === d
+  );
+}
+
+// Parses user-entered percent (e.g. "50", "5.5") into a decimal (0.5, 0.055).
+function parsePercentInput(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return null;
+  return n / 100;
+}
+
+function percentToInput(decimal: number): string {
+  // Round to at most 2 decimal places to avoid float noise like 5.000000001.
+  const v = Math.round(decimal * 100 * 100) / 100;
+  return String(v);
+}
+
+// ─── Sub-components ─────────────────────────────────────────────────────────
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.detailRow}>
+      <Text style={styles.detailLabel}>{label}</Text>
+      <Text style={styles.detailValue} numberOfLines={2}>
+        {value || "—"}
+      </Text>
+    </View>
+  );
+}
+
+function SectionCard({
+  title,
+  hint,
+  action,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={styles.card}>
+      <View style={styles.cardHeader}>
+        <Text style={styles.cardTitle}>{title}</Text>
+        {action ? <View style={styles.cardHeaderAction}>{action}</View> : null}
+      </View>
+      {hint ? <Text style={styles.cardHint}>{hint}</Text> : null}
+      <View style={styles.cardBody}>{children}</View>
+    </View>
+  );
+}
+
+function HoursRow({
+  day,
+  label,
+  slots,
+}: {
+  day: keyof OfficialShopOpenHours;
+  label: string;
+  slots: OpenHourSlot[];
+}) {
+  const closed = slots.length === 0;
+  return (
+    <View style={styles.hoursRow}>
+      <Text style={[styles.hoursDayLabel, closed && styles.hoursDayLabelDim]}>
+        {label}
+      </Text>
+      <View style={styles.hoursSlots}>
+        {closed ? (
+          <Text style={styles.closedLabel}>Closed</Text>
+        ) : (
+          slots.map((s, idx) => (
+            <View
+              key={`${day}-${idx}-${s.start_time}-${s.end_time}`}
+              style={styles.slotItem}
+            >
+              {idx > 0 ? <View style={styles.slotDivider} /> : null}
+              <Text style={styles.slotText}>
+                {s.start_time}
+                <Text style={styles.slotDash}>  –  </Text>
+                {s.end_time}
+              </Text>
+            </View>
+          ))
+        )}
+      </View>
+    </View>
+  );
+}
+
+function SurchargeRow({ item }: { item: OfficialNamedSurcharge }) {  return (
+    <View style={styles.surchargeRow}>
+      <View style={styles.surchargeLeft}>
+        <View style={styles.surchargeTagRow}>
+          <Ionicons name="pricetag-outline" size={13} color={TEXT_DIM} />
+          <Text style={styles.surchargeName}>{item.name}</Text>
+        </View>
+        <View style={styles.surchargeDateRow}>
+          <Ionicons name="calendar-outline" size={12} color={TEXT_FAINT} />
+          <Text style={styles.surchargeDate}>
+            {formatSurchargeDate(item.date)}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.surchargeRight}>
+        <View
+          style={[
+            styles.surchargeToggle,
+            {
+              backgroundColor: item.enabled
+                ? SUCCESS_DIM
+                : "rgba(255,255,255,0.06)",
+            },
+          ]}
+        >
+          <View
+            style={[
+              styles.surchargeDot,
+              {
+                backgroundColor: item.enabled ? SUCCESS : TEXT_FAINT,
+                alignSelf: item.enabled ? "flex-end" : "flex-start",
+              },
+            ]}
+          />
+        </View>
+        <View
+          style={[
+            styles.surchargePctPill,
+            {
+              backgroundColor: item.enabled
+                ? ACCENT_DIM
+                : "rgba(255,255,255,0.05)",
+            },
+          ]}
+        >
+          <Text
+            style={[
+              styles.surchargePctText,
+              { color: item.enabled ? ACCENT : TEXT_DIM },
+            ]}
+          >
+            {formatPercent(item.percentage)}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ─── Edit Hours Modal ───────────────────────────────────────────────────────
+
+function EditHoursModal({
+  visible,
+  initial,
+  saving,
+  onCancel,
+  onSave,
+}: {
+  visible: boolean;
+  initial: OfficialShopOpenHours;
+  saving: boolean;
+  onCancel: () => void;
+  onSave: (hours: OfficialShopOpenHours) => void;
+}) {
+  const [draft, setDraft] = useState<OfficialShopOpenHours>(initial);
+
+  // Reset draft each time the modal opens with new data.
+  useEffect(() => {
+    if (visible) setDraft(initial);
+  }, [visible, initial]);
+
+  const updateSlot = useCallback(
+    (
+      day: keyof OfficialShopOpenHours,
+      idx: number,
+      field: "start_time" | "end_time",
+      raw: string
+    ) => {
+      setDraft((prev) => {
+        const slots = [...prev[day]];
+        slots[idx] = { ...slots[idx], [field]: sanitizeTimeInput(raw) };
+        return { ...prev, [day]: slots };
+      });
+    },
+    []
+  );
+
+  const addSlot = useCallback((day: keyof OfficialShopOpenHours) => {
+    haptic.light();
+    setDraft((prev) => ({
+      ...prev,
+      [day]: [...prev[day], { start_time: "09:00", end_time: "17:00" }],
+    }));
+  }, []);
+
+  const removeSlot = useCallback(
+    (day: keyof OfficialShopOpenHours, idx: number) => {
+      haptic.light();
+      setDraft((prev) => ({
+        ...prev,
+        [day]: prev[day].filter((_, i) => i !== idx),
+      }));
+    },
+    []
+  );
+
+  const handleSave = useCallback(() => {
+    // Validate all slot values before committing.
+    for (const day of DAYS) {
+      for (const slot of draft[day]) {
+        if (!isValidTime(slot.start_time) || !isValidTime(slot.end_time)) {
+          Alert.alert(
+            "Invalid time",
+            `${DAY_LABELS[day]} has an invalid time. Use HH:MM (24h).`
+          );
+          return;
+        }
+      }
+    }
+    // Normalize zero-padding before sending.
+    const normalized: OfficialShopOpenHours = {
+      monday: [],
+      tuesday: [],
+      wednesday: [],
+      thursday: [],
+      friday: [],
+      saturday: [],
+      sunday: [],
+    };
+    for (const day of DAYS) {
+      normalized[day] = draft[day].map((s) => ({
+        start_time: padTime(s.start_time),
+        end_time: padTime(s.end_time),
+      }));
+    }
+    onSave(normalized);
+  }, [draft, onSave]);
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={onCancel}
+    >
+      <SafeAreaView style={styles.modalSafe} edges={["top", "bottom"]}>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <View style={styles.modalHeader}>
+            <Pressable onPress={onCancel} hitSlop={10}>
+              <Text style={styles.modalCancel}>Cancel</Text>
+            </Pressable>
+            <Text style={styles.modalTitle}>Edit Hours</Text>
+            <Pressable
+              onPress={handleSave}
+              disabled={saving}
+              hitSlop={10}
+            >
+              {saving ? (
+                <ActivityIndicator color={GOLD} />
+              ) : (
+                <Text style={styles.modalSave}>Save</Text>
+              )}
+            </Pressable>
+          </View>
+
+          <ScrollView
+            contentContainerStyle={styles.modalContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            {DAYS.map((day) => (
+              <View key={day} style={styles.editDayGroup}>
+                <View style={styles.editDayHeader}>
+                  <Text style={styles.editDayLabel}>{DAY_LABELS[day]}</Text>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.addSlotBtn,
+                      pressed && { opacity: 0.6 },
+                    ]}
+                    onPress={() => addSlot(day)}
+                    hitSlop={6}
+                  >
+                    <Ionicons name="add" size={13} color={ACCENT} />
+                    <Text style={styles.addSlotLabel}>Add slot</Text>
+                  </Pressable>
+                </View>
+                {draft[day].length === 0 ? (
+                  <Text style={styles.editClosedHint}>
+                    Closed · tap “Add slot” to open this day.
+                  </Text>
+                ) : (
+                  <View style={styles.editSlotList}>
+                    {draft[day].map((slot, idx) => (
+                      <View key={idx} style={styles.editSlotRow}>
+                        <TextInput
+                          value={slot.start_time}
+                          onChangeText={(v) =>
+                            updateSlot(day, idx, "start_time", v)
+                          }
+                          placeholder="--:--"
+                          placeholderTextColor={TEXT_FAINT}
+                          keyboardType="number-pad"
+                          maxLength={5}
+                          style={styles.editInput}
+                        />
+                        <Text style={styles.editArrow}>–</Text>
+                        <TextInput
+                          value={slot.end_time}
+                          onChangeText={(v) =>
+                            updateSlot(day, idx, "end_time", v)
+                          }
+                          placeholder="--:--"
+                          placeholderTextColor={TEXT_FAINT}
+                          keyboardType="number-pad"
+                          maxLength={5}
+                          style={styles.editInput}
+                        />
+                        <Pressable
+                          onPress={() => removeSlot(day, idx)}
+                          hitSlop={10}
+                          style={({ pressed }) => [
+                            styles.removeSlotBtn,
+                            pressed && { opacity: 0.5 },
+                          ]}
+                        >
+                          <Ionicons
+                            name="close"
+                            size={16}
+                            color={TEXT_FAINT}
+                          />
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+            ))}
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+// ─── Edit Surcharges Modal ──────────────────────────────────────────────────
+
+type SpecificDraft = { id: string; date: string; percentInput: string };
+type NamedDraft = {
+  id: string;
+  /** Original key in named_surcharges (for replacement detection). */
+  originalKey?: string;
+  name: string;
+  date: string;
+  percentInput: string;
+  enabled: boolean;
+};
+
+function makeId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function EditSurchargesModal({
+  visible,
+  initialNamed,
+  initialSpecific,
+  saving,
+  onCancel,
+  onSave,
+}: {
+  visible: boolean;
+  initialNamed: Record<string, OfficialNamedSurcharge>;
+  initialSpecific: Record<string, number>;
+  saving: boolean;
+  onCancel: () => void;
+  onSave: (
+    named: Record<string, OfficialNamedSurcharge>,
+    specific: Record<string, number>
+  ) => void;
+}) {
+  const [specificDraft, setSpecificDraft] = useState<SpecificDraft[]>([]);
+  const [namedDraft, setNamedDraft] = useState<NamedDraft[]>([]);
+
+  useEffect(() => {
+    if (!visible) return;
+    setSpecificDraft(
+      Object.entries(initialSpecific)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, pct]) => ({
+          id: makeId(),
+          date,
+          percentInput: percentToInput(pct),
+        }))
+    );
+    setNamedDraft(
+      Object.entries(initialNamed).map(([key, item]) => ({
+        id: makeId(),
+        originalKey: key,
+        name: item.name || key,
+        date: item.date,
+        percentInput: percentToInput(item.percentage),
+        enabled: item.enabled,
+      }))
+    );
+  }, [visible, initialNamed, initialSpecific]);
+
+  const addSpecific = useCallback(() => {
+    haptic.light();
+    setSpecificDraft((prev) => [
+      ...prev,
+      { id: makeId(), date: "", percentInput: "" },
+    ]);
+  }, []);
+
+  const updateSpecific = useCallback(
+    (id: string, field: "date" | "percentInput", value: string) => {
+      setSpecificDraft((prev) =>
+        prev.map((row) =>
+          row.id === id
+            ? {
+                ...row,
+                [field]: field === "date" ? sanitizeDateInput(value) : value,
+              }
+            : row
+        )
+      );
+    },
+    []
+  );
+
+  const removeSpecific = useCallback((id: string) => {
+    haptic.light();
+    setSpecificDraft((prev) => prev.filter((row) => row.id !== id));
+  }, []);
+
+  const addNamed = useCallback(() => {
+    haptic.light();
+    setNamedDraft((prev) => [
+      ...prev,
+      {
+        id: makeId(),
+        name: "",
+        date: "",
+        percentInput: "",
+        enabled: true,
+      },
+    ]);
+  }, []);
+
+  const updateNamed = useCallback(
+    (id: string, patch: Partial<NamedDraft>) => {
+      setNamedDraft((prev) =>
+        prev.map((row) => {
+          if (row.id !== id) return row;
+          const next = { ...row, ...patch };
+          if (patch.date !== undefined) next.date = sanitizeDateInput(patch.date);
+          return next;
+        })
+      );
+    },
+    []
+  );
+
+  const removeNamed = useCallback((id: string) => {
+    haptic.light();
+    setNamedDraft((prev) => prev.filter((row) => row.id !== id));
+  }, []);
+
+  const handleSave = useCallback(() => {
+    // Validate specific rows.
+    const specificOut: Record<string, number> = {};
+    for (const row of specificDraft) {
+      if (!row.date && !row.percentInput.trim()) continue; // skip empty
+      if (!isValidDate(row.date)) {
+        Alert.alert("Invalid date", `"${row.date || "(empty)"}" — use YYYY-MM-DD.`);
+        return;
+      }
+      const pct = parsePercentInput(row.percentInput);
+      if (pct === null || pct < 0) {
+        Alert.alert("Invalid percent", `Surcharge for ${row.date} is invalid.`);
+        return;
+      }
+      if (specificOut[row.date] !== undefined) {
+        Alert.alert("Duplicate date", `${row.date} appears more than once.`);
+        return;
+      }
+      specificOut[row.date] = pct;
+    }
+
+    // Validate named rows.
+    const namedOut: Record<string, OfficialNamedSurcharge> = {};
+    for (const row of namedDraft) {
+      const name = row.name.trim();
+      if (!name && !row.date && !row.percentInput.trim()) continue; // skip blank rows
+      if (!name) {
+        Alert.alert("Missing name", "Each named surcharge needs a name.");
+        return;
+      }
+      if (!isValidDate(row.date)) {
+        Alert.alert("Invalid date", `"${name}" has an invalid date. Use YYYY-MM-DD.`);
+        return;
+      }
+      const pct = parsePercentInput(row.percentInput);
+      if (pct === null || pct < 0) {
+        Alert.alert("Invalid percent", `"${name}" has an invalid percentage.`);
+        return;
+      }
+      if (namedOut[name]) {
+        Alert.alert("Duplicate name", `"${name}" appears more than once.`);
+        return;
+      }
+      namedOut[name] = {
+        name,
+        date: row.date,
+        enabled: row.enabled,
+        percentage: pct,
+      };
+    }
+
+    onSave(namedOut, specificOut);
+  }, [specificDraft, namedDraft, onSave]);
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={onCancel}
+    >
+      <SafeAreaView style={styles.modalSafe} edges={["top", "bottom"]}>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <View style={styles.modalHeader}>
+            <Pressable onPress={onCancel} hitSlop={10}>
+              <Text style={styles.modalCancel}>Cancel</Text>
+            </Pressable>
+            <Text style={styles.modalTitle}>Edit Surcharges</Text>
+            <Pressable onPress={handleSave} disabled={saving} hitSlop={10}>
+              {saving ? (
+                <ActivityIndicator color={GOLD} />
+              ) : (
+                <Text style={styles.modalSave}>Save</Text>
+              )}
+            </Pressable>
+          </View>
+
+          <ScrollView
+            contentContainerStyle={styles.modalContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* Specific Date Surcharges */}
+            <View style={styles.editDayGroup}>
+              <View style={styles.editDayHeader}>
+                <Text style={styles.editDayLabel}>Specific Dates</Text>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.addSlotBtn,
+                    pressed && { opacity: 0.6 },
+                  ]}
+                  onPress={addSpecific}
+                  hitSlop={6}
+                >
+                  <Ionicons name="add" size={13} color={ACCENT} />
+                  <Text style={styles.addSlotLabel}>Add</Text>
+                </Pressable>
+              </View>
+              {specificDraft.length === 0 ? (
+                <Text style={styles.editClosedHint}>
+                  None · tap “Add” to create a date-specific surcharge.
+                </Text>
+              ) : (
+                <View style={styles.editSlotList}>
+                  {specificDraft.map((row) => (
+                    <View key={row.id} style={styles.editSlotRow}>
+                      <TextInput
+                        value={row.date}
+                        onChangeText={(v) => updateSpecific(row.id, "date", v)}
+                        placeholder="YYYY-MM-DD"
+                        placeholderTextColor={TEXT_FAINT}
+                        keyboardType="number-pad"
+                        maxLength={10}
+                        style={[styles.editInput, styles.dateInput]}
+                      />
+                      <View style={styles.percentField}>
+                        <TextInput
+                          value={row.percentInput}
+                          onChangeText={(v) =>
+                            updateSpecific(row.id, "percentInput", v)
+                          }
+                          placeholder="0"
+                          placeholderTextColor={TEXT_FAINT}
+                          keyboardType="decimal-pad"
+                          maxLength={6}
+                          style={styles.percentInput}
+                        />
+                        <Text style={styles.percentSuffix}>%</Text>
+                      </View>
+                      <Pressable
+                        onPress={() => removeSpecific(row.id)}
+                        hitSlop={10}
+                        style={({ pressed }) => [
+                          styles.removeSlotBtn,
+                          pressed && { opacity: 0.5 },
+                        ]}
+                      >
+                        <Ionicons name="close" size={16} color={TEXT_FAINT} />
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+
+            {/* Named Surcharges */}
+            <View style={styles.editDayGroup}>
+              <View style={styles.editDayHeader}>
+                <Text style={styles.editDayLabel}>Holiday & Named</Text>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.addSlotBtn,
+                    pressed && { opacity: 0.6 },
+                  ]}
+                  onPress={addNamed}
+                  hitSlop={6}
+                >
+                  <Ionicons name="add" size={13} color={ACCENT} />
+                  <Text style={styles.addSlotLabel}>Add</Text>
+                </Pressable>
+              </View>
+              {namedDraft.length === 0 ? (
+                <Text style={styles.editClosedHint}>
+                  None · tap “Add” to create a named surcharge.
+                </Text>
+              ) : (
+                <View style={styles.namedList}>
+                  {namedDraft.map((row) => (
+                    <View key={row.id} style={styles.namedRow}>
+                      <View style={styles.namedTopRow}>
+                        <TextInput
+                          value={row.name}
+                          onChangeText={(v) =>
+                            updateNamed(row.id, { name: v })
+                          }
+                          placeholder="Holiday name"
+                          placeholderTextColor={TEXT_FAINT}
+                          style={[styles.editInput, styles.namedNameInput]}
+                        />
+                        <Pressable
+                          onPress={() =>
+                            updateNamed(row.id, { enabled: !row.enabled })
+                          }
+                          hitSlop={6}
+                          style={[
+                            styles.surchargeToggle,
+                            {
+                              backgroundColor: row.enabled
+                                ? SUCCESS_DIM
+                                : "rgba(255,255,255,0.06)",
+                            },
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.surchargeDot,
+                              {
+                                backgroundColor: row.enabled
+                                  ? SUCCESS
+                                  : TEXT_FAINT,
+                                alignSelf: row.enabled
+                                  ? "flex-end"
+                                  : "flex-start",
+                              },
+                            ]}
+                          />
+                        </Pressable>
+                        <Pressable
+                          onPress={() => removeNamed(row.id)}
+                          hitSlop={10}
+                          style={({ pressed }) => [
+                            styles.removeSlotBtn,
+                            pressed && { opacity: 0.5 },
+                          ]}
+                        >
+                          <Ionicons
+                            name="close"
+                            size={16}
+                            color={TEXT_FAINT}
+                          />
+                        </Pressable>
+                      </View>
+                      <View style={styles.editSlotRow}>
+                        <TextInput
+                          value={row.date}
+                          onChangeText={(v) =>
+                            updateNamed(row.id, { date: v })
+                          }
+                          placeholder="YYYY-MM-DD"
+                          placeholderTextColor={TEXT_FAINT}
+                          keyboardType="number-pad"
+                          maxLength={10}
+                          style={[styles.editInput, styles.dateInput]}
+                        />
+                        <View style={styles.percentField}>
+                          <TextInput
+                            value={row.percentInput}
+                            onChangeText={(v) =>
+                              updateNamed(row.id, { percentInput: v })
+                            }
+                            placeholder="0"
+                            placeholderTextColor={TEXT_FAINT}
+                            keyboardType="decimal-pad"
+                            maxLength={6}
+                            style={styles.percentInput}
+                          />
+                          <Text style={styles.percentSuffix}>%</Text>
+                        </View>
+                        <View style={styles.removeSlotBtn} />
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+// ─── Screen ─────────────────────────────────────────────────────────────────
+
+export default function StoresScreen() {
+  const { t } = useI18n();
+  const { email, token, loading: authLoading } = useAuth();
+  const [shop, setShop] = useState<OfficialShopDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hoursEditOpen, setHoursEditOpen] = useState(false);
+  const [savingHours, setSavingHours] = useState(false);
+  const [surchargeEditOpen, setSurchargeEditOpen] = useState(false);
+  const [savingSurcharges, setSavingSurcharges] = useState(false);
+  const [previewImage, setPreviewImage] = useState<{
+    uri: string;
+    label: string;
+  } | null>(null);
+
+  const load = useCallback(
+    async (mode: "initial" | "refresh") => {
+      if (mode === "initial") setLoading(true);
+      else setRefreshing(true);
+      setError(null);
+      try {
+        const detail = await fetchOfficialShopDetail(undefined, {
+          email: email ?? undefined,
+          token: token ?? undefined,
+        });
+        setShop(detail);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Unable to load store details.";
+        setError(message);
+      } finally {
+        if (mode === "initial") setLoading(false);
+        else setRefreshing(false);
+      }
+    },
+    [email, token]
+  );
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!token) return;
+    load("initial");
+  }, [authLoading, token, load]);
+
+  const onRefresh = useCallback(() => {
+    haptic.light();
+    load("refresh");
+  }, [load]);
+
+  const storefrontUrl = useMemo(
+    () => buildStorefrontUrl(shop?.shop_key),
+    [shop?.shop_key]
+  );
+
+  const namedSurcharges = useMemo(() => {
+    if (!shop) return [] as OfficialNamedSurcharge[];
+    return Object.values(shop.named_surcharges);
+  }, [shop]);
+
+  const specificSurcharges = useMemo(() => {
+    if (!shop) return [] as { date: string; percentage: number }[];
+    return Object.entries(shop.surcharge)
+      .map(([date, percentage]) => ({ date, percentage }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }, [shop]);
+
+  const handleSaveHours = useCallback(
+    async (next: OfficialShopOpenHours) => {
+      if (!shop) return;
+      setSavingHours(true);
+      try {
+        await updateOfficialShop(
+          { open_hour: next },
+          { email: email ?? undefined, token: token ?? undefined }
+        );
+        setShop((prev) => (prev ? { ...prev, open_hour: next } : prev));
+        setHoursEditOpen(false);
+        haptic.light();
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Failed to update hours.";
+        Alert.alert("Update failed", message);
+      } finally {
+        setSavingHours(false);
+      }
+    },
+    [shop, email, token]
+  );
+
+  const handleSaveSurcharges = useCallback(
+    async (
+      nextNamed: Record<string, OfficialNamedSurcharge>,
+      nextSpecific: Record<string, number>
+    ) => {
+      if (!shop) return;
+      setSavingSurcharges(true);
+      try {
+        await updateOfficialShop(
+          { named_surcharges: nextNamed, surcharge: nextSpecific },
+          { email: email ?? undefined, token: token ?? undefined }
+        );
+        setShop((prev) =>
+          prev
+            ? { ...prev, named_surcharges: nextNamed, surcharge: nextSpecific }
+            : prev
+        );
+        setSurchargeEditOpen(false);
+        haptic.light();
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Failed to update surcharges.";
+        Alert.alert("Update failed", message);
+      } finally {
+        setSavingSurcharges(false);
+      }
+    },
+    [shop, email, token]
+  );
+
+  // ─── Render states ────────────────────────────────────────────────────────
+
+  if (loading || authLoading) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <View style={styles.centerFill}>
+          <ActivityIndicator color={GOLD} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (error && !shop) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <View style={styles.centerFill}>
+          <Ionicons name="alert-circle-outline" size={28} color={DANGER} />
+          <Text style={styles.errorTitle}>Unable to load store</Text>
+          <Text style={styles.errorBody}>{error}</Text>
+          <Pressable style={styles.retryBtn} onPress={() => load("initial")}>
+            <Text style={styles.retryLabel}>Retry</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!shop) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <View style={styles.centerFill}>
+          <Text style={styles.errorBody}>No store selected.</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.safe} edges={["top"]}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={GOLD}
+          />
+        }
+      >
+        <ScreenHeader
+          eyebrow={t("tab_stores").toUpperCase()}
+          title={shop.store_name || shop.name || "Store"}
+          subtitle={shop.location || shop.shop_key}
+        />
+
+        {/* Store Detail */}
+        <SectionLabel label="Store Detail" />
+        <SectionCard title="Identifiers">
+          <DetailRow label="Store ID" value={shop._id} />
+          <DetailRow label="Store Name (Identifier)" value={shop.name ?? ""} />
+          <DetailRow
+            label="Store Name (Public)"
+            value={shop.store_name ?? ""}
+          />
+          <DetailRow label="Location" value={shop.location ?? ""} />
+          <DetailRow label="Number" value={shop.phone ?? ""} />
+          <DetailRow
+            label="Store Description"
+            value={shop.description ?? ""}
+          />
+        </SectionCard>
+
+        {/* Store Logo */}
+        <SectionLabel label="Store Logo" />
+        <SectionCard
+          title="Brand Icon"
+          hint="Tap the logo to preview at full size."
+        >
+          <View style={styles.logoRow}>
+            <Pressable
+              onPress={() => {
+                if (!shop.logo) return;
+                haptic.light();
+                setPreviewImage({ uri: shop.logo, label: "Store Logo" });
+              }}
+              disabled={!shop.logo}
+              style={({ pressed }) => [
+                styles.logoImg,
+                !shop.logo && styles.imgPlaceholder,
+                pressed && shop.logo ? { opacity: 0.85 } : null,
+              ]}
+            >
+              {shop.logo ? (
+                <Image
+                  source={{ uri: shop.logo }}
+                  style={styles.logoImgInner}
+                />
+              ) : (
+                <Ionicons name="image-outline" size={22} color={TEXT_FAINT} />
+              )}
+            </Pressable>
+            {shop.logo ? (
+              <View style={styles.logoMeta}>
+                <Text style={styles.metaTitle}>
+                  {shop.store_name || shop.name || "Logo"}
+                </Text>
+                <View style={styles.tapHintRow}>
+                  <Ionicons name="expand-outline" size={12} color={TEXT_DIM} />
+                  <Text style={styles.tapHint}>Tap to preview</Text>
+                </View>
+              </View>
+            ) : null}
+          </View>
+        </SectionCard>
+
+        {/* Store Banner */}
+        <SectionLabel label="Store Banner" />
+        <SectionCard
+          title="Storefront Banner"
+          hint="Displayed at the top of your storefront. Tap to expand."
+        >
+          <Pressable
+            onPress={() => {
+              if (!shop.banner) return;
+              haptic.light();
+              setPreviewImage({ uri: shop.banner, label: "Store Banner" });
+            }}
+            disabled={!shop.banner}
+            style={({ pressed }) => [
+              styles.bannerImg,
+              !shop.banner && styles.imgPlaceholder,
+              pressed && shop.banner ? { opacity: 0.9 } : null,
+            ]}
+          >
+            {shop.banner ? (
+              <Image
+                source={{ uri: shop.banner }}
+                style={styles.bannerImgInner}
+                resizeMode="cover"
+              />
+            ) : (
+              <Ionicons name="image-outline" size={28} color={TEXT_FAINT} />
+            )}
+            {shop.banner ? (
+              <View style={styles.bannerExpandBadge}>
+                <Ionicons name="expand-outline" size={13} color={TEXT} />
+              </View>
+            ) : null}
+          </Pressable>
+        </SectionCard>
+
+        {/* Online Store */}
+        <SectionLabel label="Online Store" />
+        <SectionCard
+          title="Storefront Link"
+          hint="Share this link with customers to access your store."
+        >
+          <View style={styles.linkRow}>
+            <View style={styles.linkBox}>
+              <Text style={styles.linkLabel}>STORE LINK</Text>
+              <Text style={styles.linkValue} numberOfLines={2}>
+                {storefrontUrl ?? "—"}
+              </Text>
+            </View>
+            {storefrontUrl ? (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.visitBtn,
+                  pressed && { opacity: 0.85 },
+                ]}
+                onPress={() => {
+                  haptic.light();
+                  Linking.openURL(storefrontUrl).catch(() => undefined);
+                }}
+              >
+                <Ionicons name="open-outline" size={14} color={ACCENT} />
+                <Text style={styles.visitBtnLabel}>Visit</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </SectionCard>
+
+        {/* Bind Warehouse Stock */}
+        <SectionLabel label="Bind Warehouse Stock" />
+        <SectionCard
+          title="Inventory Source"
+          hint="Connect this store to a warehouse to sync inventory automatically."
+        >
+          <View style={styles.warehouseRow}>
+            <View style={styles.warehouseIcon}>
+              <Ionicons name="cube-outline" size={18} color={GOLD} />
+            </View>
+            <View style={styles.warehouseBody}>
+              <Text style={styles.warehouseTitle}>Warehouse</Text>
+              <Text
+                style={[
+                  styles.warehouseStatus,
+                  { color: shop.warehouse_id ? SUCCESS : TEXT_DIM },
+                ]}
+              >
+                {shop.warehouse_id ? "Currently connected" : "Not connected"}
+              </Text>
+            </View>
+          </View>
+          {shop.warehouse_id ? (
+            <View style={styles.warehouseIdBox}>
+              <Text style={styles.warehouseIdLabel}>WAREHOUSE ID</Text>
+              <Text style={styles.warehouseIdValue} numberOfLines={1}>
+                {shop.warehouse_id}
+              </Text>
+            </View>
+          ) : null}
+        </SectionCard>
+
+        {/* Operational Hours */}
+        <SectionLabel label="Operational Hours" />
+        <SectionCard
+          title="Weekly Schedule"
+          hint="Manage your weekly schedule and preorder availability."
+          action={
+            <Pressable
+              style={({ pressed }) => [
+                styles.headerEditBtn,
+                pressed && { opacity: 0.7 },
+              ]}
+              onPress={() => {
+                haptic.light();
+                setHoursEditOpen(true);
+              }}
+              hitSlop={8}
+            >
+              <Ionicons name="create-outline" size={13} color={ACCENT} />
+              <Text style={styles.headerEditBtnLabel}>Edit</Text>
+            </Pressable>
+          }
+        >
+          <View style={styles.hoursList}>
+            {DAYS.map((day) => (
+              <HoursRow
+                key={day}
+                day={day}
+                label={DAY_LABELS[day]}
+                slots={shop.open_hour[day]}
+              />
+            ))}
+          </View>
+          <View style={styles.preorderNote}>
+            <Ionicons name="calendar-outline" size={13} color={TEXT_DIM} />
+            <Text style={styles.preorderNoteText}>
+              <Text style={styles.preorderNoteLabel}>Preorder · </Text>
+              {(shop.max_perorderday ?? 0) > 0
+                ? `Up to ${shop.max_perorderday} day(s) ahead are allowed.`
+                : "Only same-day orders are currently allowed."}
+            </Text>
+          </View>
+        </SectionCard>
+
+        {/* Surcharge Management */}
+        <SectionLabel label="Surcharge Management" />
+        <SectionCard
+          title="Surcharges"
+          hint="Apply temporary uplifts on specific dates or recurring named holidays."
+          action={
+            <Pressable
+              style={({ pressed }) => [
+                styles.headerEditBtn,
+                pressed && { opacity: 0.7 },
+              ]}
+              onPress={() => {
+                haptic.light();
+                setSurchargeEditOpen(true);
+              }}
+              hitSlop={8}
+            >
+              <Ionicons name="create-outline" size={13} color={ACCENT} />
+              <Text style={styles.headerEditBtnLabel}>Edit</Text>
+            </Pressable>
+          }
+        >
+          {/* Specific Date Surcharges */}
+          <Text style={styles.subSectionLabel}>Specific Date Surcharges</Text>
+          {specificSurcharges.length === 0 ? (
+            <Text style={styles.emptyText}>No specific date surcharges.</Text>
+          ) : (
+            specificSurcharges.map((item) => (
+              <View key={item.date} style={styles.specificRow}>
+                <View style={styles.specificDateRow}>
+                  <Ionicons
+                    name="calendar-outline"
+                    size={13}
+                    color={TEXT_DIM}
+                  />
+                  <Text style={styles.specificDate}>
+                    {formatSurchargeDate(item.date)}
+                  </Text>
+                </View>
+                <View
+                  style={[styles.surchargePctPill, { backgroundColor: ACCENT_DIM }]}
+                >
+                  <Text style={[styles.surchargePctText, { color: ACCENT }]}>
+                    {formatPercent(item.percentage)}
+                  </Text>
+                </View>
+              </View>
+            ))
+          )}
+
+          {/* Named Surcharges */}
+          <Text style={[styles.subSectionLabel, { marginTop: 14 }]}>
+            Holiday & Named Surcharges
+          </Text>
+          {namedSurcharges.length === 0 ? (
+            <Text style={styles.emptyText}>No named surcharges configured.</Text>
+          ) : (
+            namedSurcharges.map((item) => (
+              <SurchargeRow key={item.name} item={item} />
+            ))
+          )}
+        </SectionCard>
+      </ScrollView>
+
+      <EditHoursModal
+        visible={hoursEditOpen}
+        initial={shop.open_hour}
+        saving={savingHours}
+        onCancel={() => setHoursEditOpen(false)}
+        onSave={handleSaveHours}
+      />
+
+      <EditSurchargesModal
+        visible={surchargeEditOpen}
+        initialNamed={shop.named_surcharges}
+        initialSpecific={shop.surcharge}
+        saving={savingSurcharges}
+        onCancel={() => setSurchargeEditOpen(false)}
+        onSave={handleSaveSurcharges}
+      />
+
+      <Modal
+        visible={previewImage !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreviewImage(null)}
+      >
+        <Pressable
+          style={styles.previewBackdrop}
+          onPress={() => setPreviewImage(null)}
+        >
+          <SafeAreaView
+            style={styles.previewSafe}
+            edges={["top", "bottom"]}
+            pointerEvents="box-none"
+          >
+            <View style={styles.previewHeader} pointerEvents="box-none">
+              <Text style={styles.previewLabel}>{previewImage?.label}</Text>
+              <Pressable
+                onPress={() => setPreviewImage(null)}
+                hitSlop={12}
+                style={styles.previewClose}
+              >
+                <Ionicons name="close" size={20} color={TEXT} />
+              </Pressable>
+            </View>
+            {previewImage ? (
+              <Image
+                source={{ uri: previewImage.uri }}
+                style={styles.previewImage}
+                resizeMode="contain"
+              />
+            ) : null}
+          </SafeAreaView>
+        </Pressable>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+// ─── Styles ─────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: BG },
+  container: { flex: 1 },
+  content: {
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 8,
+    paddingBottom: 140,
+    gap: 12,
+  },
+  centerFill: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    paddingHorizontal: SCREEN_PADDING,
+  },
+  errorTitle: { color: TEXT, fontSize: 16, fontWeight: "700" },
+  errorBody: {
+    color: TEXT_DIM,
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 18,
+  },
+  retryBtn: {
+    marginTop: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: GOLD_DIM,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GOLD,
+  },
+  retryLabel: { color: GOLD, fontWeight: "700", fontSize: 13 },
+
+  card: {
+    backgroundColor: CARD,
+    borderColor: CARD_BORDER,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 10,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  cardHeaderAction: { marginLeft: 8 },
+  cardTitle: { color: TEXT, fontSize: 14, fontWeight: "700" },
+  cardHint: { color: TEXT_DIM, fontSize: 12, lineHeight: 17 },
+  cardBody: { gap: 4 },
+
+  detailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
+    gap: 12,
+  },
+  detailLabel: {
+    color: TEXT_DIM,
+    fontSize: 12,
+    fontWeight: "500",
+    flexShrink: 0,
+  },
+  detailValue: {
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "600",
+    textAlign: "right",
+    flexShrink: 1,
+  },
+
+  logoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingVertical: 4,
+  },
+  logoImg: {
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    overflow: "hidden",
+  },
+  logoImgInner: { width: "100%", height: "100%" },
+  imgPlaceholder: { alignItems: "center", justifyContent: "center" },
+  logoMeta: { flex: 1, gap: 4 },
+  metaTitle: { color: TEXT, fontSize: 13, fontWeight: "700" },
+  metaItem: { color: TEXT_DIM, fontSize: 11, lineHeight: 16 },
+  tapHintRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  tapHint: { color: TEXT_DIM, fontSize: 11, fontWeight: "500" },
+
+  bannerHeaderRow: { flexDirection: "row", justifyContent: "flex-end" },
+  recoPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  recoPillText: {
+    color: TEXT_DIM,
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 0.4,
+  },
+  bannerImg: {
+    width: "100%",
+    aspectRatio: 3,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    overflow: "hidden",
+  },
+  bannerImgInner: { width: "100%", height: "100%" },
+  bannerExpandBadge: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // Image preview modal
+  previewBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.92)",
+  },
+  previewSafe: { flex: 1 },
+  previewHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 8,
+    paddingBottom: 12,
+  },
+  previewLabel: {
+    color: TEXT,
+    fontSize: 14,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+  },
+  previewClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  previewImage: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+  },
+
+  linkRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  linkBox: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    gap: 2,
+  },
+  linkLabel: {
+    color: TEXT_FAINT,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+  },
+  linkValue: { color: TEXT, fontSize: 12, fontWeight: "500" },
+  visitBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: ACCENT_DIM,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ACCENT,
+  },
+  visitBtnLabel: { color: ACCENT, fontSize: 12, fontWeight: "700" },
+
+  warehouseRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 4,
+  },
+  warehouseIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: GOLD_DIM,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  warehouseBody: { flex: 1, gap: 2 },
+  warehouseTitle: { color: TEXT, fontSize: 13, fontWeight: "700" },
+  warehouseStatus: { fontSize: 11, fontWeight: "600" },
+  warehouseIdBox: {
+    marginTop: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  warehouseIdLabel: {
+    color: TEXT_FAINT,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+  },
+  warehouseIdValue: { color: TEXT, fontSize: 12, fontWeight: "500" },
+
+  hoursList: { marginTop: 2 },
+  hoursRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 38,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
+    gap: 10,
+  },
+  hoursDayLabel: {
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "500",
+    width: 88,
+  },
+  hoursDayLabelDim: { color: TEXT_DIM, fontWeight: "400" },
+  hoursSlots: {
+    flex: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "flex-end",
+  },
+  slotItem: { flexDirection: "row", alignItems: "center" },
+  slotText: {
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "500",
+    fontVariant: ["tabular-nums"],
+  },
+  slotDash: { color: TEXT_FAINT, fontWeight: "400" },
+  slotDivider: {
+    width: 1,
+    height: 10,
+    marginHorizontal: 10,
+    backgroundColor: CARD_BORDER,
+  },
+  closedLabel: {
+    color: TEXT_FAINT,
+    fontSize: 12,
+    fontWeight: "500",
+    letterSpacing: 0.2,
+  },
+
+  preorderNote: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  preorderNoteText: {
+    flex: 1,
+    color: TEXT_DIM,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  preorderNoteLabel: {
+    color: TEXT,
+    fontWeight: "600",
+  },
+
+  surchargeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
+    gap: 12,
+  },
+  surchargeLeft: { flex: 1, gap: 4 },
+  surchargeTagRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  surchargeName: { color: TEXT, fontSize: 13, fontWeight: "700" },
+  surchargeDateRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  surchargeDate: { color: TEXT_FAINT, fontSize: 11, fontWeight: "500" },
+  surchargeRight: { flexDirection: "row", alignItems: "center", gap: 8 },
+  surchargeToggle: {
+    width: 34,
+    height: 18,
+    borderRadius: 999,
+    padding: 2,
+    justifyContent: "center",
+  },
+  surchargeDot: { width: 14, height: 14, borderRadius: 7 },
+  surchargePctPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  surchargePctText: { fontSize: 11, fontWeight: "700" },
+
+  emptyText: {
+    color: TEXT_DIM,
+    fontSize: 12,
+    fontStyle: "italic",
+    paddingVertical: 6,
+  },
+
+  subSectionLabel: {
+    color: TEXT,
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+    marginTop: 4,
+    marginBottom: 2,
+  },
+  specificRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
+    gap: 10,
+  },
+  specificDateRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flex: 1,
+  },
+  specificDate: { color: TEXT, fontSize: 13, fontWeight: "600" },
+
+  // Edit surcharge modal extras
+  editGroupHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 4,
+  },
+  editGroupTitle: {
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+  },
+  percentRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  percentSuffix: {
+    color: TEXT_FAINT,
+    fontSize: 13,
+    fontWeight: "500",
+    marginLeft: 4,
+  },
+
+  // Header inline edit button (Operational Hours / Surcharges)
+  headerEditBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: "rgba(64,100,220,0.08)",
+  },
+  headerEditBtnLabel: { color: ACCENT, fontSize: 12, fontWeight: "600" },
+
+  // Edit hours modal
+  modalSafe: { flex: 1, backgroundColor: BG },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: SCREEN_PADDING,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
+  },
+  modalTitle: { color: TEXT, fontSize: 16, fontWeight: "700" },
+  modalCancel: { color: TEXT_DIM, fontSize: 14, fontWeight: "600" },
+  modalSave: { color: GOLD, fontSize: 14, fontWeight: "700" },
+  modalContent: {
+    paddingHorizontal: SCREEN_PADDING,
+    paddingTop: 8,
+    paddingBottom: 40,
+  },
+  editDayGroup: {
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
+    gap: 10,
+  },
+  editDayHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  editDayLabel: {
+    color: TEXT,
+    fontSize: 15,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  addSlotBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  addSlotLabel: { color: ACCENT, fontSize: 12, fontWeight: "600" },
+  editClosedHint: {
+    color: TEXT_FAINT,
+    fontSize: 12,
+  },
+  editSlotList: { gap: 8 },
+  editSlotRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  editArrow: {
+    color: TEXT_FAINT,
+    fontSize: 16,
+    fontWeight: "400",
+  },
+  editInput: {
+    flex: 1,
+    color: TEXT,
+    fontSize: 15,
+    fontWeight: "500",
+    fontVariant: ["tabular-nums"],
+    textAlign: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.04)",
+  },
+  dateInput: { flex: 2 },
+  percentField: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 0,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.04)",
+  },
+  percentInput: {
+    flex: 1,
+    color: TEXT,
+    fontSize: 15,
+    fontWeight: "500",
+    fontVariant: ["tabular-nums"],
+    textAlign: "right",
+    paddingVertical: 9,
+  },
+  namedList: { gap: 14 },
+  namedRow: { gap: 8 },
+  namedTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  namedNameInput: {
+    flex: 1,
+    textAlign: "left",
+    fontWeight: "600",
+  },
+  removeSlotBtn: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+});

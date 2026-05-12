@@ -37,7 +37,9 @@ export default function TabLayout() {
     >
       <Tabs.Screen name="index" options={{ title: t("tab_dashboard") }} />
       <Tabs.Screen name="sales" options={{ title: t("tab_sales") }} />
-      <Tabs.Screen name="products" options={{ title: t("tab_products") }} />
+      {/* Products tab temporarily hidden — keep route mounted but exclude from the tab bar. */}
+      <Tabs.Screen name="products" options={{ title: t("tab_products"), href: null }} />
+      <Tabs.Screen name="stores" options={{ title: t("tab_stores") }} />
       <Tabs.Screen name="explore" options={{ title: t("tab_modules") }} />
       <Tabs.Screen name="settings" options={{ title: t("tab_settings") }} />
       <Tabs.Screen name="handover" options={{ title: t("tab_handover") }} />

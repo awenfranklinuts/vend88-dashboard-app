@@ -68,6 +68,7 @@ type Sale = {
   module: string;
   payment: string;
   total: string;
+  rawStatus?: string;
   status: string;
 };
 
@@ -141,13 +142,8 @@ const PERIOD_LABELS: Record<Period, string> = {
   custom: "Custom",
 };
 
-const STATUS_FILTERS = ["all", "completed", "pending"] as const;
-type StatusFilter = (typeof STATUS_FILTERS)[number];
-const STATUS_LABELS: Record<StatusFilter, string> = {
-  all: "All",
-  completed: "Completed",
-  pending: "Active",
-};
+const ALL_STATUS_FILTER = "all";
+type StatusFilter = string;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -165,6 +161,37 @@ function formatCurrency(n: number, fractionDigits = 2): string {
     maximumFractionDigits: fractionDigits,
   });
   return `${sign}$${value}`;
+}
+
+function getTransactionStatusMeta(rawStatus?: string): {
+  label: string;
+  color: string;
+} {
+  const raw = (rawStatus ?? "").trim();
+  const normalized = raw.toLowerCase();
+  const label = raw
+    ? raw
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\b\w/g, (char) => char.toUpperCase())
+    : "Unknown";
+
+  if (/paid|complete|done/.test(normalized)) {
+    return { label, color: SUCCESS };
+  }
+  if (/refund|cancel|void/.test(normalized)) {
+    return { label, color: DANGER };
+  }
+  if (/active|open|pending|progress/.test(normalized)) {
+    return { label, color: WARNING };
+  }
+  return { label, color: TEXT_DIM };
+}
+
+function getTransactionStatusKey(rawStatus?: string): string {
+  const raw = (rawStatus ?? "").trim().toLowerCase();
+  return raw.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim() || "unknown";
 }
 
 function parseDate(s: string): Date {
@@ -1861,8 +1888,9 @@ export default function SalesScreen() {
   const [loading, setLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [period, setPeriod] = useState<Period>("this_week");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(ALL_STATUS_FILTER);
   const [search, setSearch] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(() => startOfDay(new Date()));
@@ -2088,6 +2116,7 @@ export default function SalesScreen() {
         module: sale.module,
         payment: sale.payment,
         total: sale.total,
+        rawStatus: sale.rawStatus,
         status: sale.status,
       }));
       setSales(mappedSales);
@@ -2136,19 +2165,16 @@ export default function SalesScreen() {
       invalidateOfficialDashboardCaches();
     }
     try {
-      // Force the storeStatistics effect to re-run by bumping a state
-      // that it depends on — actually, invalidating the cache + the effect
-      // re-running on refreshing is enough since we re-set bounds. Trigger
-      // it by toggling refresh sentinel: we re-run via the existing effect
-      // because the cache miss means a fresh network call.
+      // Bump the refresh sentinel so the storeStatistics effect re-runs and
+      // re-fetches the full snapshot (including abnormal transactions, payment
+      // mix, dining mode, etc.) against the now-empty cache.
+      setRefreshKey((k) => k + 1);
       // Also re-fetch sales history if the user has already opened it once
       // for this period.
       const tasks: Promise<unknown>[] = [];
       if (txnLoadedKey) {
         tasks.push(fetchAll());
       }
-      // Wait at least for the storeStatistics refetch to happen via effect;
-      // we await any pending tasks. Storestats refresh is implicit on render.
       await Promise.all(tasks);
       haptic.success();
     } finally {
@@ -2227,7 +2253,7 @@ export default function SalesScreen() {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, email, token, selectedBounds, period]);
+  }, [authLoading, email, token, selectedBounds, period, refreshKey]);
 
   // Fade + slide the Statement card whenever fresh stats arrive for a new period.
   const statementAnim = useRef(new Animated.Value(1)).current;
@@ -2280,15 +2306,22 @@ export default function SalesScreen() {
   const revenueChangeTone = revenueChange > 0 ? SUCCESS : revenueChange < 0 ? DANGER : TEXT_DIM;
 
   // Filter + group transactions
-  const { sections, totalFiltered, paymentBreakdown, statusCounts, moduleBreakdown, periodItemsSold } = useMemo(() => {
+  const {
+    sections,
+    totalFiltered,
+    paymentBreakdown,
+    statusCounts,
+    statusTabs,
+    moduleBreakdown,
+    periodItemsSold,
+  } = useMemo(() => {
     const q = search.trim().toLowerCase();
     const filtered = sales.filter((s) => {
       const d = parseDate(s.date);
       if (!isInPeriod(d, period, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd)) return false;
-      if (statusFilter !== "all") {
-        const wantCompleted = statusFilter === "completed";
-        const isCompleted = s.status === "completed";
-        if (wantCompleted !== isCompleted) return false;
+      if (statusFilter !== ALL_STATUS_FILTER) {
+        const statusKey = getTransactionStatusKey(s.rawStatus ?? s.status);
+        if (statusKey !== statusFilter) return false;
       }
       if (q) {
         const hay =
@@ -2314,11 +2347,31 @@ export default function SalesScreen() {
       }
       return true;
     });
-    const counts: Record<StatusFilter, number> = {
-      all: periodMatched.length,
-      completed: periodMatched.filter((s) => s.status === "completed").length,
-      pending: periodMatched.filter((s) => s.status !== "completed").length,
+    const counts: Record<string, number> = {
+      [ALL_STATUS_FILTER]: periodMatched.length,
     };
+    const labels: Record<string, string> = {
+      [ALL_STATUS_FILTER]: "All",
+    };
+    const orderedStatusKeys: string[] = [];
+    for (const sale of periodMatched) {
+      const statusKey = getTransactionStatusKey(sale.rawStatus ?? sale.status);
+      counts[statusKey] = (counts[statusKey] ?? 0) + 1;
+      if (!labels[statusKey]) {
+        labels[statusKey] = getTransactionStatusMeta(sale.rawStatus ?? sale.status).label;
+      }
+      if (!orderedStatusKeys.includes(statusKey)) {
+        orderedStatusKeys.push(statusKey);
+      }
+    }
+    const tabs = [
+      { key: ALL_STATUS_FILTER, label: "All", count: counts[ALL_STATUS_FILTER] ?? 0 },
+      ...orderedStatusKeys.map((key) => ({
+        key,
+        label: labels[key],
+        count: counts[key] ?? 0,
+      })),
+    ];
     const itemsSold = periodOnly.reduce(
       (sum, s) => sum + (Number.isFinite(s.items) ? s.items : 0),
       0
@@ -2382,10 +2435,21 @@ export default function SalesScreen() {
       totalFiltered: filtered.length,
       paymentBreakdown: payArr,
       statusCounts: counts,
+      statusTabs: tabs,
       moduleBreakdown: moduleArr,
       periodItemsSold: itemsSold,
     };
   }, [sales, period, statusFilter, search, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd]);
+
+  useEffect(() => {
+    if (statusFilter === ALL_STATUS_FILTER) return;
+    if (!statusTabs.some((tab) => tab.key === statusFilter)) {
+      setStatusFilter(ALL_STATUS_FILTER);
+    }
+  }, [statusFilter, statusTabs]);
+
+  const activeStatusLabel =
+    statusTabs.find((tab) => tab.key === statusFilter)?.label ?? "All";
 
   const itemsSoldKpi =
     API_TARGET === "official" ? officialItemsSold ?? periodItemsSold : periodItemsSold;
@@ -2542,11 +2606,11 @@ export default function SalesScreen() {
       const payIcon = PAYMENT_ICONS[item.payment] ?? "card-outline";
       const payColor = PAYMENT_COLORS[item.payment] ?? "#64748b";
       const isLastInSection = index === section.data.length - 1;
-      const done = item.status === "completed";
+      const statusMeta = getTransactionStatusMeta(item.rawStatus ?? item.status);
       const txnTotal = parseMoney(item.total);
       return (
         <Pressable
-          accessibilityLabel={`Order ${item.order_id}, ${item.status}, ${formatCurrency(txnTotal, 2)}`}
+          accessibilityLabel={`Order ${item.order_id}, ${statusMeta.label}, ${formatCurrency(txnTotal, 2)}`}
           onPress={() => {
             haptic.light();
             openOrderDetail(item);
@@ -2593,16 +2657,16 @@ export default function SalesScreen() {
               <View
                 style={[
                   styles.statusDot,
-                  { backgroundColor: done ? SUCCESS : WARNING },
+                    { backgroundColor: statusMeta.color },
                 ]}
               />
               <Text
                 style={[
                   styles.statusText,
-                  { color: done ? SUCCESS : WARNING },
+                    { color: statusMeta.color },
                 ]}
               >
-                {done ? "Done" : "Active"}
+                  {statusMeta.label}
               </Text>
             </View>
           </View>
@@ -3133,6 +3197,89 @@ export default function SalesScreen() {
               </FadingContent>
             )}
 
+            {/* Abnormal transactions — voided / refunds / discounts / coupons / credit / cancelled */}
+            {!loading && officialStats && (() => {
+              const a = officialStats.abnormal;
+              const items: {
+                key: string;
+                label: string;
+                icon: keyof typeof Ionicons.glyphMap;
+                color: string;
+                count: number;
+                amount: number;
+              }[] = [
+                { key: "voided",     label: "Voided",     icon: "close-circle-outline",     color: "#ef4444", count: a.voided.count,     amount: a.voided.amount },
+                { key: "refunds",    label: "Refunds",    icon: "return-down-back-outline", color: "#f97316", count: a.refunds.count,    amount: a.refunds.amount },
+                { key: "discounts",  label: "Discounts",  icon: "pricetag-outline",         color: "#f59e0b", count: a.discounts.count,  amount: a.discounts.amount },
+                { key: "coupons",    label: "Coupons",    icon: "ticket-outline",           color: "#8b5cf6", count: a.coupons.count,    amount: a.coupons.amount },
+                { key: "creditPaid", label: "Paid by Credit", icon: "wallet-outline",       color: "#06b6d4", count: a.creditPaid.count, amount: a.creditPaid.amount },
+                { key: "cancelled",  label: "Cancelled",  icon: "ban-outline",              color: "#dc2626", count: a.cancelled.count,  amount: a.cancelled.amount },
+              ];
+              const totalCount = items.reduce((sum, i) => sum + i.count, 0);
+              const fmt = (n: number) => formatCurrency(n, 2);
+              return (
+                <FadingContent fading={isFetching}>
+                  <View style={styles.block}>
+                    <SectionLabel
+                      label="Abnormal Transactions"
+                      right={
+                        <Text style={styles.sectionHint}>
+                          {totalCount} {totalCount === 1 ? "record" : "records"}
+                        </Text>
+                      }
+                    />
+                    <Animated.View
+                      style={[
+                        styles.statementCard,
+                        styles.abnormalCard,
+                        {
+                          opacity: statementAnim,
+                          transform: [
+                            {
+                              translateY: statementAnim.interpolate({
+                                inputRange: [0, 1],
+                                outputRange: [8, 0],
+                              }),
+                            },
+                          ],
+                        },
+                      ]}
+                    >
+                      {items.map((it, idx) => (
+                        <View key={it.key}>
+                          {idx > 0 && <StatementDivider />}
+                          <View style={styles.abnormalRow}>
+                            <View
+                              style={[
+                                styles.abnormalIcon,
+                                { backgroundColor: it.color + "1f" },
+                              ]}
+                            >
+                              <Ionicons name={it.icon} size={16} color={it.color} />
+                            </View>
+                            <View style={styles.abnormalBody}>
+                              <Text style={styles.abnormalLabel}>{it.label}</Text>
+                              <Text style={styles.abnormalCount}>
+                                {it.count} {it.count === 1 ? "txn" : "txns"}
+                              </Text>
+                            </View>
+                            <Text
+                              style={[
+                                styles.abnormalAmount,
+                                it.amount > 0 && styles.statementValueNegative,
+                              ]}
+                            >
+                              {it.amount > 0 ? `-${fmt(it.amount)}` : fmt(0)}
+                            </Text>
+                          </View>
+                        </View>
+                      ))}
+                    </Animated.View>
+                  </View>
+                </FadingContent>
+              );
+            })()}
+
             {/* Payment breakdown */}
             {!loading && displayPaymentBreakdown.length > 0 && (
               <View style={styles.block}>
@@ -3282,16 +3429,16 @@ export default function SalesScreen() {
               <Text style={styles.emptyBody}>
                 {search
                   ? "No results match your search."
-                  : statusFilter !== "all"
-                  ? `No ${STATUS_LABELS[statusFilter].toLowerCase()} orders in this period.`
+                  : statusFilter !== ALL_STATUS_FILTER
+                  ? `No ${activeStatusLabel.toLowerCase()} orders in this period.`
                   : "Try a different time range."}
               </Text>
-              {(search || statusFilter !== "all") && (
+              {(search || statusFilter !== ALL_STATUS_FILTER) && (
                 <Pressable
                   onPress={() => {
                     haptic.selection();
                     setSearch("");
-                    setStatusFilter("all");
+                    setStatusFilter(ALL_STATUS_FILTER);
                   }}
                   style={styles.emptyBtn}
                 >
@@ -3322,8 +3469,8 @@ export default function SalesScreen() {
                   : `${totalFiltered} ${
                       totalFiltered === 1 ? "record" : "records"
                     }${
-                      statusFilter !== "all"
-                        ? ` · ${STATUS_LABELS[statusFilter]}`
+                      statusFilter !== ALL_STATUS_FILTER
+                        ? ` · ${activeStatusLabel}`
                         : ""
                     }`}
               </Text>
@@ -3384,16 +3531,16 @@ export default function SalesScreen() {
             </View>
 
             <View style={styles.statusTabs}>
-              {STATUS_FILTERS.map((f) => {
-                const active = statusFilter === f;
-                const count = statusCounts[f];
+              {statusTabs.map((tab) => {
+                const active = statusFilter === tab.key;
+                const count = statusCounts[tab.key] ?? 0;
                 return (
                   <Pressable
-                    key={f}
-                    accessibilityLabel={`Filter: ${STATUS_LABELS[f]}, ${count} records`}
+                    key={tab.key}
+                    accessibilityLabel={`Filter: ${tab.label}, ${count} records`}
                     onPress={() => {
                       haptic.selection();
-                      setStatusFilter(f);
+                      setStatusFilter(tab.key);
                     }}
                     style={styles.statusTab}
                   >
@@ -3404,7 +3551,7 @@ export default function SalesScreen() {
                           active && styles.statusTabTextActive,
                         ]}
                       >
-                        {STATUS_LABELS[f]}
+                        {tab.label}
                       </Text>
                       <View
                         style={[
@@ -3796,6 +3943,44 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 2,
+  },
+
+  // Abnormal transactions
+  abnormalCard: {
+    paddingVertical: 4,
+  },
+  abnormalRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+  },
+  abnormalIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  abnormalBody: {
+    flex: 1,
+    gap: 2,
+  },
+  abnormalLabel: {
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  abnormalCount: {
+    color: TEXT_DIM,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  abnormalAmount: {
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
   },
 
   // Stacked bar / legend

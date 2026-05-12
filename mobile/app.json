@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Dashboard",
-    "slug": "vend88-dashboard-mobile",
+    "slug": "vend88-dashboard-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -46,18 +46,18 @@
       ]
     ],
     "updates": {
-      "url": "https://u.expo.dev/48d2236a-2993-4b6f-938b-42f2babd0776"
+      "url": "https://u.expo.dev/19929edd-50b1-492e-babf-140d6dcaab95"
     },
     "runtimeVersion": "1.0.0",
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
-    "owner": "awen633",
+    "owner": "vend88s-organization",
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "48d2236a-2993-4b6f-938b-42f2babd0776"
+        "projectId": "19929edd-50b1-492e-babf-140d6dcaab95"
       }
     }
   }

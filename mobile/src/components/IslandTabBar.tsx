@@ -27,6 +27,7 @@ const ICON_MAP: Record<string, { on: IconName; off: IconName }> = {
   index: { on: "grid", off: "grid-outline" },
   sales: { on: "bar-chart", off: "bar-chart-outline" },
   products: { on: "cube", off: "cube-outline" },
+  stores: { on: "storefront", off: "storefront-outline" },
   explore: { on: "apps", off: "apps-outline" },
   settings: { on: "settings", off: "settings-outline" },
   handover: { on: "swap-horizontal", off: "swap-horizontal-outline" },
@@ -34,7 +35,8 @@ const ICON_MAP: Record<string, { on: IconName; off: IconName }> = {
 
 // Routes shown as the always-visible primary icons. Anything not listed here
 // becomes part of the expandable "More" panel.
-const PRIMARY_ROUTES = ["index", "sales", "products", "explore", "settings"];
+// Note: "products" is temporarily hidden — re-add it here when ready.
+const PRIMARY_ROUTES = ["index", "sales", "stores", "explore", "settings"];
 
 // Routes surfaced inside the expandable panel (label + helper text).
 const MORE_META: Record<

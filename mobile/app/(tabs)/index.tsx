@@ -283,6 +283,17 @@ export default function DashboardScreen() {
   const [barTrackH, setBarTrackH] = useState(0);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [chartError, setChartError] = useState<string | null>(null);
+  const [heroRetryTick, setHeroRetryTick] = useState(0);
+  const lastNonEmptyHeroChartRef = useRef<Record<"month" | "week" | "today", ChartPoint[]>>({
+    month: [],
+    week: [],
+    today: [],
+  });
+  const heroRetryCountRef = useRef<Record<"month" | "week" | "today", number>>({
+    month: 0,
+    week: 0,
+    today: 0,
+  });
   // Ticks every 60s while the detail modal is open. Drives the "current hour"
   // indicator and triggers a quiet refresh of today's hourly data.
   const [nowTick, setNowTick] = useState(0);
@@ -331,9 +342,6 @@ export default function DashboardScreen() {
 
     if (API_TARGET === "official") {
       setSummary(null);
-      setChart([]);
-      setMonthChart([]);
-      setTodayChart([]);
       setOrders([]);
       setSummaryError(null);
       setChartError(null);
@@ -393,26 +401,45 @@ export default function DashboardScreen() {
     if (hasDataForPeriod) return;
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const period = heroPeriod;
     const currentAuth = { email, token };
     setChartError(null);
 
     (async () => {
       try {
-        const series = await fetchOfficialHeroRevenuePeriod(heroPeriod, currentAuth);
+        const series = await fetchOfficialHeroRevenuePeriod(period, currentAuth);
         if (cancelled) return;
 
-        if (heroPeriod === "week") setChart(series);
-        else if (heroPeriod === "month") setMonthChart(series);
+        if (!Array.isArray(series) || series.length === 0) {
+          throw new Error("Empty hero series");
+        }
+
+        heroRetryCountRef.current[period] = 0;
+        lastNonEmptyHeroChartRef.current[period] = series;
+
+        if (period === "week") setChart(series);
+        else if (period === "month") setMonthChart(series);
         else setTodayChart(series);
       } catch {
         if (!cancelled) {
           setChartError("Unable to load revenue chart for this period.");
+
+          // Auto-retry transient chart failures so users don't need to switch periods manually.
+          const retries = heroRetryCountRef.current[period] ?? 0;
+          if (retries < 2) {
+            heroRetryCountRef.current[period] = retries + 1;
+            retryTimer = setTimeout(() => {
+              if (!cancelled) setHeroRetryTick((tick) => tick + 1);
+            }, 1200 * (retries + 1));
+          }
         }
       }
     })();
 
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [
     authLoading,
@@ -422,6 +449,7 @@ export default function DashboardScreen() {
     chart.length,
     monthChart.length,
     todayChart.length,
+    heroRetryTick,
   ]);
 
   // Sparkline fade-cross when heroPeriod changes (number of bars differs per period).
@@ -813,7 +841,10 @@ export default function DashboardScreen() {
   };
 
   const currentHero = heroConfig[heroPeriod];
-  const heroError = heroPeriod === "month" ? summaryError : chartError;
+  const heroError =
+    heroPeriod === "month"
+      ? summaryError ?? (monthChart.length === 0 ? chartError : null)
+      : chartError;
   const heroDateRange = (() => {
     const now = new Date();
     if (heroPeriod === "today") {
@@ -832,9 +863,24 @@ export default function DashboardScreen() {
   // Build period sparkline.
   const displayChart: ChartPoint[] = (() => {
     if (API_TARGET === "official") {
-      if (heroPeriod === "week") return chart;
-      if (heroPeriod === "today") return todayChart;
-      return monthChart;
+      if (heroPeriod === "week") {
+        return chart.length > 0 ? chart : lastNonEmptyHeroChartRef.current.week;
+      }
+      if (heroPeriod === "today") {
+        return todayChart.length > 0 ? todayChart : lastNonEmptyHeroChartRef.current.today;
+      }
+      if (monthChart.length > 0) return monthChart;
+      if (lastNonEmptyHeroChartRef.current.month.length > 0) {
+        return lastNonEmptyHeroChartRef.current.month;
+      }
+      const monthTotal = parseMoney(summary?.total_revenue_month);
+      const q = monthTotal / 4;
+      return [
+        { day: "W1", revenue: q },
+        { day: "W2", revenue: q },
+        { day: "W3", revenue: q },
+        { day: "W4", revenue: q },
+      ];
     }
     if (heroPeriod === "week") return chart;
     if (heroPeriod === "today") {
