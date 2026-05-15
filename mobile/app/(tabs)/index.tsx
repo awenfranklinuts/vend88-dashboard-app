@@ -54,6 +54,7 @@ import { DonutChart } from "../../src/components/DonutChart";
 
 type Summary = {
   today_sales: string;
+  today_revenue_change_pct?: number;
   week_revenue?: string;
   today_orders?: number;
   week_orders?: number;
@@ -794,7 +795,8 @@ export default function DashboardScreen() {
       : parseMoney(summary?.today_sales);
 
   // Period-over-period % change.
-  // month: from API. week: last-3-days vs first-4-days momentum proxy. today: today vs yesterday.
+  // month: from API. week: last-3-days vs first-4-days momentum proxy.
+  // today: explicit today-vs-previous-day metric from API summary.
   const pctChange = (curr: number, prev: number) => {
     if (!prev || prev === 0) return curr > 0 ? 100 : 0;
     return ((curr - prev) / prev) * 100;
@@ -807,12 +809,15 @@ export default function DashboardScreen() {
     // Scale halves to equal-day averages before comparing.
     return pctChange(secondHalf / 3, firstHalf / 4);
   })();
-  const todayChange = (() => {
-    if (chart.length < 2) return 0;
-    const today = chart[chart.length - 1].revenue;
-    const yesterday = chart[chart.length - 2].revenue;
-    return pctChange(today, yesterday);
-  })();
+  const todayChange =
+    API_TARGET === "official"
+      ? summary?.today_revenue_change_pct ?? 0
+      : (() => {
+          if (chart.length < 2) return 0;
+          const today = chart[chart.length - 1].revenue;
+          const yesterday = chart[chart.length - 2].revenue;
+          return pctChange(today, yesterday);
+        })();
 
   const heroConfig: Record<typeof heroPeriod, { label: string; value: number; hint: string; change: number }> = {
     month: {

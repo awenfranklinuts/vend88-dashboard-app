@@ -1,6 +1,8 @@
+import { useEffect, useState } from "react";
 import { DefaultTheme, ThemeProvider } from "@react-navigation/native";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import * as SplashScreen from "expo-splash-screen";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import "react-native-reanimated";
@@ -21,7 +23,37 @@ const navTheme = {
   },
 };
 
+// Keep the native splash visible until startup providers mount.
+SplashScreen.preventAutoHideAsync().catch(() => {
+  // Ignore if already hidden.
+});
+
 export default function RootLayout() {
+  const [appIsReady, setAppIsReady] = useState(false);
+
+  useEffect(() => {
+    const prepare = async () => {
+      try {
+        // Small minimum display so splash/logo does not flicker on fast starts.
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      } finally {
+        setAppIsReady(true);
+      }
+    };
+    void prepare();
+  }, []);
+
+  useEffect(() => {
+    if (!appIsReady) return;
+    SplashScreen.hideAsync().catch(() => {
+      // Ignore hide race conditions.
+    });
+  }, [appIsReady]);
+
+  if (!appIsReady) {
+    return null;
+  }
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
@@ -33,7 +65,7 @@ export default function RootLayout() {
                   headerShown: false,
                   animation: "fade",
                   animationDuration: 140,
-                contentStyle: { backgroundColor: BG },
+                  contentStyle: { backgroundColor: BG },
                 }}
               >
                 <Stack.Screen name="index" />

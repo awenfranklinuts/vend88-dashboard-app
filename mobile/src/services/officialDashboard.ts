@@ -6,6 +6,7 @@ const AUTH_EMAIL_KEY = "vend88-auth-email";
 
 export type DashboardSummary = {
   today_sales: string;
+  today_revenue_change_pct?: number;
   week_revenue?: string;
   today_items?: number;
   week_items?: number;
@@ -229,6 +230,15 @@ function getTodayRange(now = new Date()) {
   return {
     startDate: formatBusinessDate(start, false),
     endDate: formatBusinessDate(end, true),
+  };
+}
+
+function getPreviousDayRange(now = new Date()) {
+  const prev = new Date(now);
+  prev.setDate(prev.getDate() - 1);
+  return {
+    startDate: formatBusinessDate(prev, false),
+    endDate: formatBusinessDate(prev, true),
   };
 }
 
@@ -1622,6 +1632,7 @@ export async function fetchOfficialMonthRevenueDataForAuth(
   const previousMonthRange = getPreviousMonthRange(now);
   const weekRange = getWeeklyRange();
   const todayRange = getTodayRange();
+  const previousDayRange = getPreviousDayRange(now);
   const rawOrders = await requestScopedOrders(
     token,
     { time: [startDate, endDate] },
@@ -1638,6 +1649,7 @@ export async function fetchOfficialMonthRevenueDataForAuth(
     monthSnapshot,
     weekSnapshot,
     todaySnapshot,
+    previousDaySnapshot,
     monthBusinessSales,
     weekBusinessSales,
     todayBusinessSales,
@@ -1658,6 +1670,12 @@ export async function fetchOfficialMonthRevenueDataForAuth(
       token,
       todayRange.startDate,
       todayRange.endDate
+    ),
+    fetchPosDashboardSnapshot(
+      storeId,
+      token,
+      previousDayRange.startDate,
+      previousDayRange.endDate
     ),
     fetchBusinessSalesSnapshot(businessId, token, startDate, endDate),
     fetchBusinessSalesSnapshot(
@@ -1725,6 +1743,14 @@ export async function fetchOfficialMonthRevenueDataForAuth(
     previousMonthRevenue > 0
       ? ((monthRevenue - previousMonthRevenue) / previousMonthRevenue) * 100
       : 0;
+  const todayRevenue = todaySnapshot.revenueTotal;
+  const previousDayRevenue = previousDaySnapshot.revenueTotal;
+  const todayRevenueChangePct =
+    previousDayRevenue > 0
+      ? ((todayRevenue - previousDayRevenue) / previousDayRevenue) * 100
+      : todayRevenue > 0
+      ? 100
+      : 0;
   const ordersChangePct =
     previousMonthOrders > 0
       ? ((monthOrders - previousMonthOrders) / previousMonthOrders) * 100
@@ -1734,7 +1760,8 @@ export async function fetchOfficialMonthRevenueDataForAuth(
 
   return {
     summary: {
-      today_sales: todaySnapshot.revenueTotal.toFixed(2),
+      today_sales: todayRevenue.toFixed(2),
+      today_revenue_change_pct: todayRevenueChangePct,
       week_revenue: weekSnapshot.revenueTotal.toFixed(2),
       today_items: Math.round(todayBusinessSales.numProductsTotal),
       week_items: Math.round(weekBusinessSales.numProductsTotal),
