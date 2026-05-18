@@ -1,6 +1,6 @@
 import React from "react";
 import { View, Text, StyleSheet, StyleProp, ViewStyle } from "react-native";
-import { SECTION_LABEL, SPACE_SM, SPACE_MD } from "@/src/theme/tokens";
+import { SECTION_LABEL, SPACE_SM, SPACE_MD } from "../theme/tokens";
 
 interface SectionLabelProps {
   label: string;

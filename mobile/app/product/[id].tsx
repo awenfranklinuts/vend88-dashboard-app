@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import {
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
-import { Image as ExpoImage } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
@@ -138,12 +138,10 @@ export default function ProductDetailScreen() {
             <View style={styles.heroImageWrap}>
               {imageSourceUrl && !imageFailed ? (
                 <>
-                  <ExpoImage
+                  <Image
                     source={{ uri: imageSourceUrl }}
                     style={styles.heroImage}
-                    contentFit="cover"
-                    transition={120}
-                    cachePolicy="memory-disk"
+                    resizeMode="cover"
                     onLoadStart={() => {
                       setImageLoading(true);
                       setImageFailed(false);

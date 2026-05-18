@@ -66,19 +66,19 @@ On Android (Expo Go):
 
 From the mobile folder:
    cd mobile
-   npx eas login
+   npx --yes eas-cli login
 
 Run in Expo Go:
    npx expo start
 
 Push an OTA update:
-   npx eas update --branch production --message "update message"
+   npx --yes eas-cli update --branch production --message "update message"
 
 Create a cloud build:
-   npx eas build
+   npx --yes eas-cli build
 
 Submit a build to the stores:
-   npx eas submit
+   npx --yes eas-cli submit
 
 Note:
    - localhost does not work from phone unless using tunnel/proxy mode.
@@ -93,7 +93,7 @@ Note:
    vend8800
 
 
-   npx eas build -p android --profile preview
+   npx --yes eas-cli build -p android --profile preview
 
 
 cd mobile

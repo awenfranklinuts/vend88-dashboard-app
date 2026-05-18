@@ -7,7 +7,7 @@ import {
   SPACE_XS,
   SPACE_SM,
   SPACE_LG,
-} from "@/src/theme/tokens";
+} from "../theme/tokens";
 
 interface ScreenHeaderProps {
   /** Uppercase eyebrow text shown above the title (e.g. "CATALOG"). */

@@ -11,7 +11,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { haptic } from "@/src/utils/haptics";
+import { haptic } from "../utils/haptics";
 import {
   ACCENT,
   CARD_BORDER,
@@ -19,7 +19,7 @@ import {
   TEXT,
   TEXT_DIM,
   TEXT_FAINT,
-} from "@/src/theme/tokens";
+} from "../theme/tokens";
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -36,7 +36,7 @@ const ICON_MAP: Record<string, { on: IconName; off: IconName }> = {
 // Routes shown as the always-visible primary icons. Anything not listed here
 // becomes part of the expandable "More" panel.
 // Note: "products" is temporarily hidden — re-add it here when ready.
-const PRIMARY_ROUTES = ["index", "sales", "stores", "explore", "settings"];
+const PRIMARY_ROUTES = ["index", "sales", "stores", "settings"];
 
 // Routes surfaced inside the expandable panel (label + helper text).
 const MORE_META: Record<

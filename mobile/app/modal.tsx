@@ -3,7 +3,7 @@ import { StyleSheet } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { useI18n } from '@/src/context/I18nContext';
+import { useI18n } from '../src/context/I18nContext';
 
 export default function ModalScreen() {
   const { t } = useI18n();

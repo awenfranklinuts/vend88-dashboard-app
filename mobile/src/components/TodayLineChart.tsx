@@ -30,8 +30,8 @@ import Svg, {
 } from "react-native-svg";
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
-import { CARD_BORDER, GOLD, SUCCESS, TEXT, TEXT_DIM, TEXT_FAINT } from "@/src/theme/tokens";
-import { haptic } from "@/src/utils/haptics";
+import { CARD_BORDER, GOLD, SUCCESS, TEXT, TEXT_DIM, TEXT_FAINT } from "../theme/tokens";
+import { haptic } from "../utils/haptics";
 
 export type LinePoint = { day: string; revenue: number };
 
