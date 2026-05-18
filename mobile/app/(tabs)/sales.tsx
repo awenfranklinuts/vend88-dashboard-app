@@ -190,6 +190,27 @@ function getTransactionStatusMeta(rawStatus?: string): {
   return { label, color: TEXT_DIM };
 }
 
+function transactionNoun(
+  count: number,
+  t: (key: "sales_transaction_one" | "sales_transaction_other") => string
+): string {
+  return count === 1 ? t("sales_transaction_one") : t("sales_transaction_other");
+}
+
+function recordNoun(
+  count: number,
+  t: (key: "sales_record_one" | "sales_record_other") => string
+): string {
+  return count === 1 ? t("sales_record_one") : t("sales_record_other");
+}
+
+function itemNoun(
+  count: number,
+  t: (key: "products_item_one" | "products_item_other") => string
+): string {
+  return count === 1 ? t("products_item_one") : t("products_item_other");
+}
+
 function getTransactionStatusKey(rawStatus?: string): string {
   const raw = (rawStatus ?? "").trim().toLowerCase();
   return raw.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim() || "unknown";
@@ -2473,7 +2494,18 @@ export default function SalesScreen() {
       moduleBreakdown: moduleArr,
       periodItemsSold: itemsSold,
     };
-  }, [sales, period, statusFilter, search, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd]);
+  }, [
+    customEnd,
+    customStart,
+    period,
+    sales,
+    search,
+    selectedDate,
+    selectedMonthStart,
+    selectedWeekStart,
+    statusFilter,
+    t,
+  ]);
 
   useEffect(() => {
     if (statusFilter === ALL_STATUS_FILTER) return;
@@ -2641,10 +2673,11 @@ export default function SalesScreen() {
       const payColor = PAYMENT_COLORS[item.payment] ?? "#64748b";
       const isLastInSection = index === section.data.length - 1;
       const statusMeta = getTransactionStatusMeta(item.rawStatus ?? item.status);
+      const statusLabel = statusMeta.label;
       const txnTotal = parseMoney(item.total);
       return (
         <Pressable
-          accessibilityLabel={`Order ${item.order_id}, ${statusMeta.label}, ${formatCurrency(txnTotal, 2)}`}
+          accessibilityLabel={`${item.order_id}, ${statusLabel}, ${formatCurrency(txnTotal, 2)}`}
           onPress={() => {
             haptic.light();
             openOrderDetail(item);
@@ -2681,7 +2714,7 @@ export default function SalesScreen() {
               </View>
             </View>
             <Text style={styles.txnSub} numberOfLines={1}>
-              {formatTime(d)} · {item.items} items · {item.payment}
+              {formatTime(d)} · {item.items} {itemNoun(item.items, t)} · {item.payment}
             </Text>
           </View>
 
@@ -2700,14 +2733,14 @@ export default function SalesScreen() {
                     { color: statusMeta.color },
                 ]}
               >
-                  {statusMeta.label}
+                  {statusLabel}
               </Text>
             </View>
           </View>
         </Pressable>
       );
     },
-    [openOrderDetail]
+    [openOrderDetail, t]
   );
 
   const renderTxnHeader = useCallback(
@@ -3317,11 +3350,13 @@ export default function SalesScreen() {
             {!loading && displayPaymentBreakdown.length > 0 && (
               <View style={styles.block}>
                 <SectionLabel
-                  label="Payment Mix"
+                  label={t("sales_payment_mix")}
                   right={
                     <Text style={styles.sectionHint}>
                       {displayPaymentBreakdown.length}{" "}
-                      {displayPaymentBreakdown.length === 1 ? "method" : "methods"}
+                      {displayPaymentBreakdown.length === 1
+                        ? t("sales_method_one")
+                        : t("sales_method_other")}
                     </Text>
                   }
                 />
@@ -3364,7 +3399,7 @@ export default function SalesScreen() {
               <FadingContent fading={isFetching}>
                 {displayModuleBreakdown.length > 0 && (
                   <View style={styles.block}>
-                    <SectionLabel label="Revenue by Module" />
+                    <SectionLabel label={t("sales_revenue_by_module")} />
                     <View style={styles.moduleList}>
                       {displayModuleBreakdown.map((m, i) => (
                         <View
@@ -3404,7 +3439,7 @@ export default function SalesScreen() {
             )}
 
             {/* Txn header */}
-            <SectionLabel label="Transactions" />
+            <SectionLabel label={t("sales_transactions")} />
           </>
         }
         renderSectionHeader={renderTxnHeader}
@@ -3416,7 +3451,7 @@ export default function SalesScreen() {
             <LoadingTransactionList />
           ) : (stat?.orders ?? 0) > 0 ? (
             <Pressable
-              accessibilityLabel={`See all ${stat.orders} transactions for ${periodLabel}`}
+              accessibilityLabel={`${t("dashboard_see_all")} ${stat.orders} ${transactionNoun(stat.orders, t)} ${periodLabel}`}
               onPress={() => {
                 haptic.selection();
                 setAllTxnOpen(true);
@@ -3442,12 +3477,10 @@ export default function SalesScreen() {
                   <View style={styles.seeAllCountRow}>
                     <Text style={styles.seeAllCount}>{stat.orders}</Text>
                     <Text style={styles.seeAllCountLabel}>
-                      {stat.orders === 1 ? "transaction" : "transactions"}
+                      {transactionNoun(stat.orders, t)}
                     </Text>
                   </View>
-                  <Text style={styles.seeAllHint}>
-                    Tap to view all
-                  </Text>
+                  <Text style={styles.seeAllHint}>{t("sales_tap_to_view_all")}</Text>
                 </View>
 
                 <View style={styles.seeAllChevron}>
@@ -3458,13 +3491,15 @@ export default function SalesScreen() {
           ) : (
             <View style={styles.emptyCard}>
               <Ionicons name="receipt-outline" size={32} color={TEXT_DIM} />
-              <Text style={styles.emptyTitle}>No transactions</Text>
+              <Text style={styles.emptyTitle}>{t("sales_no_transactions")}</Text>
               <Text style={styles.emptyBody}>
                 {search
-                  ? "No results match your search."
+                  ? t("sales_no_search_results")
                   : statusFilter !== ALL_STATUS_FILTER
-                  ? `No ${activeStatusLabel.toLowerCase()} orders in this period.`
-                  : "Try a different time range."}
+                  ? t("sales_no_filtered_orders", {
+                      status: activeStatusLabel.toLowerCase(),
+                    })
+                  : t("sales_try_different_time_range")}
               </Text>
               {(search || statusFilter !== ALL_STATUS_FILTER) && (
                 <Pressable
@@ -3475,7 +3510,7 @@ export default function SalesScreen() {
                   }}
                   style={styles.emptyBtn}
                 >
-                  <Text style={styles.emptyBtnText}>Clear filters</Text>
+                  <Text style={styles.emptyBtnText}>{t("common_clear_filters")}</Text>
                 </Pressable>
               )}
             </View>
@@ -3496,12 +3531,11 @@ export default function SalesScreen() {
               <Text style={styles.allTxnTitle}>{allTxnPeriodLabel}</Text>
               <Text style={styles.allTxnSubtitle}>
                 {txnLoading && txnLoadedKey !== txnPeriodKey
-                  ? `Loading ${stat?.orders ?? 0} ${
-                      (stat?.orders ?? 0) === 1 ? "record" : "records"
-                    }…`
-                  : `${totalFiltered} ${
-                      totalFiltered === 1 ? "record" : "records"
-                    }${
+                  ? t("sales_all_txn_loading", {
+                      count: stat?.orders ?? 0,
+                      label: recordNoun(stat?.orders ?? 0, t),
+                    })
+                  : `${t("sales_records", { count: totalFiltered })}${
                       statusFilter !== ALL_STATUS_FILTER
                         ? ` · ${activeStatusLabel}`
                         : ""
@@ -3509,7 +3543,7 @@ export default function SalesScreen() {
               </Text>
             </View>
             <Pressable
-              accessibilityLabel="Close transactions"
+              accessibilityLabel={t("sales_all_txn_close")}
               hitSlop={8}
               onPress={() => {
                 haptic.selection();
@@ -3537,8 +3571,8 @@ export default function SalesScreen() {
                 color={searchFocused ? GOLD : TEXT_DIM}
               />
               <TextInput
-                accessibilityLabel="Search transactions"
-                placeholder="Search order ID, module, payment…"
+                accessibilityLabel={t("sales_search_transactions")}
+                placeholder={t("sales_search_placeholder")}
                 placeholderTextColor={TEXT_FAINT}
                 value={search}
                 onChangeText={setSearch}
@@ -3551,7 +3585,7 @@ export default function SalesScreen() {
               />
               {search ? (
                 <Pressable
-                  accessibilityLabel="Clear search"
+                  accessibilityLabel={t("sales_clear_search")}
                   onPress={() => {
                     haptic.selection();
                     setSearch("");
@@ -3570,7 +3604,7 @@ export default function SalesScreen() {
                 return (
                   <Pressable
                     key={tab.key}
-                    accessibilityLabel={`Filter: ${tab.label}, ${count} records`}
+                    accessibilityLabel={`${tab.label}, ${t("sales_records", { count })}`}
                     onPress={() => {
                       haptic.selection();
                       setStatusFilter(tab.key);
@@ -3614,7 +3648,7 @@ export default function SalesScreen() {
             </View>
           </View>
 
-          <SectionList
+          <SectionList<Sale, { title: string; total: number; data: Sale[] }>
             sections={sections}
             keyExtractor={(item) => `all-${item.id}`}
             style={styles.allTxnList}
@@ -3630,19 +3664,18 @@ export default function SalesScreen() {
                   count={Math.min(Math.max(stat?.orders ?? 6, 4), 10)}
                   totalLabel={
                     (stat?.orders ?? 0) > 0
-                      ? `Loading ${stat.orders} ${
-                          stat.orders === 1 ? "order" : "orders"
-                        }`
-                      : "Loading transactions"
+                      ? t("sales_all_txn_loading", {
+                          count: stat.orders,
+                          label: transactionNoun(stat.orders, t),
+                        })
+                      : t("sales_loading_transactions")
                   }
                 />
               ) : (
                 <View style={styles.emptyCard}>
                   <Ionicons name="receipt-outline" size={32} color={TEXT_DIM} />
-                  <Text style={styles.emptyTitle}>No transactions</Text>
-                  <Text style={styles.emptyBody}>
-                    Try a different time range.
-                  </Text>
+                  <Text style={styles.emptyTitle}>{t("sales_no_transactions")}</Text>
+                  <Text style={styles.emptyBody}>{t("sales_try_different_time_range")}</Text>
                 </View>
               )
             }

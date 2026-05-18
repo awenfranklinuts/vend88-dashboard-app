@@ -21,8 +21,8 @@
       "package": "com.vend88.dashboard",
       "icon": "./assets/images/icon.png",
       "adaptiveIcon": {
-        "backgroundColor": "#181E38",
-        "foregroundImage": "./assets/images/icon.png"
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundColor": "#181E38"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false

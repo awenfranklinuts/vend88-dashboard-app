@@ -136,7 +136,7 @@ export default function SettingsScreen() {
   const defaultProfileName = t("settings_app_name");
   const [notifications, setNotifications] = useState(true);
   const [profileName, setProfileName] = useState(defaultProfileName);
-  const [profileEmail, setProfileEmail] = useState("admin@vend88.app");
+  const [profileEmail, setProfileEmail] = useState("accounts@vend88.com");
 
   useEffect(() => {
     (async () => {
@@ -306,13 +306,6 @@ export default function SettingsScreen() {
             <Text style={styles.profileName}>{profileName}</Text>
             <Text style={styles.profileEmail}>{profileEmail}</Text>
           </View>
-          <Pressable
-            accessibilityLabel={t("settings_edit_profile")}
-            onPress={() => haptic.selection()}
-            style={({ pressed }) => [styles.editBtn, pressed && { opacity: 0.8 }]}
-          >
-            <Ionicons name="create-outline" size={14} color={GOLD} />
-          </Pressable>
         </View>
 
         {/* Security */}
@@ -451,16 +444,6 @@ const styles = StyleSheet.create({
   avatarText: { color: GOLD, fontWeight: "800", fontSize: 14 },
   profileName: { color: TEXT, fontWeight: "800", fontSize: 15 },
   profileEmail: { color: TEXT_DIM, fontSize: 12, marginTop: 2 },
-  editBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "rgba(212,175,55,0.1)",
-    borderWidth: 1,
-    borderColor: "rgba(212,175,55,0.3)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
 
   sectionLabel: {
     color: TEXT_DIM,

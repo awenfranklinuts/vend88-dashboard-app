@@ -10,7 +10,9 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
+import { CommonActions } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useI18n } from "../context/I18nContext";
 import { haptic } from "../utils/haptics";
 import {
   ACCENT,
@@ -36,18 +38,13 @@ const ICON_MAP: Record<string, { on: IconName; off: IconName }> = {
 // Routes shown as the always-visible primary icons. Anything not listed here
 // becomes part of the expandable "More" panel.
 // Note: "products" is temporarily hidden — re-add it here when ready.
-const PRIMARY_ROUTES = ["index", "sales", "stores", "settings"];
+const PRIMARY_ROUTES = ["index", "sales", "stores", "handover"];
 
 // Routes surfaced inside the expandable panel (label + helper text).
-const MORE_META: Record<
-  string,
-  { label: string; hint: string; tint: string; icon: IconName }
-> = {
-  handover: {
-    label: "Handover & End of Day",
-    hint: "Staff session, sales summary and closing report",
+const MORE_META: Record<string, { tint: string; icon: IconName }> = {
+  settings: {
     tint: GOLD,
-    icon: "swap-horizontal",
+    icon: "settings",
   },
 };
 
@@ -109,6 +106,7 @@ function TabItem({
 }
 
 export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
+  const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const [expanded, setExpanded] = useState(false);
   const expandAnim = useRef(new Animated.Value(0)).current;
@@ -117,6 +115,12 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
   const primaryRoutes = state.routes.filter((r) => PRIMARY_ROUTES.includes(r.name));
   // Routes available in the "more" expandable panel.
   const moreRoutes = state.routes.filter((r) => MORE_META[r.name]);
+  const moreMetaLabels: Record<string, { label: string; hint: string }> = {
+    settings: {
+      label: t("tab_settings"),
+      hint: t("tab_settings_hint"),
+    },
+  };
 
   // If user is currently on a "more" destination, reflect it as active in
   // the chevron tint even though no primary tab is highlighted.
@@ -174,7 +178,9 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
       });
       if (!focused && !event.defaultPrevented) {
         haptic.selection();
-        navigation.navigate(route.name as never, route.params as never);
+        navigation.dispatch(
+          CommonActions.navigate({ name: route.name, params: route.params })
+        );
       }
     };
 
@@ -202,7 +208,7 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
     >
       {expanded && (
         <Pressable
-          accessibilityLabel="Close menu"
+          accessibilityLabel={t("tab_more_close_menu")}
           onPress={() => setExpanded(false)}
           style={styles.scrim}
         />
@@ -218,12 +224,16 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
           },
         ]}
       >
-        <Text style={styles.panelTitle}>More</Text>
+        <Text style={styles.panelTitle}>{t("tab_more_title")}</Text>
         {moreRoutes.length === 0 ? (
-          <Text style={styles.panelEmpty}>No additional sections.</Text>
+          <Text style={styles.panelEmpty}>{t("tab_more_empty")}</Text>
         ) : (
           moreRoutes.map((route, idx) => {
             const meta = MORE_META[route.name];
+            const labels = moreMetaLabels[route.name] ?? {
+              label: route.name,
+              hint: "",
+            };
             const focused = state.routes[state.index]?.key === route.key;
             const onPress = () => {
               const event = navigation.emit({
@@ -233,14 +243,16 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
               });
               if (!event.defaultPrevented) {
                 haptic.selection();
-                navigation.navigate(route.name as never, route.params as never);
+                navigation.dispatch(
+                  CommonActions.navigate({ name: route.name, params: route.params })
+                );
                 setExpanded(false);
               }
             };
             return (
               <Pressable
                 key={route.key}
-                accessibilityLabel={meta.label}
+                accessibilityLabel={labels.label}
                 accessibilityRole="button"
                 onPress={onPress}
                 style={({ pressed }) => [
@@ -265,11 +277,13 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
                     style={[styles.panelItemLabel, focused && { color: GOLD }]}
                     numberOfLines={1}
                   >
-                    {meta.label}
+                    {labels.label}
                   </Text>
-                  <Text style={styles.panelItemHint} numberOfLines={1}>
-                    {meta.hint}
-                  </Text>
+                  {labels.hint ? (
+                    <Text style={styles.panelItemHint} numberOfLines={1}>
+                      {labels.hint}
+                    </Text>
+                  ) : null}
                 </View>
                 <Ionicons name="chevron-forward" size={16} color={TEXT_DIM} />
               </Pressable>
@@ -283,7 +297,9 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
         {moreRoutes.length > 0 && (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={expanded ? "Hide more sections" : "Show more sections"}
+            accessibilityLabel={
+              expanded ? t("tab_more_hide_sections") : t("tab_more_show_sections")
+            }
             accessibilityState={{ expanded }}
             onPress={toggleExpanded}
             hitSlop={6}
