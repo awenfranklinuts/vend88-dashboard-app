@@ -161,6 +161,19 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+const DAY_LABEL_KEYS: Record<
+  keyof OfficialShopOpenHours,
+  "stores_day_monday" | "stores_day_tuesday" | "stores_day_wednesday" | "stores_day_thursday" | "stores_day_friday" | "stores_day_saturday" | "stores_day_sunday"
+> = {
+  monday: "stores_day_monday",
+  tuesday: "stores_day_tuesday",
+  wednesday: "stores_day_wednesday",
+  thursday: "stores_day_thursday",
+  friday: "stores_day_friday",
+  saturday: "stores_day_saturday",
+  sunday: "stores_day_sunday",
+};
+
 function SectionCard({
   title,
   hint,
@@ -193,6 +206,7 @@ function HoursRow({
   label: string;
   slots: OpenHourSlot[];
 }) {
+  const { t } = useI18n();
   const closed = slots.length === 0;
   return (
     <View style={styles.hoursRow}>
@@ -201,7 +215,7 @@ function HoursRow({
       </Text>
       <View style={styles.hoursSlots}>
         {closed ? (
-          <Text style={styles.closedLabel}>Closed</Text>
+          <Text style={styles.closedLabel}>{t("stores_closed")}</Text>
         ) : (
           slots.map((s, idx) => (
             <View
@@ -296,6 +310,7 @@ function EditHoursModal({
   onCancel: () => void;
   onSave: (hours: OfficialShopOpenHours) => void;
 }) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState<OfficialShopOpenHours>(initial);
 
   // Reset draft each time the modal opens with new data.
@@ -344,8 +359,8 @@ function EditHoursModal({
       for (const slot of draft[day]) {
         if (!isValidTime(slot.start_time) || !isValidTime(slot.end_time)) {
           Alert.alert(
-            "Invalid time",
-            `${DAY_LABELS[day]} has an invalid time. Use HH:MM (24h).`
+            t("stores_modal_alert_invalid_time"),
+            t("stores_modal_alert_invalid_time_msg", { day: t(DAY_LABEL_KEYS[day]) })
           );
           return;
         }
@@ -368,7 +383,7 @@ function EditHoursModal({
       }));
     }
     onSave(normalized);
-  }, [draft, onSave]);
+  }, [draft, onSave, t]);
 
   return (
     <Modal
@@ -384,9 +399,9 @@ function EditHoursModal({
         >
           <View style={styles.modalHeader}>
             <Pressable onPress={onCancel} hitSlop={10}>
-              <Text style={styles.modalCancel}>Cancel</Text>
+              <Text style={styles.modalCancel}>{t("common_cancel")}</Text>
             </Pressable>
-            <Text style={styles.modalTitle}>Edit Hours</Text>
+            <Text style={styles.modalTitle}>{t("stores_modal_edit_hours")}</Text>
             <Pressable
               onPress={handleSave}
               disabled={saving}
@@ -395,7 +410,7 @@ function EditHoursModal({
               {saving ? (
                 <ActivityIndicator color={GOLD} />
               ) : (
-                <Text style={styles.modalSave}>Save</Text>
+                <Text style={styles.modalSave}>{t("stores_modal_save")}</Text>
               )}
             </Pressable>
           </View>
@@ -407,7 +422,7 @@ function EditHoursModal({
             {DAYS.map((day) => (
               <View key={day} style={styles.editDayGroup}>
                 <View style={styles.editDayHeader}>
-                  <Text style={styles.editDayLabel}>{DAY_LABELS[day]}</Text>
+                  <Text style={styles.editDayLabel}>{t(DAY_LABEL_KEYS[day])}</Text>
                   <Pressable
                     style={({ pressed }) => [
                       styles.addSlotBtn,
@@ -417,12 +432,12 @@ function EditHoursModal({
                     hitSlop={6}
                   >
                     <Ionicons name="add" size={13} color={ACCENT} />
-                    <Text style={styles.addSlotLabel}>Add slot</Text>
+                    <Text style={styles.addSlotLabel}>{t("stores_modal_add_slot")}</Text>
                   </Pressable>
                 </View>
                 {draft[day].length === 0 ? (
                   <Text style={styles.editClosedHint}>
-                    Closed · tap “Add slot” to open this day.
+                    {t("stores_edit_closed_hint")}
                   </Text>
                 ) : (
                   <View style={styles.editSlotList}>
@@ -513,6 +528,7 @@ function EditSurchargesModal({
     specific: Record<string, number>
   ) => void;
 }) {
+  const { t } = useI18n();
   const [specificDraft, setSpecificDraft] = useState<SpecificDraft[]>([]);
   const [namedDraft, setNamedDraft] = useState<NamedDraft[]>([]);
 
@@ -607,16 +623,25 @@ function EditSurchargesModal({
     for (const row of specificDraft) {
       if (!row.date && !row.percentInput.trim()) continue; // skip empty
       if (!isValidDate(row.date)) {
-        Alert.alert("Invalid date", `"${row.date || "(empty)"}" — use YYYY-MM-DD.`);
+        Alert.alert(
+          t("stores_modal_alert_invalid_date"),
+          t("stores_modal_alert_invalid_date_msg", { value: row.date || "(empty)" })
+        );
         return;
       }
       const pct = parsePercentInput(row.percentInput);
       if (pct === null || pct < 0) {
-        Alert.alert("Invalid percent", `Surcharge for ${row.date} is invalid.`);
+        Alert.alert(
+          t("stores_modal_alert_invalid_percent"),
+          t("stores_modal_alert_invalid_percent_msg", { date: row.date })
+        );
         return;
       }
       if (specificOut[row.date] !== undefined) {
-        Alert.alert("Duplicate date", `${row.date} appears more than once.`);
+        Alert.alert(
+          t("stores_modal_alert_duplicate_date"),
+          t("stores_modal_alert_duplicate_date_msg", { date: row.date })
+        );
         return;
       }
       specificOut[row.date] = pct;
@@ -628,20 +653,32 @@ function EditSurchargesModal({
       const name = row.name.trim();
       if (!name && !row.date && !row.percentInput.trim()) continue; // skip blank rows
       if (!name) {
-        Alert.alert("Missing name", "Each named surcharge needs a name.");
+        Alert.alert(
+          t("stores_modal_alert_missing_name"),
+          t("stores_modal_alert_missing_name_msg")
+        );
         return;
       }
       if (!isValidDate(row.date)) {
-        Alert.alert("Invalid date", `"${name}" has an invalid date. Use YYYY-MM-DD.`);
+        Alert.alert(
+          t("stores_modal_alert_invalid_date"),
+          t("stores_modal_alert_invalid_date_named", { name })
+        );
         return;
       }
       const pct = parsePercentInput(row.percentInput);
       if (pct === null || pct < 0) {
-        Alert.alert("Invalid percent", `"${name}" has an invalid percentage.`);
+        Alert.alert(
+          t("stores_modal_alert_invalid_percent"),
+          t("stores_modal_alert_invalid_percent_named", { name })
+        );
         return;
       }
       if (namedOut[name]) {
-        Alert.alert("Duplicate name", `"${name}" appears more than once.`);
+        Alert.alert(
+          t("stores_modal_alert_duplicate_name"),
+          t("stores_modal_alert_duplicate_name_msg", { name })
+        );
         return;
       }
       namedOut[name] = {
@@ -653,7 +690,7 @@ function EditSurchargesModal({
     }
 
     onSave(namedOut, specificOut);
-  }, [specificDraft, namedDraft, onSave]);
+  }, [specificDraft, namedDraft, onSave, t]);
 
   return (
     <Modal
@@ -669,14 +706,14 @@ function EditSurchargesModal({
         >
           <View style={styles.modalHeader}>
             <Pressable onPress={onCancel} hitSlop={10}>
-              <Text style={styles.modalCancel}>Cancel</Text>
+              <Text style={styles.modalCancel}>{t("common_cancel")}</Text>
             </Pressable>
-            <Text style={styles.modalTitle}>Edit Surcharges</Text>
+            <Text style={styles.modalTitle}>{t("stores_modal_edit_surcharges")}</Text>
             <Pressable onPress={handleSave} disabled={saving} hitSlop={10}>
               {saving ? (
                 <ActivityIndicator color={GOLD} />
               ) : (
-                <Text style={styles.modalSave}>Save</Text>
+                <Text style={styles.modalSave}>{t("stores_modal_save")}</Text>
               )}
             </Pressable>
           </View>
@@ -688,7 +725,7 @@ function EditSurchargesModal({
             {/* Specific Date Surcharges */}
             <View style={styles.editDayGroup}>
               <View style={styles.editDayHeader}>
-                <Text style={styles.editDayLabel}>Specific Dates</Text>
+                <Text style={styles.editDayLabel}>{t("stores_modal_specific_dates")}</Text>
                 <Pressable
                   style={({ pressed }) => [
                     styles.addSlotBtn,
@@ -698,12 +735,12 @@ function EditSurchargesModal({
                   hitSlop={6}
                 >
                   <Ionicons name="add" size={13} color={ACCENT} />
-                  <Text style={styles.addSlotLabel}>Add</Text>
+                  <Text style={styles.addSlotLabel}>{t("stores_modal_add")}</Text>
                 </Pressable>
               </View>
               {specificDraft.length === 0 ? (
                 <Text style={styles.editClosedHint}>
-                  None · tap “Add” to create a date-specific surcharge.
+                  {t("stores_modal_no_specific_surcharges_hint")}
                 </Text>
               ) : (
                 <View style={styles.editSlotList}>
@@ -751,7 +788,7 @@ function EditSurchargesModal({
             {/* Named Surcharges */}
             <View style={styles.editDayGroup}>
               <View style={styles.editDayHeader}>
-                <Text style={styles.editDayLabel}>Holiday & Named</Text>
+                <Text style={styles.editDayLabel}>{t("stores_modal_holiday_named")}</Text>
                 <Pressable
                   style={({ pressed }) => [
                     styles.addSlotBtn,
@@ -761,12 +798,12 @@ function EditSurchargesModal({
                   hitSlop={6}
                 >
                   <Ionicons name="add" size={13} color={ACCENT} />
-                  <Text style={styles.addSlotLabel}>Add</Text>
+                  <Text style={styles.addSlotLabel}>{t("stores_modal_add")}</Text>
                 </Pressable>
               </View>
               {namedDraft.length === 0 ? (
                 <Text style={styles.editClosedHint}>
-                  None · tap “Add” to create a named surcharge.
+                  {t("stores_modal_no_named_surcharges_hint")}
                 </Text>
               ) : (
                 <View style={styles.namedList}>
@@ -778,7 +815,7 @@ function EditSurchargesModal({
                           onChangeText={(v) =>
                             updateNamed(row.id, { name: v })
                           }
-                          placeholder="Holiday name"
+                          placeholder={t("stores_modal_holiday_name_placeholder")}
                           placeholderTextColor={TEXT_FAINT}
                           style={[styles.editInput, styles.namedNameInput]}
                         />
@@ -896,14 +933,14 @@ export default function StoresScreen() {
         setShop(detail);
       } catch (err) {
         const message =
-          err instanceof Error ? err.message : "Unable to load store details.";
+          err instanceof Error ? err.message : t("stores_error_body");
         setError(message);
       } finally {
         if (mode === "initial") setLoading(false);
         else setRefreshing(false);
       }
     },
-    [email, token]
+    [email, token, t]
   );
 
   useEffect(() => {
@@ -949,12 +986,12 @@ export default function StoresScreen() {
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Failed to update hours.";
-        Alert.alert("Update failed", message);
+        Alert.alert(t("stores_alert_update_failed"), message);
       } finally {
         setSavingHours(false);
       }
     },
-    [shop, email, token]
+    [shop, email, token, t]
   );
 
   const handleSaveSurcharges = useCallback(
@@ -979,12 +1016,12 @@ export default function StoresScreen() {
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Failed to update surcharges.";
-        Alert.alert("Update failed", message);
+        Alert.alert(t("stores_alert_update_failed"), message);
       } finally {
         setSavingSurcharges(false);
       }
     },
-    [shop, email, token]
+    [shop, email, token, t]
   );
 
   // ─── Render states ────────────────────────────────────────────────────────
@@ -1004,10 +1041,10 @@ export default function StoresScreen() {
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <View style={styles.centerFill}>
           <Ionicons name="alert-circle-outline" size={28} color={DANGER} />
-          <Text style={styles.errorTitle}>Unable to load store</Text>
+          <Text style={styles.errorTitle}>{t("stores_error_unable_to_load")}</Text>
           <Text style={styles.errorBody}>{error}</Text>
           <Pressable style={styles.retryBtn} onPress={() => load("initial")}>
-            <Text style={styles.retryLabel}>Retry</Text>
+            <Text style={styles.retryLabel}>{t("stores_retry_btn")}</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -1018,7 +1055,7 @@ export default function StoresScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <View style={styles.centerFill}>
-          <Text style={styles.errorBody}>No store selected.</Text>
+          <Text style={styles.errorBody}>{t("stores_no_store_selected")}</Text>
         </View>
       </SafeAreaView>
     );
@@ -1040,39 +1077,39 @@ export default function StoresScreen() {
       >
         <ScreenHeader
           eyebrow={t("tab_stores").toUpperCase()}
-          title={shop.store_name || shop.name || "Store"}
+          title={shop.store_name || shop.name || t("stores_store_fallback")}
           subtitle={shop.location || shop.shop_key}
         />
 
         {/* Store Detail */}
-        <SectionLabel label="Store Detail" />
-        <SectionCard title="Identifiers">
-          <DetailRow label="Store ID" value={shop._id} />
-          <DetailRow label="Store Name (Identifier)" value={shop.name ?? ""} />
+        <SectionLabel label={t("stores_detail_section")} />
+        <SectionCard title={t("stores_identifiers")}>
+          <DetailRow label={t("stores_store_id")} value={shop._id} />
+          <DetailRow label={t("stores_store_name_identifier")} value={shop.name ?? ""} />
           <DetailRow
-            label="Store Name (Public)"
+            label={t("stores_store_name_public")}
             value={shop.store_name ?? ""}
           />
-          <DetailRow label="Location" value={shop.location ?? ""} />
-          <DetailRow label="Number" value={shop.phone ?? ""} />
+          <DetailRow label={t("stores_location")} value={shop.location ?? ""} />
+          <DetailRow label={t("stores_number")} value={shop.phone ?? ""} />
           <DetailRow
-            label="Store Description"
+            label={t("stores_description")}
             value={shop.description ?? ""}
           />
         </SectionCard>
 
         {/* Store Logo */}
-        <SectionLabel label="Store Logo" />
+        <SectionLabel label={t("stores_logo_section")} />
         <SectionCard
-          title="Brand Icon"
-          hint="Tap the logo to preview at full size."
+          title={t("stores_brand_icon")}
+          hint={t("stores_logo_tap_hint")}
         >
           <View style={styles.logoRow}>
             <Pressable
               onPress={() => {
                 if (!shop.logo) return;
                 haptic.light();
-                setPreviewImage({ uri: shop.logo, label: "Store Logo" });
+                setPreviewImage({ uri: shop.logo, label: t("stores_logo_preview_label") });
               }}
               disabled={!shop.logo}
               style={({ pressed }) => [
@@ -1093,11 +1130,11 @@ export default function StoresScreen() {
             {shop.logo ? (
               <View style={styles.logoMeta}>
                 <Text style={styles.metaTitle}>
-                  {shop.store_name || shop.name || "Logo"}
+                  {shop.store_name || shop.name || t("stores_logo_fallback")}
                 </Text>
                 <View style={styles.tapHintRow}>
                   <Ionicons name="expand-outline" size={12} color={TEXT_DIM} />
-                  <Text style={styles.tapHint}>Tap to preview</Text>
+                  <Text style={styles.tapHint}>{t("stores_tap_to_preview")}</Text>
                 </View>
               </View>
             ) : null}
@@ -1105,16 +1142,16 @@ export default function StoresScreen() {
         </SectionCard>
 
         {/* Store Banner */}
-        <SectionLabel label="Store Banner" />
+        <SectionLabel label={t("stores_banner_section")} />
         <SectionCard
-          title="Storefront Banner"
-          hint="Displayed at the top of your storefront. Tap to expand."
+          title={t("stores_storefront_banner")}
+          hint={t("stores_banner_hint")}
         >
           <Pressable
             onPress={() => {
               if (!shop.banner) return;
               haptic.light();
-              setPreviewImage({ uri: shop.banner, label: "Store Banner" });
+              setPreviewImage({ uri: shop.banner, label: t("stores_banner_preview_label") });
             }}
             disabled={!shop.banner}
             style={({ pressed }) => [
@@ -1141,14 +1178,14 @@ export default function StoresScreen() {
         </SectionCard>
 
         {/* Online Store */}
-        <SectionLabel label="Online Store" />
+        <SectionLabel label={t("stores_online_store_section")} />
         <SectionCard
-          title="Storefront Link"
-          hint="Share this link with customers to access your store."
+          title={t("stores_storefront_link")}
+          hint={t("stores_storefront_link_hint")}
         >
           <View style={styles.linkRow}>
             <View style={styles.linkBox}>
-              <Text style={styles.linkLabel}>STORE LINK</Text>
+              <Text style={styles.linkLabel}>{t("stores_store_link_label")}</Text>
               <Text style={styles.linkValue} numberOfLines={2}>
                 {storefrontUrl ?? "—"}
               </Text>
@@ -1165,37 +1202,37 @@ export default function StoresScreen() {
                 }}
               >
                 <Ionicons name="open-outline" size={14} color={ACCENT} />
-                <Text style={styles.visitBtnLabel}>Visit</Text>
+                <Text style={styles.visitBtnLabel}>{t("stores_visit_btn")}</Text>
               </Pressable>
             ) : null}
           </View>
         </SectionCard>
 
         {/* Bind Warehouse Stock */}
-        <SectionLabel label="Bind Warehouse Stock" />
+        <SectionLabel label={t("stores_warehouse_section")} />
         <SectionCard
-          title="Inventory Source"
-          hint="Connect this store to a warehouse to sync inventory automatically."
+          title={t("stores_inventory_source")}
+          hint={t("stores_warehouse_hint")}
         >
           <View style={styles.warehouseRow}>
             <View style={styles.warehouseIcon}>
               <Ionicons name="cube-outline" size={18} color={GOLD} />
             </View>
             <View style={styles.warehouseBody}>
-              <Text style={styles.warehouseTitle}>Warehouse</Text>
+              <Text style={styles.warehouseTitle}>{t("stores_warehouse_title")}</Text>
               <Text
                 style={[
                   styles.warehouseStatus,
                   { color: shop.warehouse_id ? SUCCESS : TEXT_DIM },
                 ]}
               >
-                {shop.warehouse_id ? "Currently connected" : "Not connected"}
+                {shop.warehouse_id ? t("stores_warehouse_connected") : t("stores_warehouse_not_connected")}
               </Text>
             </View>
           </View>
           {shop.warehouse_id ? (
             <View style={styles.warehouseIdBox}>
-              <Text style={styles.warehouseIdLabel}>WAREHOUSE ID</Text>
+              <Text style={styles.warehouseIdLabel}>{t("stores_warehouse_id_label")}</Text>
               <Text style={styles.warehouseIdValue} numberOfLines={1}>
                 {shop.warehouse_id}
               </Text>
@@ -1204,10 +1241,10 @@ export default function StoresScreen() {
         </SectionCard>
 
         {/* Operational Hours */}
-        <SectionLabel label="Operational Hours" />
+        <SectionLabel label={t("stores_hours_section")} />
         <SectionCard
-          title="Weekly Schedule"
-          hint="Manage your weekly schedule and preorder availability."
+          title={t("stores_weekly_schedule")}
+          hint={t("stores_hours_hint")}
           action={
             <Pressable
               style={({ pressed }) => [
@@ -1221,7 +1258,7 @@ export default function StoresScreen() {
               hitSlop={8}
             >
               <Ionicons name="create-outline" size={13} color={ACCENT} />
-              <Text style={styles.headerEditBtnLabel}>Edit</Text>
+              <Text style={styles.headerEditBtnLabel}>{t("stores_edit_btn")}</Text>
             </Pressable>
           }
         >
@@ -1230,7 +1267,7 @@ export default function StoresScreen() {
               <HoursRow
                 key={day}
                 day={day}
-                label={DAY_LABELS[day]}
+                label={t(DAY_LABEL_KEYS[day])}
                 slots={shop.open_hour[day]}
               />
             ))}
@@ -1238,7 +1275,7 @@ export default function StoresScreen() {
           <View style={styles.preorderNote}>
             <Ionicons name="calendar-outline" size={13} color={TEXT_DIM} />
             <Text style={styles.preorderNoteText}>
-              <Text style={styles.preorderNoteLabel}>Preorder · </Text>
+              <Text style={styles.preorderNoteLabel}>{t("stores_preorder_label")}</Text>
               {(shop.max_perorderday ?? 0) > 0
                 ? `Up to ${shop.max_perorderday} day(s) ahead are allowed.`
                 : "Only same-day orders are currently allowed."}
@@ -1247,10 +1284,10 @@ export default function StoresScreen() {
         </SectionCard>
 
         {/* Surcharge Management */}
-        <SectionLabel label="Surcharge Management" />
+        <SectionLabel label={t("stores_surcharge_section")} />
         <SectionCard
-          title="Surcharges"
-          hint="Apply temporary uplifts on specific dates or recurring named holidays."
+          title={t("stores_surcharges")}
+          hint={t("stores_surcharge_hint")}
           action={
             <Pressable
               style={({ pressed }) => [
@@ -1264,14 +1301,14 @@ export default function StoresScreen() {
               hitSlop={8}
             >
               <Ionicons name="create-outline" size={13} color={ACCENT} />
-              <Text style={styles.headerEditBtnLabel}>Edit</Text>
+              <Text style={styles.headerEditBtnLabel}>{t("stores_edit_btn")}</Text>
             </Pressable>
           }
         >
           {/* Specific Date Surcharges */}
-          <Text style={styles.subSectionLabel}>Specific Date Surcharges</Text>
+          <Text style={styles.subSectionLabel}>{t("stores_surcharge_specific_dates")}</Text>
           {specificSurcharges.length === 0 ? (
-            <Text style={styles.emptyText}>No specific date surcharges.</Text>
+            <Text style={styles.emptyText}>{t("stores_no_specific_surcharges")}</Text>
           ) : (
             specificSurcharges.map((item) => (
               <View key={item.date} style={styles.specificRow}>
@@ -1298,10 +1335,10 @@ export default function StoresScreen() {
 
           {/* Named Surcharges */}
           <Text style={[styles.subSectionLabel, { marginTop: 14 }]}>
-            Holiday & Named Surcharges
+            {t("stores_surcharge_holiday_named")}
           </Text>
           {namedSurcharges.length === 0 ? (
-            <Text style={styles.emptyText}>No named surcharges configured.</Text>
+            <Text style={styles.emptyText}>{t("stores_no_named_surcharges")}</Text>
           ) : (
             namedSurcharges.map((item) => (
               <SurchargeRow key={item.name} item={item} />

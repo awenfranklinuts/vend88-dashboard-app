@@ -3,13 +3,42 @@ import { View } from "react-native";
 import { Redirect, Tabs } from "expo-router";
 import { useAuth } from "../../src/context/AuthContext";
 import { useI18n } from "../../src/context/I18nContext";
+import { AppLockProvider, useAppLock } from "../../src/context/AppLockContext";
 import { Skeleton } from "../../src/components/Skeleton";
 import { IslandTabBar } from "../../src/components/IslandTabBar";
+import { LockScreen } from "../../src/components/LockScreen";
 import { BG } from "../../src/theme/tokens";
+
+function TabsWithLock() {
+  const { t } = useI18n();
+  const { locked } = useAppLock();
+
+  return (
+    <View style={{ flex: 1, backgroundColor: BG }}>
+      <Tabs
+        tabBar={(props) => <IslandTabBar {...props} />}
+        screenOptions={{
+          headerShown: false,
+          sceneStyle: { backgroundColor: BG },
+        }}
+      >
+        <Tabs.Screen name="index" options={{ title: t("tab_dashboard") }} />
+        <Tabs.Screen name="sales" options={{ title: t("tab_sales") }} />
+        {/* Products tab temporarily hidden — keep route mounted but exclude from the tab bar. */}
+        <Tabs.Screen name="products" options={{ title: t("tab_products"), href: null }} />
+        <Tabs.Screen name="stores" options={{ title: t("tab_stores") }} />
+        {/* Modules tab hidden from interface — keep route available for internal navigation. */}
+        <Tabs.Screen name="explore" options={{ title: t("tab_modules"), href: null }} />
+        <Tabs.Screen name="settings" options={{ title: t("tab_settings") }} />
+        <Tabs.Screen name="handover" options={{ title: t("tab_handover") }} />
+      </Tabs>
+      {locked ? <LockScreen /> : null}
+    </View>
+  );
+}
 
 export default function TabLayout() {
   const { token, loading } = useAuth();
-  const { t } = useI18n();
 
   if (loading) {
     return (
@@ -28,22 +57,8 @@ export default function TabLayout() {
   }
 
   return (
-    <Tabs
-      tabBar={(props) => <IslandTabBar {...props} />}
-      screenOptions={{
-        headerShown: false,
-        sceneStyle: { backgroundColor: BG },
-      }}
-    >
-      <Tabs.Screen name="index" options={{ title: t("tab_dashboard") }} />
-      <Tabs.Screen name="sales" options={{ title: t("tab_sales") }} />
-      {/* Products tab temporarily hidden — keep route mounted but exclude from the tab bar. */}
-      <Tabs.Screen name="products" options={{ title: t("tab_products"), href: null }} />
-      <Tabs.Screen name="stores" options={{ title: t("tab_stores") }} />
-      {/* Modules tab hidden from interface — keep route available for internal navigation. */}
-      <Tabs.Screen name="explore" options={{ title: t("tab_modules"), href: null }} />
-      <Tabs.Screen name="settings" options={{ title: t("tab_settings") }} />
-      <Tabs.Screen name="handover" options={{ title: t("tab_handover") }} />
-    </Tabs>
+    <AppLockProvider>
+      <TabsWithLock />
+    </AppLockProvider>
   );
 }

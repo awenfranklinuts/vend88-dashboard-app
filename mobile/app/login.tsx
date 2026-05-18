@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+﻿import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import {
   Animated,
   Easing,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -34,6 +35,7 @@ try {
 
 const AUTH_TOKEN_KEY = "vend88-auth-token";
 const BIOMETRIC_KEY = "vend88-biometric-enabled";
+const BIOMETRIC_ASKED_KEY = "vend88-biometric-asked";
 
 const C = {
   bg: "#0F1427",
@@ -260,12 +262,93 @@ export default function LoginScreen() {
       return;
     }
 
+    // First-time biometric onboarding: ask the user whether to enable biometric
+    // sign-in, instead of silently triggering the OS prompt later. Only ask
+    // once, and only when hardware is available + enrolled + not already on.
+    await maybeOfferBiometricSetup();
+
     Animated.timing(screenOpacity, {
       toValue: 0,
       duration: 160,
       useNativeDriver: true,
     }).start(() => router.replace("/(tabs)"));
   };
+
+  // Prompt the user (in-app Alert) on their first successful login to decide
+  // whether to enable biometric unlock. We persist a "asked" flag so we never
+  // ask again — they can always toggle it later from Settings.
+  const maybeOfferBiometricSetup = useCallback(async (): Promise<void> => {
+    if (!LocalAuth) return;
+    try {
+      const [asked, alreadyOn, compatible, enrolled, supportedTypes] = await Promise.all([
+        SecureStore.getItemAsync(BIOMETRIC_ASKED_KEY),
+        SecureStore.getItemAsync(BIOMETRIC_KEY),
+        LocalAuth.hasHardwareAsync(),
+        LocalAuth.isEnrolledAsync(),
+        LocalAuth.supportedAuthenticationTypesAsync(),
+      ]);
+      if (asked === "1") return;
+      if (alreadyOn === "1") {
+        await SecureStore.setItemAsync(BIOMETRIC_ASKED_KEY, "1");
+        return;
+      }
+      if (!compatible || !enrolled) {
+        // Don't pester users on devices without biometrics.
+        await SecureStore.setItemAsync(BIOMETRIC_ASKED_KEY, "1");
+        return;
+      }
+
+      const FACIAL = LocalAuth.AuthenticationType.FACIAL_RECOGNITION;
+      const FINGER = LocalAuth.AuthenticationType.FINGERPRINT;
+      const hasFace = supportedTypes.includes(FACIAL);
+      const hasFinger = supportedTypes.includes(FINGER);
+      const message = hasFace
+        ? t("login_biometric_setup_face")
+        : hasFinger
+        ? t("login_biometric_setup_fingerprint")
+        : t("login_biometric_setup_generic");
+
+      await new Promise<void>((resolve) => {
+        Alert.alert(
+          t("login_biometric_setup_title"),
+          message,
+          [
+            {
+              text: t("login_biometric_setup_skip"),
+              style: "cancel",
+              onPress: async () => {
+                await SecureStore.setItemAsync(BIOMETRIC_ASKED_KEY, "1");
+                resolve();
+              },
+            },
+            {
+              text: t("login_biometric_setup_enable"),
+              onPress: async () => {
+                try {
+                  const auth = await LocalAuth!.authenticateAsync({
+                    promptMessage: t("login_biometric_setup_title"),
+                    cancelLabel: t("login_biometric_setup_skip"),
+                    disableDeviceFallback: true,
+                  });
+                  if (auth.success) {
+                    await SecureStore.setItemAsync(BIOMETRIC_KEY, "1");
+                  }
+                } catch {
+                  // Swallow — user can enable later from Settings.
+                } finally {
+                  await SecureStore.setItemAsync(BIOMETRIC_ASKED_KEY, "1");
+                  resolve();
+                }
+              },
+            },
+          ],
+          { cancelable: false, onDismiss: () => resolve() }
+        );
+      });
+    } catch {
+      // Non-fatal — never block sign-in on the onboarding prompt.
+    }
+  }, [t]);
 
   return (
     <SafeAreaView style={styles.safeArea}>

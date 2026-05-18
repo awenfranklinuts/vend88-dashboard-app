@@ -13,20 +13,14 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Ionicons } from "@expo/vector-icons";
 import * as SecureStore from "expo-secure-store";
 
-// expo-local-authentication is a native module. It requires a dev-client rebuild
-// to be linked. Load it dynamically so the JS bundle still evaluates if it
-// isn't yet available in the current native shell.
-type LocalAuthModule = typeof import("expo-local-authentication");
-let LocalAuth: LocalAuthModule | null = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  LocalAuth = require("expo-local-authentication");
-} catch {
-  LocalAuth = null;
-}
 import Constants from "expo-constants";
 import { useAuth } from "../../src/context/AuthContext";
 import { Language, useI18n } from "../../src/context/I18nContext";
+import {
+  LOCK_GRACE_DEFAULT_MS,
+  LOCK_GRACE_OPTIONS,
+  useAppLock,
+} from "../../src/context/AppLockContext";
 import { api } from "../../src/services/api";
 import { haptic } from "../../src/utils/haptics";
 import {
@@ -42,7 +36,6 @@ import {
 } from "../../src/theme/tokens";
 import { ScreenHeader } from "../../src/components/ScreenHeader";
 
-const BIOMETRIC_KEY = "vend88-biometric-enabled";
 const NOTIFY_KEY = "vend88-notifications-enabled";
 const AUTH_TOKEN_KEY = "vend88-auth-token";
 const AUTH_EMAIL_KEY = "vend88-auth-email";
@@ -131,26 +124,28 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const { signOut } = useAuth();
   const { language, languageLabel, setLanguage, t } = useI18n();
+  const {
+    enabled: biometric,
+    supported: biometricSupported,
+    graceMs,
+    enable: enableLock,
+    disable: disableLock,
+    lockNow,
+    setGraceMs,
+  } = useAppLock();
   const defaultProfileName = t("settings_app_name");
-  const [biometric, setBiometric] = useState(false);
   const [notifications, setNotifications] = useState(true);
-  const [biometricSupported, setBiometricSupported] = useState(false);
   const [profileName, setProfileName] = useState(defaultProfileName);
   const [profileEmail, setProfileEmail] = useState("admin@vend88.app");
 
   useEffect(() => {
     (async () => {
-      const [compat, enrolled, bio, notif, storedEmail, storedToken] = await Promise.all([
-        LocalAuth ? LocalAuth.hasHardwareAsync() : Promise.resolve(false),
-        LocalAuth ? LocalAuth.isEnrolledAsync() : Promise.resolve(false),
-        SecureStore.getItemAsync(BIOMETRIC_KEY),
+      const [notif, storedEmail, storedToken] = await Promise.all([
         SecureStore.getItemAsync(NOTIFY_KEY),
         SecureStore.getItemAsync(AUTH_EMAIL_KEY),
         SecureStore.getItemAsync(AUTH_TOKEN_KEY),
       ]);
 
-      setBiometricSupported(Boolean(compat && enrolled));
-      setBiometric(bio === "1");
       if (notif !== null) setNotifications(notif === "1");
 
       const email = storedEmail?.trim();
@@ -193,20 +188,50 @@ export default function SettingsScreen() {
 
   const toggleBiometric = async (value: boolean) => {
     haptic.selection();
-    if (value && LocalAuth) {
-      const result = await LocalAuth.authenticateAsync({
-        promptMessage: t("settings_enable_biometric"),
-        disableDeviceFallback: false,
-      });
-      if (!result.success) {
-        haptic.error();
-        return;
-      }
+    const ok = value
+      ? await enableLock(t("settings_enable_biometric"))
+      : await disableLock(t("settings_disable_biometric"));
+    if (!ok) {
+      haptic.error();
+      return;
     }
-    setBiometric(value);
-    await SecureStore.setItemAsync(BIOMETRIC_KEY, value ? "1" : "0");
     haptic.success();
   };
+
+  const selectGracePeriod = () => {
+    haptic.selection();
+    Alert.alert(
+      t("settings_lock_grace"),
+      t("settings_lock_grace_hint"),
+      [
+        ...LOCK_GRACE_OPTIONS.map((opt) => ({
+          text:
+            opt.value === graceMs
+              ? `${t(opt.key as Parameters<typeof t>[0])} \u2713`
+              : t(opt.key as Parameters<typeof t>[0]),
+          onPress: () => {
+            void setGraceMs(opt.value);
+          },
+        })),
+        { text: t("common_cancel"), style: "cancel" as const },
+      ]
+    );
+  };
+
+  const handleLockNow = () => {
+    if (!biometric || !biometricSupported) return;
+    haptic.warning();
+    lockNow();
+  };
+
+  const graceLabel = (() => {
+    const match = LOCK_GRACE_OPTIONS.find((opt) => opt.value === graceMs);
+    const fallback = LOCK_GRACE_OPTIONS.find(
+      (opt) => opt.value === LOCK_GRACE_DEFAULT_MS
+    );
+    const key = (match ?? fallback ?? LOCK_GRACE_OPTIONS[0]).key as Parameters<typeof t>[0];
+    return t(key);
+  })();
 
   const toggleNotifications = async (value: boolean) => {
     haptic.selection();
@@ -311,6 +336,24 @@ export default function SettingsScreen() {
               />
             }
           />
+          {biometric && biometricSupported ? (
+            <>
+              <View style={styles.divider} />
+              <Row
+                icon="time-outline"
+                label={t("settings_lock_grace")}
+                hint={graceLabel}
+                onPress={selectGracePeriod}
+              />
+              <View style={styles.divider} />
+              <Row
+                icon="lock-closed-outline"
+                label={t("settings_lock_now")}
+                hint={t("settings_lock_now_hint")}
+                onPress={handleLockNow}
+              />
+            </>
+          ) : null}
           <View style={styles.divider} />
           <Row
             icon="key-outline"

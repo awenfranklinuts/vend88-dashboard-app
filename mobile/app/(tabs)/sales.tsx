@@ -17,6 +17,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../src/context/AuthContext";
+import { useI18n } from "../../src/context/I18nContext";
 import { API_TARGET } from "../../src/services/api";
 import {
   fetchOfficialBusinessItemsSoldRange,
@@ -216,15 +217,15 @@ function dayKey(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-function relativeDayLabel(d: Date): string {
+function relativeDayLabel(d: Date, t: (key: "sales_relative_today" | "sales_relative_yesterday") => string): string {
   const now = new Date();
   const today = dayKey(now);
   const yest = new Date(now);
   yest.setDate(now.getDate() - 1);
   const yesterdayKey = dayKey(yest);
   const k = dayKey(d);
-  if (k === today) return "Today";
-  if (k === yesterdayKey) return "Yesterday";
+  if (k === today) return t("sales_relative_today");
+  if (k === yesterdayKey) return t("sales_relative_yesterday");
   const diff = Math.floor((now.getTime() - d.getTime()) / 86400000);
   if (diff < 7) return d.toLocaleDateString(undefined, { weekday: "long" });
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -614,6 +615,7 @@ function DateRangePickerModal({
   onClose: () => void;
   onApply: (start: Date, end: Date) => void;
 }) {
+  const { t } = useI18n();
   const [viewMonth, setViewMonth] = useState<Date>(() =>
     monthStart(initialStart ?? maxDate)
   );
@@ -668,8 +670,8 @@ function DateRangePickerModal({
     pendingStart && pendingEnd
       ? `${formatShortDate(pendingStart)} – ${formatShortDate(pendingEnd)}`
       : pendingStart
-      ? `${formatShortDate(pendingStart)} – select end`
-      : "Select start date";
+      ? `${formatShortDate(pendingStart)} ${t("sales_picker_select_end")}`
+      : t("sales_picker_select_start");
 
   return (
     <Modal
@@ -681,9 +683,9 @@ function DateRangePickerModal({
       <Pressable style={styles.pickerBackdrop} onPress={onClose}>
         <Pressable style={styles.pickerCard} onPress={() => {}}>
           <View style={styles.pickerHeader}>
-            <Text style={styles.pickerTitle}>Custom range</Text>
+            <Text style={styles.pickerTitle}>{t("sales_picker_custom_range")}</Text>
             <Pressable
-              accessibilityLabel="Close"
+              accessibilityLabel={t("sales_picker_close")}
               onPress={onClose}
               hitSlop={8}
               style={({ pressed }) => [styles.pickerCloseBtn, pressed && styles.pressed]}
@@ -696,7 +698,7 @@ function DateRangePickerModal({
 
           <View style={styles.pickerMonthBar}>
             <Pressable
-              accessibilityLabel="Previous month"
+              accessibilityLabel={t("sales_picker_prev_month")}
               onPress={() => {
                 haptic.selection();
                 setViewMonth((m) => {
@@ -712,7 +714,7 @@ function DateRangePickerModal({
             </Pressable>
             <Text style={styles.pickerMonthLabel}>{monthLabel}</Text>
             <Pressable
-              accessibilityLabel="Next month"
+              accessibilityLabel={t("sales_picker_next_month")}
               disabled={!canGoNextMonth}
               onPress={() => {
                 if (!canGoNextMonth) {
@@ -796,7 +798,7 @@ function DateRangePickerModal({
 
           <View style={styles.pickerActions}>
             <Pressable
-              accessibilityLabel="Clear range"
+              accessibilityLabel={t("sales_picker_clear_range")}
               onPress={() => {
                 haptic.selection();
                 setPendingStart(null);
@@ -804,10 +806,10 @@ function DateRangePickerModal({
               }}
               style={({ pressed }) => [styles.pickerSecondaryBtn, pressed && styles.pressed]}
             >
-              <Text style={styles.pickerSecondaryBtnText}>Clear</Text>
+              <Text style={styles.pickerSecondaryBtnText}>{t("sales_picker_clear")}</Text>
             </Pressable>
             <Pressable
-              accessibilityLabel="Apply range"
+              accessibilityLabel={t("sales_picker_apply_range")}
               disabled={!canApply}
               onPress={() => {
                 if (!canApply || !pendingStart || !pendingEnd) {
@@ -822,7 +824,7 @@ function DateRangePickerModal({
                 pressed && canApply && styles.pressed,
               ]}
             >
-              <Text style={styles.pickerPrimaryBtnText}>Apply</Text>
+              <Text style={styles.pickerPrimaryBtnText}>{t("sales_picker_apply")}</Text>
             </Pressable>
           </View>
         </Pressable>
@@ -1113,6 +1115,7 @@ function formatOrderTime(value: unknown): string {
 }
 
 function StatusPill({ status }: { status?: string }) {
+  const { t } = useI18n();
   const s = (status ?? "").toLowerCase();
   let bg = TEXT_DIM + "22";
   let fg = TEXT_DIM;
@@ -1120,19 +1123,19 @@ function StatusPill({ status }: { status?: string }) {
   if (/paid|complete|done/.test(s)) {
     bg = SUCCESS + "22";
     fg = SUCCESS;
-    label = "Paid";
+    label = t("sales_status_paid");
   } else if (/refund/.test(s)) {
     bg = DANGER + "22";
     fg = DANGER;
-    label = "Refunded";
+    label = t("sales_status_refunded");
   } else if (/cancel|void/.test(s)) {
     bg = DANGER + "22";
     fg = DANGER;
-    label = status ?? "Cancelled";
+    label = status ?? t("sales_status_cancelled");
   } else if (/active|open|pending/.test(s)) {
     bg = WARNING + "22";
     fg = WARNING;
-    label = "Active";
+    label = t("sales_active");
   }
   return (
     <View style={[detailStyles.pill, { backgroundColor: bg }]}>
@@ -1200,6 +1203,7 @@ function OrderDetailModal({
   error: string | null;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const visible = sale != null;
 
   const summary = useMemo(() => {
@@ -1280,7 +1284,7 @@ function OrderDetailModal({
       <SafeAreaView style={detailStyles.safe} edges={["top"]}>
         <View style={detailStyles.header}>
           <View style={{ flex: 1 }}>
-            <Text style={detailStyles.eyebrow}>ORDER DETAILS</Text>
+            <Text style={detailStyles.eyebrow}>{t("sales_detail_order_details")}</Text>
             <Text style={detailStyles.title} numberOfLines={1}>
               {sale?.order_id ?? "—"}
             </Text>
@@ -1291,7 +1295,7 @@ function OrderDetailModal({
             ) : null}
           </View>
           <Pressable
-            accessibilityLabel="Close order details"
+            accessibilityLabel={t("sales_detail_close")}
             hitSlop={8}
             onPress={onClose}
             style={({ pressed }) => [
@@ -1323,7 +1327,7 @@ function OrderDetailModal({
         ) : error ? (
           <View style={detailStyles.errorBox}>
             <Ionicons name="alert-circle-outline" size={32} color={DANGER} />
-            <Text style={detailStyles.errorTitle}>Couldn't load details</Text>
+            <Text style={detailStyles.errorTitle}>{t("sales_detail_error_title")}</Text>
             <Text style={detailStyles.errorBody}>{error}</Text>
           </View>
         ) : summary ? (
@@ -1334,7 +1338,7 @@ function OrderDetailModal({
           >
             {/* Hero — total + status */}
             <View style={detailStyles.hero}>
-              <Text style={detailStyles.heroEyebrow}>TOTAL</Text>
+              <Text style={detailStyles.heroEyebrow}>{t("sales_detail_total")}</Text>
               <Text style={detailStyles.heroAmount}>
                 {formatCurrency(summary.cost, 2)}
               </Text>
@@ -1360,48 +1364,48 @@ function OrderDetailModal({
             </View>
 
             {/* Order Summary */}
-            <SectionCard title="Order Summary">
-              <DetailRow label="Order ID" value={summary.orderId} mono />
+            <SectionCard title={t("sales_detail_section_summary")}>
+              <DetailRow label={t("sales_detail_order_id")} value={summary.orderId} mono />
               {summary.orderNum != null ? (
                 <DetailRow
-                  label="Order #"
+                  label={t("sales_detail_order_number")}
                   value={`#${summary.orderNum}`}
                 />
               ) : null}
               <DetailRow
-                label="Cost"
+                label={t("sales_detail_cost")}
                 value={formatCurrency(summary.cost, 2)}
                 emphasis
               />
-              <DetailRow label="Status" value={summary.status} />
-              <DetailRow label="Method" value={summary.method} />
-              <DetailRow label="Source" value={summary.source} />
+              <DetailRow label={t("sales_detail_status")} value={summary.status} />
+              <DetailRow label={t("sales_detail_method")} value={summary.method} />
+              <DetailRow label={t("sales_detail_source")} value={summary.source} />
               <DetailRow
-                label="Discount"
+                label={t("sales_detail_discount")}
                 value={formatCurrency(summary.discount, 2)}
               />
               <DetailRow
-                label="Rounding"
+                label={t("sales_detail_rounding")}
                 value={formatCurrency(summary.rounding, 2)}
               />
               <DetailRow
-                label="Holiday Surcharge"
+                label={t("sales_detail_holiday_surcharge")}
                 value={`${summary.holidaySurcharge}%`}
               />
-              <DetailRow label="Tax" value={formatCurrency(summary.tax, 2)} />
+              <DetailRow label={t("sales_detail_tax")} value={formatCurrency(summary.tax, 2)} />
               <DetailRow
-                label="Guest Count"
+                label={t("sales_detail_guest_count")}
                 value={String(summary.guestCount)}
               />
               <DetailRow
-                label="Date of Purchase"
+                label={t("sales_detail_date_of_purchase")}
                 value={formatOrderTime(summary.time)}
               />
             </SectionCard>
 
             {/* Products */}
             {products.length > 0 ? (
-              <SectionCard title={`Products (${products.length})`}>
+              <SectionCard title={t("sales_detail_products", { count: products.length })}>
                 {products.map((p, i) => (
                   <View
                     key={i}
@@ -1428,7 +1432,7 @@ function OrderDetailModal({
                         {p.refunded ? (
                           <View style={detailStyles.refundBadge}>
                             <Text style={detailStyles.refundBadgeText}>
-                              REFUND
+                              {t("sales_detail_refund_badge")}
                             </Text>
                           </View>
                         ) : null}
@@ -1449,7 +1453,7 @@ function OrderDetailModal({
                 ))}
               </SectionCard>
             ) : productRefs.length > 0 ? (
-              <SectionCard title={`Products (${productRefs.length})`}>
+              <SectionCard title={t("sales_detail_products", { count: productRefs.length })}>
                 {productRefs.map((ref, i) => {
                   const detail = productNameMap[ref.id];
                   const name =
@@ -1531,9 +1535,9 @@ function OrderDetailModal({
 
             {/* Transactions */}
             {transactions.length > 0 ? (
-              <SectionCard title="Transactions">
-                {transactions.map((t, i) => {
-                  const isRefund = /refund/i.test(t.type ?? "");
+              <SectionCard title={t("sales_detail_transactions")}>
+                {transactions.map((tx, i) => {
+                  const isRefund = /refund/i.test(tx.type ?? "");
                   return (
                     <View
                       key={i}
@@ -1553,21 +1557,21 @@ function OrderDetailModal({
                           ]}
                         />
                         <Text style={detailStyles.txnDetailType}>
-                          {(t.type ?? "PAYMENT").toUpperCase()}
+                          {(tx.type ?? t("sales_detail_payment_label")).toUpperCase()}
                         </Text>
-                        {t.platform ? (
+                        {tx.platform ? (
                           <Text style={detailStyles.txnDetailPlatform}>
-                            · {t.platform}
+                            · {tx.platform}
                           </Text>
                         ) : null}
                       </View>
-                      {t.id ? (
+                      {tx.id ? (
                         <Text
                           style={detailStyles.txnDetailId}
                           numberOfLines={1}
                           ellipsizeMode="middle"
                         >
-                          {t.id}
+                          {tx.id}
                         </Text>
                       ) : null}
                       <View style={detailStyles.txnDetailAmounts}>
@@ -1578,11 +1582,11 @@ function OrderDetailModal({
                           ]}
                         >
                           {isRefund ? "−" : ""}
-                          {formatCurrency(t.amount ?? 0, 2)}
+                          {formatCurrency(tx.amount ?? 0, 2)}
                         </Text>
-                        {t.surcharge != null && t.surcharge > 0 ? (
+                        {tx.surcharge != null && tx.surcharge > 0 ? (
                           <Text style={detailStyles.txnDetailSurcharge}>
-                            +{formatCurrency(t.surcharge, 2)} fee
+                            {t("sales_detail_fee_suffix", { amount: formatCurrency(tx.surcharge, 2) })}
                           </Text>
                         ) : null}
                       </View>
@@ -1878,6 +1882,7 @@ const detailStyles = StyleSheet.create({
 
 export default function SalesScreen() {
   const { email, token, loading: authLoading } = useAuth();
+  const { t } = useI18n();
   const [sales, setSales] = useState<Sale[]>([]);
   const [summary, setSummary] = useState<SalesSummary | null>(null);
   const [chart, setChart] = useState<{ day: string; revenue: number }[]>([]);
@@ -1914,6 +1919,35 @@ export default function SalesScreen() {
   const [detailError, setDetailError] = useState<string | null>(null);
 
   const today = useMemo(() => startOfDay(new Date()), []);
+
+  const periodLabel = useCallback(
+    (p: Period): string => {
+      switch (p) {
+        case "today":
+          return t("sales_today");
+        case "this_week":
+          return t("sales_week");
+        case "this_month":
+          return t("sales_month");
+        case "custom":
+        default:
+          return t("sales_custom");
+      }
+    },
+    [t]
+  );
+
+  const translateStatusLabel = useCallback(
+    (raw: string | undefined, fallback: string): string => {
+      const s = (raw ?? "").toLowerCase();
+      if (/paid|complete|done/.test(s)) return t("sales_status_paid");
+      if (/refund/.test(s)) return t("sales_status_refunded");
+      if (/cancel|void/.test(s)) return t("sales_status_cancelled");
+      if (/active|open|pending/.test(s)) return t("sales_active");
+      return fallback;
+    },
+    [t]
+  );
   const isSelectedToday = dayKey(selectedDate) === dayKey(today);
   const canGoNext = selectedDate < today;
 
@@ -2382,7 +2416,7 @@ export default function SalesScreen() {
     for (const s of filtered) {
       const d = parseDate(s.date);
       const key = dayKey(d);
-      const g = groups.get(key) ?? { title: relativeDayLabel(d), date: d, items: [] };
+      const g = groups.get(key) ?? { title: relativeDayLabel(d, t), date: d, items: [] };
       g.items.push(s);
       groups.set(key, g);
     }
@@ -2513,7 +2547,7 @@ export default function SalesScreen() {
   // keeps the report scannable and avoids visual duplication with the modal.
 
   // Human-readable label for the active period — used in the modal header.
-  const periodLabel = useMemo(() => {
+  const allTxnPeriodLabel = useMemo(() => {
     if (period === "today") {
       return selectedDate.toLocaleDateString(undefined, {
         weekday: "short",
@@ -2554,8 +2588,8 @@ export default function SalesScreen() {
       });
       return `${startStr} – ${endStr}`;
     }
-    return PERIOD_LABELS[period];
-  }, [period, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd]);
+    return periodLabel(period);
+  }, [period, selectedDate, selectedWeekStart, selectedMonthStart, customStart, customEnd, periodLabel]);
 
   const openOrderDetail = useCallback(
     async (sale: Sale) => {
@@ -2564,7 +2598,7 @@ export default function SalesScreen() {
       setDetailError(null);
       const rawId = sale.rawId;
       if (!rawId) {
-        setDetailError("Order details are not available for this transaction.");
+        setDetailError(t("sales_detail_unavailable"));
         setDetailLoading(false);
         return;
       }
@@ -2572,17 +2606,17 @@ export default function SalesScreen() {
       try {
         const data = await fetchOfficialOrderDetail(rawId, { email, token });
         if (!data) {
-          setDetailError("Could not load order details.");
+          setDetailError(t("sales_detail_load_error"));
         } else {
           setDetailOrder(data);
         }
       } catch {
-        setDetailError("Could not load order details.");
+        setDetailError(t("sales_detail_load_error"));
       } finally {
         setDetailLoading(false);
       }
     },
-    [email, token]
+    [email, token, t]
   );
 
   const closeOrderDetail = useCallback(() => {
@@ -2707,18 +2741,18 @@ export default function SalesScreen() {
             {/* Top bar */}
             <View style={styles.topBar}>
               <View style={{ flex: 1, gap: 4 }}>
-                <Text style={styles.eyebrow}>REPORTS</Text>
-                <Text style={styles.title}>Sales</Text>
+                <Text style={styles.eyebrow}>{t("sales_reports_eyebrow")}</Text>
+                <Text style={styles.title}>{t("sales_title")}</Text>
               </View>
               <Pressable
-                accessibilityLabel="Export report"
+                accessibilityLabel={t("sales_export_report")}
                 onPress={() => haptic.selection()}
                 style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
               >
                 <Ionicons name="download-outline" size={18} color={TEXT} />
               </Pressable>
               <Pressable
-                accessibilityLabel="Filters"
+                accessibilityLabel={t("sales_filters")}
                 onPress={() => haptic.selection()}
                 style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
               >
@@ -2733,7 +2767,7 @@ export default function SalesScreen() {
                 return (
                   <Pressable
                     key={p}
-                    accessibilityLabel={`Show ${PERIOD_LABELS[p]} data`}
+                    accessibilityLabel={t("sales_show_period_data", { period: periodLabel(p) })}
                     disabled={isFetching}
                     onPress={() => {
                       haptic.selection();
@@ -2753,7 +2787,7 @@ export default function SalesScreen() {
                         isFetching && styles.periodTabTextDisabled,
                       ]}
                     >
-                      {PERIOD_LABELS[p]}
+                      {periodLabel(p)}
                     </Text>
                     <View
                       style={[
@@ -2772,11 +2806,11 @@ export default function SalesScreen() {
                 const hasRange = !!(customStart && customEnd);
                 const rangeLabel = hasRange
                   ? `${formatShortDate(customStart!)} – ${formatShortDate(customEnd!)}`
-                  : "Select date range";
+                  : t("sales_pager_select_range");
                 return (
                   <View style={styles.datePager}>
                     <Pressable
-                      accessibilityLabel="Edit date range"
+                      accessibilityLabel={t("sales_pager_edit_range")}
                       onPress={() => {
                         haptic.selection();
                         setPickerOpen(true);
@@ -2792,7 +2826,7 @@ export default function SalesScreen() {
                         {rangeLabel}
                       </Text>
                       <Pressable
-                        accessibilityLabel="Change date range"
+                        accessibilityLabel={t("sales_pager_change_range")}
                         onPress={() => {
                           haptic.selection();
                           setPickerOpen(true);
@@ -2800,13 +2834,13 @@ export default function SalesScreen() {
                         hitSlop={6}
                       >
                         <Text style={styles.pagerJump}>
-                          {hasRange ? "Change range" : "Tap to choose"}
+                          {hasRange ? t("sales_pager_change_range_btn") : t("sales_pager_tap_choose")}
                         </Text>
                       </Pressable>
                     </View>
 
                     <Pressable
-                      accessibilityLabel="Edit date range"
+                      accessibilityLabel={t("sales_pager_edit_range")}
                       onPress={() => {
                         haptic.selection();
                         setPickerOpen(true);
@@ -2889,7 +2923,7 @@ export default function SalesScreen() {
               return (
                 <View style={styles.datePager}>
                   <Pressable
-                    accessibilityLabel="Previous"
+                    accessibilityLabel={t("sales_pager_previous")}
                     onPress={goPrev}
                     style={({ pressed }) => [styles.pagerArrow, pressed && styles.pressed]}
                     hitSlop={8}
@@ -2904,31 +2938,30 @@ export default function SalesScreen() {
                     {isCurrent ? (
                       <Text style={styles.pagerCurrentTag}>
                         {period === "today"
-                          ? "TODAY"
+                          ? t("sales_pager_today_tag")
                           : period === "this_week"
-                          ? "THIS WEEK"
-                          : "THIS MONTH"}
+                          ? t("sales_pager_this_week_tag")
+                          : t("sales_pager_this_month_tag")}
                       </Text>
                     ) : (
                       <Pressable
-                        accessibilityLabel="Jump to current"
+                        accessibilityLabel={t("sales_pager_jump_current")}
                         onPress={goCurrent}
                         hitSlop={6}
                       >
                         <Text style={styles.pagerJump}>
-                          Jump to{" "}
                           {period === "today"
-                            ? "today"
+                            ? t("sales_pager_jump_today")
                             : period === "this_week"
-                            ? "this week"
-                            : "this month"}
+                            ? t("sales_pager_jump_week")
+                            : t("sales_pager_jump_month")}
                         </Text>
                       </Pressable>
                     )}
                   </View>
 
                   <Pressable
-                    accessibilityLabel="Next"
+                    accessibilityLabel={t("sales_pager_next")}
                     onPress={goNext}
                     disabled={!canGoNext}
                     style={({ pressed }) => [
@@ -2962,18 +2995,18 @@ export default function SalesScreen() {
                       <Text style={styles.heroLabel}>
                         {period === "custom"
                           ? customStart && customEnd
-                            ? `${formatShortDate(customStart).toUpperCase()} – ${formatShortDate(customEnd).toUpperCase()} · REVENUE`
-                            : "CUSTOM RANGE · REVENUE"
+                            ? `${formatShortDate(customStart).toUpperCase()} – ${formatShortDate(customEnd).toUpperCase()} · ${t("sales_revenue_word").toUpperCase()}`
+                            : t("sales_hero_custom_revenue")
                           : period === "today" && !isSelectedToday
-                          ? `${formatShortDate(selectedDate).toUpperCase()} · REVENUE`
+                          ? `${formatShortDate(selectedDate).toUpperCase()} · ${t("sales_revenue_word").toUpperCase()}`
                           : period === "this_week" &&
                             dayKey(selectedWeekStart) !== dayKey(thisWeekStart)
-                          ? `${formatWeekPill(selectedWeekStart).toUpperCase()} · REVENUE`
+                          ? `${formatWeekPill(selectedWeekStart).toUpperCase()} · ${t("sales_revenue_word").toUpperCase()}`
                           : period === "this_month" &&
                             (selectedMonthStart.getFullYear() !== thisMonthStart.getFullYear() ||
                               selectedMonthStart.getMonth() !== thisMonthStart.getMonth())
-                          ? `${formatMonthPill(selectedMonthStart).toUpperCase()} · REVENUE`
-                          : `${PERIOD_LABELS[period].toUpperCase()} REVENUE`}
+                          ? `${formatMonthPill(selectedMonthStart).toUpperCase()} · ${t("sales_revenue_word").toUpperCase()}`
+                          : `${periodLabel(period).toUpperCase()} ${t("sales_revenue_word").toUpperCase()}`}
                       </Text>
                       <View style={styles.heroDots}>
                         <View
@@ -3015,7 +3048,7 @@ export default function SalesScreen() {
                         </Text>
                       </View>
                       <Text style={styles.heroHint}>
-                        vs previous {PERIOD_LABELS[period].toLowerCase()}
+                        {t("sales_vs_previous_period", { period: periodLabel(period).toLowerCase() })}
                       </Text>
                     </View>
                   </View>
@@ -3027,13 +3060,13 @@ export default function SalesScreen() {
                   <View style={styles.kpiCell}>
                     <Ionicons name="cube-outline" size={16} color={GOLD} />
                     <AnimatedNumber value={itemsSoldKpi} style={styles.kpiValue} />
-                    <Text style={styles.kpiLabel}>Items sold</Text>
+                    <Text style={styles.kpiLabel}>{t("sales_kpi_items_sold")}</Text>
                   </View>
                   <View style={styles.kpiDivider} />
                   <View style={styles.kpiCell}>
                     <Ionicons name="receipt-outline" size={16} color={WARNING} />
                     <AnimatedNumber value={stat?.orders ?? 0} style={styles.kpiValue} />
-                    <Text style={styles.kpiLabel}>Orders</Text>
+                    <Text style={styles.kpiLabel}>{t("sales_kpi_orders")}</Text>
                   </View>
                   <View style={styles.kpiDivider} />
                   <View style={styles.kpiCell}>
@@ -3044,7 +3077,7 @@ export default function SalesScreen() {
                       decimals={2}
                       style={styles.kpiValue}
                     />
-                    <Text style={styles.kpiLabel}>Avg order</Text>
+                    <Text style={styles.kpiLabel}>{t("sales_kpi_avg_order")}</Text>
                   </View>
                 </View>
               </FadingContent>
@@ -3066,7 +3099,7 @@ export default function SalesScreen() {
                     : period === "custom"
                     ? customStart && customEnd
                       ? `${formatShortDate(customStart).toUpperCase()} – ${formatShortDate(customEnd).toUpperCase()}`
-                      : "CUSTOM"
+                      : t("sales_period_hint_custom")
                     : formatMonthPill(selectedMonthStart).toUpperCase();
                 const fmt = (n: number) => formatCurrency(n, 2);
                 const diningEntries = Object.entries(officialStats.diningMode).sort(
@@ -3078,7 +3111,7 @@ export default function SalesScreen() {
                 return (
                   <View style={styles.block}>
                     <SectionLabel
-                      label="Statement"
+                      label={t("sales_statement")}
                       right={<Text style={styles.sectionHint}>{periodHint}</Text>}
                     />
 
@@ -3098,63 +3131,63 @@ export default function SalesScreen() {
                         },
                       ]}
                     >
-                      <StatementRow label="Total Orders" value={String(o.totalOrders)} />
+                      <StatementRow label={t("sales_stmt_total_orders")} value={String(o.totalOrders)} />
                       <StatementDivider />
 
                       <StatementRow
-                        label="Gross Sales"
+                        label={t("sales_stmt_gross_sales")}
                         value={fmt(f.grossSales)}
                         emphasis
                       />
                       <StatementSubRow
-                        label="Item Sales"
+                        label={t("sales_stmt_item_sales")}
                         value={fmt(f.totalItemSale)}
                       />
                       <StatementSubRow
-                        label="Credit Recharge"
+                        label={t("sales_stmt_credit_recharge")}
                         value={fmt(f.totalCreditAdded)}
                       />
                       <StatementSubRow
-                        label="Member Credit"
+                        label={t("sales_stmt_member_credit")}
                         value={fmt(-f.totalCreditUsage)}
                         negative={f.totalCreditUsage > 0}
                       />
                       <StatementSubRow
-                        label="Rounding"
+                        label={t("sales_stmt_rounding")}
                         value={fmt(f.totalRounding)}
                       />
 
                       <StatementDivider />
                       <StatementRow
-                        label="Discounts"
+                        label={t("sales_stmt_discounts")}
                         value={fmt(-f.totalDiscount)}
                         negative={f.totalDiscount > 0}
                       />
                       <StatementDivider />
                       <StatementRow
-                        label={`Refunds (${o.refundCount})`}
+                        label={t("sales_stmt_refunds", { count: o.refundCount })}
                         value={fmt(-f.totalRefunds)}
                         negative={f.totalRefunds > 0}
                       />
                       <StatementDivider />
                       <StatementRow
-                        label="Holiday Surcharge"
+                        label={t("sales_stmt_holiday_surcharge")}
                         value={fmt(f.totalExtraCharge)}
                       />
                       <StatementDivider />
                       <StatementRow
-                        label="Payment Surcharge"
+                        label={t("sales_stmt_payment_surcharge")}
                         value={fmt(f.totalSurcharge)}
                       />
                       {f.totalTax > 0 && (
                         <>
                           <StatementDivider />
-                          <StatementRow label="Tax" value={fmt(f.totalTax)} />
+                          <StatementRow label={t("sales_stmt_tax")} value={fmt(f.totalTax)} />
                         </>
                       )}
                       <StatementDivider />
                       <StatementRow
-                        label="Total Revenue"
+                        label={t("sales_stmt_total_revenue")}
                         value={fmt(f.totalRevenue)}
                         total
                       />
@@ -3163,7 +3196,7 @@ export default function SalesScreen() {
                         <>
                           <View style={styles.statementSectionHeader}>
                             <Text style={styles.statementSectionHeaderText}>
-                              DINING MODE
+                              {t("sales_stmt_dining_mode")}
                             </Text>
                           </View>
                           {diningEntries.map(([name, value], idx) => (
@@ -3179,7 +3212,7 @@ export default function SalesScreen() {
                         <>
                           <View style={styles.statementSectionHeader}>
                             <Text style={styles.statementSectionHeaderText}>
-                              PAYMENT METHODS
+                              {t("sales_stmt_payment_methods")}
                             </Text>
                           </View>
                           {paymentEntries.map(([name, value], idx) => (
@@ -3208,12 +3241,12 @@ export default function SalesScreen() {
                 count: number;
                 amount: number;
               }[] = [
-                { key: "voided",     label: "Voided",     icon: "close-circle-outline",     color: "#ef4444", count: a.voided.count,     amount: a.voided.amount },
-                { key: "refunds",    label: "Refunds",    icon: "return-down-back-outline", color: "#f97316", count: a.refunds.count,    amount: a.refunds.amount },
-                { key: "discounts",  label: "Discounts",  icon: "pricetag-outline",         color: "#f59e0b", count: a.discounts.count,  amount: a.discounts.amount },
-                { key: "coupons",    label: "Coupons",    icon: "ticket-outline",           color: "#8b5cf6", count: a.coupons.count,    amount: a.coupons.amount },
-                { key: "creditPaid", label: "Paid by Credit", icon: "wallet-outline",       color: "#06b6d4", count: a.creditPaid.count, amount: a.creditPaid.amount },
-                { key: "cancelled",  label: "Cancelled",  icon: "ban-outline",              color: "#dc2626", count: a.cancelled.count,  amount: a.cancelled.amount },
+                { key: "voided",     label: t("sales_abnormal_voided"),     icon: "close-circle-outline",     color: "#ef4444", count: a.voided.count,     amount: a.voided.amount },
+                { key: "refunds",    label: t("sales_abnormal_refunds"),    icon: "return-down-back-outline", color: "#f97316", count: a.refunds.count,    amount: a.refunds.amount },
+                { key: "discounts",  label: t("sales_abnormal_discounts"),  icon: "pricetag-outline",         color: "#f59e0b", count: a.discounts.count,  amount: a.discounts.amount },
+                { key: "coupons",    label: t("sales_abnormal_coupons"),    icon: "ticket-outline",           color: "#8b5cf6", count: a.coupons.count,    amount: a.coupons.amount },
+                { key: "creditPaid", label: t("sales_abnormal_credit_paid"), icon: "wallet-outline",       color: "#06b6d4", count: a.creditPaid.count, amount: a.creditPaid.amount },
+                { key: "cancelled",  label: t("sales_abnormal_cancelled"),  icon: "ban-outline",              color: "#dc2626", count: a.cancelled.count,  amount: a.cancelled.amount },
               ];
               const totalCount = items.reduce((sum, i) => sum + i.count, 0);
               const fmt = (n: number) => formatCurrency(n, 2);
@@ -3221,10 +3254,10 @@ export default function SalesScreen() {
                 <FadingContent fading={isFetching}>
                   <View style={styles.block}>
                     <SectionLabel
-                      label="Abnormal Transactions"
+                      label={t("sales_abnormal_section")}
                       right={
                         <Text style={styles.sectionHint}>
-                          {totalCount} {totalCount === 1 ? "record" : "records"}
+                          {t("sales_records", { count: totalCount })}
                         </Text>
                       }
                     />
@@ -3260,7 +3293,7 @@ export default function SalesScreen() {
                             <View style={styles.abnormalBody}>
                               <Text style={styles.abnormalLabel}>{it.label}</Text>
                               <Text style={styles.abnormalCount}>
-                                {it.count} {it.count === 1 ? "txn" : "txns"}
+                                {t("sales_txns", { count: it.count })}
                               </Text>
                             </View>
                             <Text
@@ -3404,7 +3437,7 @@ export default function SalesScreen() {
 
                 <View style={styles.seeAllBody}>
                   <Text style={styles.seeAllEyebrow}>
-                    {periodLabel.toUpperCase()}
+                    {allTxnPeriodLabel.toUpperCase()}
                   </Text>
                   <View style={styles.seeAllCountRow}>
                     <Text style={styles.seeAllCount}>{stat.orders}</Text>
@@ -3459,8 +3492,8 @@ export default function SalesScreen() {
         <SafeAreaView style={styles.allTxnContainer} edges={["top"]}>
           <View style={styles.allTxnHeader}>
             <View style={styles.allTxnHeaderText}>
-              <Text style={styles.allTxnEyebrow}>TRANSACTIONS</Text>
-              <Text style={styles.allTxnTitle}>{periodLabel}</Text>
+              <Text style={styles.allTxnEyebrow}>{t("sales_all_txn_eyebrow")}</Text>
+              <Text style={styles.allTxnTitle}>{allTxnPeriodLabel}</Text>
               <Text style={styles.allTxnSubtitle}>
                 {txnLoading && txnLoadedKey !== txnPeriodKey
                   ? `Loading ${stat?.orders ?? 0} ${
