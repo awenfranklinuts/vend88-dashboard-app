@@ -45,6 +45,15 @@
             "backgroundColor": "#181e38"
           }
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "buildReactNativeFromSource": true,
+            "deploymentTarget": "15.1"
+          }
+        }
       ]
     ],
     "updates": {
