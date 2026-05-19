@@ -10,7 +10,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "com.vend88.dashboard",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
@@ -36,12 +36,12 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 230,
+          "image": "./assets/images/splash-icon-ios.png",
+          "imageWidth": 170,
           "resizeMode": "contain",
           "backgroundColor": "#181e38",
           "dark": {
-            "image": "./assets/images/splash-icon.png",
+            "image": "./assets/images/splash-icon-ios.png",
             "backgroundColor": "#181e38"
           }
         }

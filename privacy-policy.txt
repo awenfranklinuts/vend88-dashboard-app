@@ -1,0 +1,79 @@
+VendDashboard Privacy Policy
+Effective date: 19 May 2026
+
+Vend88 PTY LTD ("Vend88", "we", "our", or "us") operates the VendDashboard mobile application (the "App").
+
+This Privacy Policy explains what information we collect, how we use it, and your choices.
+
+1. Information We Collect
+
+a) Account and profile information
+- Name, email address, phone number, and business/store details you provide when using the App.
+
+b) App usage and technical information
+- Device information (such as device model, operating system version, app version).
+- Log data and diagnostics (including crash logs and performance information).
+- Network and request metadata necessary to operate and secure our services.
+
+c) Business data you manage in the App
+- Product information, inventory records, sales records, and related dashboard analytics.
+
+d) Information you provide in support requests
+- Any information you send to us when contacting support.
+
+2. How We Use Information
+
+We use information to:
+- Provide, maintain, and improve the App and backend services.
+- Authenticate users and protect account security.
+- Process and display business analytics and operational insights.
+- Diagnose bugs, monitor performance, and prevent abuse.
+- Communicate service updates and support responses.
+- Comply with legal obligations.
+
+3. Sharing of Information
+
+We do not sell your personal information.
+
+We may share information with:
+- Service providers that help us host, secure, analyze, and operate the App.
+- Legal or regulatory authorities when required by law or to protect rights and safety.
+- A successor entity in connection with a merger, acquisition, or asset transfer.
+
+4. Data Retention
+
+We retain information for as long as needed to provide the App, meet legal obligations, resolve disputes, and enforce agreements.
+
+5. Data Security
+
+We use reasonable administrative, technical, and organizational safeguards to protect information. No method of transmission or storage is 100% secure.
+
+6. International Data Transfers
+
+Your information may be processed in countries other than your own where our service providers operate.
+
+7. Your Rights and Choices
+
+Depending on your location, you may have rights to access, correct, delete, or restrict processing of your personal information.
+
+To make a request, contact us at:
+Email: accounts@vend88.com
+
+8. Children’s Privacy
+
+The App is not directed to children under 13 (or the minimum age required by local law), and we do not knowingly collect personal information from children.
+
+9. Third-Party Services
+
+The App may use third-party services for infrastructure, diagnostics, and analytics. Those providers process data under their own privacy terms.
+
+10. Changes to This Privacy Policy
+
+We may update this Privacy Policy from time to time. We will post the updated version with a new effective date.
+
+11. Contact Us
+
+Vend88 PTY LTD
+Email: accounts@vend88.com
+
+---

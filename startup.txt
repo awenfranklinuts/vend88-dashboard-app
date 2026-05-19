@@ -103,3 +103,14 @@ npx expo run:ios
 
 
 npx expo run:ios --device --configuration Release
+
+
+--- APP STORE SCREENSHOT RESIZE (Desktop PNGs) ---
+
+Portrait (1284 x 2778):
+mkdir -p ~/Desktop/asc-ready && for f in ~/Desktop/*.png; do [ -e "$f" ] || continue; sips --resampleHeightWidth 2778 1284 "$f" --out ~/Desktop/asc-ready/"$(basename "$f")"; done
+
+Landscape (2778 x 1284):
+mkdir -p ~/Desktop/asc-ready && for f in ~/Desktop/*.png; do [ -e "$f" ] || continue; sips --resampleHeightWidth 1284 2778 "$f" --out ~/Desktop/asc-ready/"$(basename "$f")"; done
+
+If files are in a Desktop subfolder, replace ~/Desktop/*.png with that folder path.

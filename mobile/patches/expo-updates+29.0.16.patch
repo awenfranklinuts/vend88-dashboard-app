@@ -1,0 +1,42 @@
+diff --git a/node_modules/expo-updates/ios/EXUpdates/UpdatesUtils.swift b/node_modules/expo-updates/ios/EXUpdates/UpdatesUtils.swift
+index a1e2c9a..1b23632 100644
+--- a/node_modules/expo-updates/ios/EXUpdates/UpdatesUtils.swift
++++ b/node_modules/expo-updates/ios/EXUpdates/UpdatesUtils.swift
+@@ -3,9 +3,9 @@
+ // swiftlint:disable force_unwrapping
+ 
+ import Foundation
++import Network
+ import SystemConfiguration
+ import CommonCrypto
+-import Reachability
+ import ExpoModulesCore
+ 
+ internal extension Array where Element: Equatable {
+@@ -67,11 +67,22 @@ public final class UpdatesUtils: NSObject {
+ 
+   internal static func shouldCheckForUpdate(withConfig config: UpdatesConfig) -> Bool {
+     func isConnectedToWifi() -> Bool {
+-      do {
+-        return try Reachability().connection == .wifi
+-      } catch {
+-        return false
++      let monitor = NWPathMonitor()
++      let queue = DispatchQueue(label: "expo.updates.wifi-check")
++      let semaphore = DispatchSemaphore(value: 0)
++      var onWifi = false
++
++      monitor.pathUpdateHandler = { path in
++        onWifi = path.status == .satisfied && path.usesInterfaceType(.wifi)
++        semaphore.signal()
++        monitor.cancel()
+       }
++
++      monitor.start(queue: queue)
++      _ = semaphore.wait(timeout: .now() + 0.5)
++      monitor.cancel()
++
++      return onWifi
+     }
+ 
+     switch config.checkOnLaunch {
