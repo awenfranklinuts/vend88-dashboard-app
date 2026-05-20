@@ -18,7 +18,10 @@
     },
     "production": {
       "distribution": "store",
-      "channel": "production"
+      "channel": "production",
+      "android": {
+        "buildType": "app-bundle"
+      }
     }
   },
   "submit": {

@@ -398,7 +398,7 @@ export default function SettingsScreen() {
           <Row
             icon="help-circle-outline"
             label={t("settings_help_support")}
-            onPress={() => Linking.openURL("mailto:support@vend88.app").catch(() => {})}
+            onPress={() => Linking.openURL("mailto:accounts@vend88.com").catch(() => {})}
           />
         </View>
 
