@@ -67,6 +67,9 @@ On Android (Expo Go):
 From the mobile folder:
    cd mobile
    npx --yes eas-cli login
+   # Important: run all EAS commands from mobile only.
+   # Running them from the repo root can use the root app.json/eas.json
+   # and target a different Expo project.
 
 Preflight before using EAS build quota:
    node -v
@@ -105,6 +108,7 @@ Note:
    vend8800
 
 
+   # Run from mobile/ only:
    npx --yes eas-cli build -p android --profile preview
 
 
