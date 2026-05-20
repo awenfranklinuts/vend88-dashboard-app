@@ -50,7 +50,8 @@
             "deploymentTarget": "15.1"
           }
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "updates": {
       "url": "https://u.expo.dev/19929edd-50b1-492e-babf-140d6dcaab95"

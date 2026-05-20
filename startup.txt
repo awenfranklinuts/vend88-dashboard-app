@@ -68,6 +68,18 @@ From the mobile folder:
    cd mobile
    npx --yes eas-cli login
 
+Preflight before using EAS build quota:
+   node -v
+   java -version
+   npx expo-doctor
+   .\android\gradlew.bat :app:assembleDebug --stacktrace
+   .\android\gradlew.bat :app:assembleRelease --stacktrace
+
+Requirements for local Android preflight:
+   - Use Node 20.19.4 or newer.
+   - Install JDK 17 and set JAVA_HOME before running gradlew.
+   - If local Gradle assemble passes, the EAS gradlew phase is much less likely to fail on native compile issues.
+
 Run in Expo Go:
    npx expo start
 
