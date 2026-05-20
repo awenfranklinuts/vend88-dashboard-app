@@ -67,9 +67,10 @@ On Android (Expo Go):
 From the mobile folder:
    cd mobile
    npx --yes eas-cli login
-   # Important: run all EAS commands from mobile only.
-   # Running them from the repo root can use the root app.json/eas.json
-   # and target a different Expo project.
+
+Important:
+   - Run EAS commands from the mobile folder only, or use the root wrapper scripts.
+   - Running `eas build` from the workspace root can pick up the root `app.json` and cause Expo project slug/projectId mismatch errors.
 
 Preflight before using EAS build quota:
    node -v
@@ -91,6 +92,8 @@ Push an OTA update:
 
 Create a cloud build:
    npx --yes eas-cli build
+   # or from repo root:
+   npm run eas:preview
 
 Submit a build to the stores:
    npx --yes eas-cli submit
@@ -108,7 +111,6 @@ Note:
    vend8800
 
 
-   # Run from mobile/ only:
    npx --yes eas-cli build -p android --profile preview
 
 

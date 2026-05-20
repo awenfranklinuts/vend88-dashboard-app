@@ -8,10 +8,10 @@ Mobile-first POS dashboard app using Expo (React Native) with a FastAPI backend.
 vend88-dashboard-app/
 |- mobile/             # Expo app (primary client)
 |- backend/            # FastAPI server
-|- app.json            # Root Expo config (optional)
-|- eas.json            # Root EAS config (optional)
 `- README.md
 ```
+
+All Expo and EAS commands should be run from `mobile/`.
 
 ## Getting Started
 

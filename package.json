@@ -7,6 +7,9 @@
     "mobile:start": "cd mobile && npm start",
     "mobile:android": "cd mobile && npm run android",
     "mobile:ios": "cd mobile && npm run ios",
-    "mobile:lint": "cd mobile && npm run lint"
+    "mobile:lint": "cd mobile && npm run lint",
+    "eas:preview": "cd mobile && npx --yes eas-cli build -p android --profile preview",
+    "eas:production": "cd mobile && npx --yes eas-cli build -p android --profile production",
+    "eas:update": "cd mobile && npx --yes eas-cli update --branch production"
   }
 }
