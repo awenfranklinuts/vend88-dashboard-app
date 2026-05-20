@@ -11,6 +11,16 @@ web-build/
 
 # Native build artifacts
 ios/
+android/local.properties
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/**/build/
+android/**/.cxx/
+android/**/.gradle/
+android/**/generated/
 
 # IDE and misc
 .vscode/
