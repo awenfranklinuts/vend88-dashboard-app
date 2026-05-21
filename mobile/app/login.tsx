@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import {
   Easing,
   ActivityIndicator,
   Alert,
+  Linking,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -36,6 +37,7 @@ try {
 const AUTH_TOKEN_KEY = "vend88-auth-token";
 const BIOMETRIC_KEY = "vend88-biometric-enabled";
 const BIOMETRIC_ASKED_KEY = "vend88-biometric-asked";
+const REQUEST_ACCESS_EMAIL = "accounts@vend88.com";
 
 const C = {
   bg: "#0F1427",
@@ -94,6 +96,38 @@ export default function LoginScreen() {
     inputRange: [0, 1],
     outputRange: [C.border, C.borderFocus],
   });
+
+  const handleRequestAccess = useCallback(async () => {
+    const subject = "Vend88 Dashboard Access Request";
+    const body = [
+      "Hello Vend88 Accounts Team,",
+      "",
+      "I would like to request access to the Vend88 dashboard.",
+      "",
+      "Name:",
+      "Best contact number:",
+      "Company / Store:",
+      "Role / Position:",
+      "Work email:",
+      "Reason for access:",
+      "",
+      "Thank you.",
+    ].join("\n");
+    const mailtoUrl = `mailto:${REQUEST_ACCESS_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+    try {
+      const supported = await Linking.canOpenURL(mailtoUrl);
+      if (!supported) {
+        throw new Error("No email app available");
+      }
+      await Linking.openURL(mailtoUrl);
+    } catch {
+      Alert.alert(
+        "Email unavailable",
+        `Please email ${REQUEST_ACCESS_EMAIL} to request access.`
+      );
+    }
+  }, []);
 
   const triggerShake = () => {
     Animated.sequence([
@@ -325,14 +359,7 @@ export default function LoginScreen() {
               text: t("login_biometric_setup_enable"),
               onPress: async () => {
                 try {
-                  const auth = await LocalAuth!.authenticateAsync({
-                    promptMessage: t("login_biometric_setup_title"),
-                    cancelLabel: t("login_biometric_setup_skip"),
-                    disableDeviceFallback: true,
-                  });
-                  if (auth.success) {
-                    await SecureStore.setItemAsync(BIOMETRIC_KEY, "1");
-                  }
+                  await SecureStore.setItemAsync(BIOMETRIC_KEY, "1");
                 } catch {
                   // Swallow — user can enable later from Settings.
                 } finally {
@@ -434,7 +461,15 @@ export default function LoginScreen() {
                 <View style={styles.inputGroup}>
                   <View style={styles.labelRow}>
                     <Text style={styles.label}>Password</Text>
-                    <Pressable hitSlop={8}>
+                    <Pressable
+                      hitSlop={8}
+                      onPress={() =>
+                        Alert.alert(
+                          "Password Reset",
+                          `Please contact administrator or email to ${REQUEST_ACCESS_EMAIL} for password reset requests.`
+                        )
+                      }
+                    >
                       <Text style={styles.forgotText}>Forgot?</Text>
                     </Pressable>
                   </View>
@@ -540,8 +575,8 @@ export default function LoginScreen() {
 
               {/* Footer */}
               <View style={styles.footer}>
-                <Text style={styles.footerText}>Don't have access?</Text>
-                <Pressable hitSlop={8}>
+                <Text style={styles.footerText}>Don&apos;t have access?</Text>
+                <Pressable hitSlop={8} onPress={handleRequestAccess}>
                   <Text style={styles.footerLink}> Request access</Text>
                 </Pressable>
               </View>

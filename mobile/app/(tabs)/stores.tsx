@@ -1249,7 +1249,7 @@ export default function StoresScreen() {
             <Pressable
               style={({ pressed }) => [
                 styles.headerEditBtn,
-                pressed && { opacity: 0.7 },
+                pressed && { opacity: 0.7, transform: [{ scale: 0.97 }] },
               ]}
               onPress={() => {
                 haptic.light();
@@ -1257,8 +1257,11 @@ export default function StoresScreen() {
               }}
               hitSlop={8}
             >
-              <Ionicons name="create-outline" size={13} color={ACCENT} />
+              <View style={styles.headerEditBtnIconWrap}>
+                <Ionicons name="pencil" size={10} color={ACCENT} />
+              </View>
               <Text style={styles.headerEditBtnLabel}>{t("stores_edit_btn")}</Text>
+              <Ionicons name="chevron-forward" size={11} color={ACCENT} />
             </Pressable>
           }
         >
@@ -1292,7 +1295,7 @@ export default function StoresScreen() {
             <Pressable
               style={({ pressed }) => [
                 styles.headerEditBtn,
-                pressed && { opacity: 0.7 },
+                pressed && { opacity: 0.7, transform: [{ scale: 0.97 }] },
               ]}
               onPress={() => {
                 haptic.light();
@@ -1300,8 +1303,11 @@ export default function StoresScreen() {
               }}
               hitSlop={8}
             >
-              <Ionicons name="create-outline" size={13} color={ACCENT} />
+              <View style={styles.headerEditBtnIconWrap}>
+                <Ionicons name="pencil" size={10} color={ACCENT} />
+              </View>
               <Text style={styles.headerEditBtnLabel}>{t("stores_edit_btn")}</Text>
+              <Ionicons name="chevron-forward" size={11} color={ACCENT} />
             </Pressable>
           }
         >
@@ -1788,13 +1794,29 @@ const styles = StyleSheet.create({
   headerEditBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 999,
     backgroundColor: "rgba(64,100,220,0.08)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(64,100,220,0.32)",
   },
-  headerEditBtnLabel: { color: ACCENT, fontSize: 12, fontWeight: "600" },
+  headerEditBtnIconWrap: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "rgba(64,100,220,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerEditBtnLabel: {
+    color: ACCENT,
+    fontSize: 10.5,
+    fontWeight: "700",
+    letterSpacing: 1.1,
+    textTransform: "uppercase",
+  },
 
   // Edit hours modal
   modalSafe: { flex: 1, backgroundColor: BG },

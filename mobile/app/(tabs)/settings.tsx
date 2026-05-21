@@ -391,8 +391,6 @@ export default function SettingsScreen() {
         {/* About */}
         <Text style={styles.sectionLabel}>{t("settings_about")}</Text>
         <View style={styles.group}>
-          <Row icon="information-circle-outline" label={t("settings_app")} hint={t("settings_app_name")} />
-          <View style={styles.divider} />
           <Row icon="git-branch-outline" label={t("settings_version")} hint={version} />
           <View style={styles.divider} />
           <Row

@@ -132,3 +132,33 @@ Landscape (2778 x 1284):
 mkdir -p ~/Desktop/asc-ready && for f in ~/Desktop/*.png; do [ -e "$f" ] || continue; sips --resampleHeightWidth 1284 2778 "$f" --out ~/Desktop/asc-ready/"$(basename "$f")"; done
 
 If files are in a Desktop subfolder, replace ~/Desktop/*.png with that folder path.
+
+
+I’ll guide you through the exact internal iOS distribution flow for your Expo app on Windows, with the minimal commands and decisions needed so you get a standalone install link (no Expo Go, no App Store review). I’ll first check your existing EAS config so the steps match your project exactly.
+
+Perfect. Your project is already set up for internal iOS distribution, so this is mostly an execution flow now.
+
+I checked:
+
+Internal build profile already exists in eas.json
+iOS bundle identifier is set in app.json
+Do this from D:/Github/vend88-dashboard-app/mobile.
+
+Sign in to Expo
+npx eas login
+npx eas whoami
+Register the iPhone(s) that should install the app
+npx eas device:create
+What happens:
+
+EAS gives you a link/QR
+Open it on each iPhone in Safari
+Install Apple’s temporary device-registration profile
+Return to browser and confirm registration is complete
+Build iOS internal distribution (standalone app, no Expo Go)
+npx eas build -p ios --profile preview
+Install on iPhone
+When build finishes, open the install link from EAS on the iPhone
+Tap install
+First launch trust step (one-time per certificate)
+iPhone Settings > General > VPN & Device Management

@@ -3,12 +3,12 @@ import { api } from "./api";
 
 const ERROR_MAP: Record<string, string> = {
   "email not belong to an active admin or invalid password":
-    "Incorrect email or password. Please try again.",
+    "The email address or password you entered is incorrect. Please try again.",
   "email not belong to an active user":
-    "This account is not active or doesn't exist.",
-  "invalid password": "Incorrect password. Please try again.",
-  "user not found": "No account found with that email address.",
-  "account disabled": "Your account has been disabled. Contact support.",
+    "This account is inactive or unavailable. Please contact support.",
+  "invalid password": "The password you entered is incorrect. Please try again.",
+  "user not found": "No account was found for this email address.",
+  "account disabled": "This account has been disabled. Please contact support.",
 };
 
 function humanizeLoginError(raw: string): string {
@@ -16,7 +16,7 @@ function humanizeLoginError(raw: string): string {
   for (const [key, friendly] of Object.entries(ERROR_MAP)) {
     if (lower.includes(key)) return friendly;
   }
-  return raw || "Unable to sign in. Please try again.";
+  return raw || "We were unable to sign you in. Please verify your details and try again.";
 }
 
 type LoginResult = {
@@ -33,7 +33,8 @@ export async function loginWithEmail(
     const data = response.data;
 
     if (data?.status_code !== 200 || !data?.token) {
-      throw new Error(data?.message ?? "Login failed");
+      const raw = typeof data?.message === "string" ? data.message : "";
+      throw new Error(humanizeLoginError(raw));
     }
 
     return { token: data.token, role: data.role ?? "admin" };
@@ -44,6 +45,10 @@ export async function loginWithEmail(
       throw new Error(humanizeLoginError(raw));
     }
 
-    throw error instanceof Error ? error : new Error("Unable to sign in");
+    if (error instanceof Error) {
+      throw new Error(humanizeLoginError(error.message));
+    }
+
+    throw new Error("We were unable to sign you in. Please verify your details and try again.");
   }
 }

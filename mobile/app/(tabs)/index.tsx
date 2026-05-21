@@ -1056,14 +1056,6 @@ export default function DashboardScreen() {
           </View>
           <View style={styles.headerActions}>
             <Pressable
-              accessibilityLabel={t("settings_notifications")}
-              style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
-              onPress={() => haptic.selection()}
-            >
-              <Ionicons name="notifications-outline" size={18} color={TEXT} />
-              <View style={styles.badge} />
-            </Pressable>
-            <Pressable
               accessibilityLabel={identity.name || "Account"}
               onPress={() => {
                 haptic.selection();
@@ -1370,17 +1362,12 @@ export default function DashboardScreen() {
                       const pct = Math.max(0.04, p.units / maxUnits);
                       const initial = (p.name?.trim()?.[0] ?? "?").toUpperCase();
                       return (
-                        <Pressable
+                        <View
                           key={p.id}
                           accessibilityLabel={`${p.name}, ${p.units} sold`}
-                          onPress={() => {
-                            haptic.light();
-                            router.push("/(tabs)/products");
-                          }}
-                          style={({ pressed }) => [
+                          style={[
                             styles.topRow,
                             i !== topProducts.length - 1 && styles.topRowDivider,
-                            pressed && styles.pressed,
                           ]}
                         >
                           <View style={styles.topThumb}>
@@ -1407,7 +1394,7 @@ export default function DashboardScreen() {
                               />
                             </View>
                           </View>
-                        </Pressable>
+                        </View>
                       );
                     });
                   })()}
@@ -1643,18 +1630,12 @@ export default function DashboardScreen() {
                     const pct = Math.max(0.04, p.units / maxUnits);
                     const initial = (p.name?.trim()?.[0] ?? "?").toUpperCase();
                     return (
-                      <Pressable
+                      <View
                         key={`${p.id}-${i}`}
                         accessibilityLabel={`${p.name}, ${p.units} sold`}
-                        onPress={() => {
-                          haptic.light();
-                          setTopAllOpen(false);
-                          router.push("/(tabs)/products");
-                        }}
-                        style={({ pressed }) => [
+                        style={[
                           styles.topRow,
                           i !== topAll.length - 1 && styles.topRowDivider,
-                          pressed && styles.pressed,
                         ]}
                       >
                         <Text style={styles.topAllRank}>{i + 1}</Text>
@@ -1685,7 +1666,7 @@ export default function DashboardScreen() {
                             />
                           </View>
                         </View>
-                      </Pressable>
+                      </View>
                     );
                   });
                 })()}

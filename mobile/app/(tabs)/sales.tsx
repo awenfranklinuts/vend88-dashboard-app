@@ -16,6 +16,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { File, Paths } from "expo-file-system";
+import * as Sharing from "expo-sharing";
+import * as Print from "expo-print";
+import { Asset } from "expo-asset";
 import { useAuth } from "../../src/context/AuthContext";
 import { useI18n } from "../../src/context/I18nContext";
 import { API_TARGET } from "../../src/services/api";
@@ -24,6 +28,7 @@ import {
   fetchOfficialOrderDetail,
   fetchOfficialProductDetails,
   fetchOfficialSalesHistory,
+  fetchOfficialShopDetail,
   fetchOfficialStoreStatisticsRange,
   invalidateOfficialDashboardCaches,
   type OfficialOrderDetail,
@@ -46,6 +51,7 @@ import {
   ACCENT,
   ACCENT_DIM,
   BG,
+  BG_ELEVATED,
   CARD,  CARD_BORDER,
   DANGER,
   GOLD,
@@ -1925,6 +1931,55 @@ export default function SalesScreen() {
   const [customStart, setCustomStart] = useState<Date | null>(null);
   const [customEnd, setCustomEnd] = useState<Date | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState<null | "csv" | "pdf">(null);
+  const [exportToast, setExportToast] = useState<string | null>(null);
+  const [exportIncludeTxn, setExportIncludeTxn] = useState(true);
+  const [exportFormat, setExportFormat] = useState<"csv" | "pdf">("pdf");
+  const [logoDataUri, setLogoDataUri] = useState<string | null>(null);
+  const [shopDisplayName, setShopDisplayName] = useState<string | null>(null);
+
+  // Preload the brand logo as a base64 data URI so PDFs render it offline.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const asset = Asset.fromModule(
+          require("../../assets/images/splash-icon.png")
+        );
+        await asset.downloadAsync();
+        const localUri = asset.localUri ?? asset.uri;
+        if (!localUri) return;
+        const file = new File(localUri);
+        const b64 = await file.base64();
+        if (!cancelled && b64) setLogoDataUri(`data:image/png;base64,${b64}`);
+      } catch (err) {
+        console.log("[sales-export] failed to load logo:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load the active shop's display name for export headers.
+  useEffect(() => {
+    if (API_TARGET !== "official") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const detail = await fetchOfficialShopDetail();
+        if (cancelled) return;
+        const name = detail?.store_name?.trim() || detail?.name?.trim() || null;
+        if (name) setShopDisplayName(name);
+      } catch (err) {
+        console.log("[sales-export] failed to load shop name:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [allTxnOpen, setAllTxnOpen] = useState(false);
   // Sales history (per-order details) is loaded lazily — only when the user
   // opens the All Transactions modal. `txnLoadedKey` marks the bounds the
@@ -2755,6 +2810,597 @@ export default function SalesScreen() {
     []
   );
 
+  // ─── Export (CSV / PDF / Copy) ────────────────────────────────────────────
+  const exportFileBase = useMemo(() => {
+    const slug = allTxnPeriodLabel
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+    return `vend88-sales-${slug || period}`;
+  }, [allTxnPeriodLabel, period]);
+
+  const exportRows = useMemo(() => {
+    const rows: Sale[] = [];
+    for (const section of sections) {
+      for (const sale of section.data) rows.push(sale);
+    }
+    return rows;
+  }, [sections]);
+
+  const csvEscape = (v: unknown) => {
+    const s = String(v ?? "");
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const buildCsv = useCallback(() => {
+    const lines: string[] = [];
+    const row = (...cells: unknown[]) => lines.push(cells.map(csvEscape).join(","));
+    const blank = () => lines.push("");
+    const money = (n: number) => n.toFixed(2);
+
+    // Header
+    row("Vend88 Sales Report");
+    if (shopDisplayName) row("Store", shopDisplayName);
+    row("Period", allTxnPeriodLabel);
+    row("Generated", new Date().toLocaleString());
+    blank();
+
+    // KPIs
+    row("Summary");
+    row("Revenue", money(parseMoney(stat.revenue)));
+    row("Orders", stat.orders);
+    row("Average order", money(parseMoney(stat.avg)));
+    blank();
+
+    // Statement
+    if (officialStats) {
+      const f = officialStats.financial;
+      const o = officialStats.operational;
+      row("Statement");
+      row("Label", "Amount");
+      row("Total Orders", o.totalOrders);
+      row("Gross Sales", money(f.grossSales));
+      row("  Item Sales", money(f.totalItemSale));
+      row("  Credit Recharge", money(f.totalCreditAdded));
+      row("  Member Credit", money(-f.totalCreditUsage));
+      row("  Rounding", money(f.totalRounding));
+      row("Discounts", money(-f.totalDiscount));
+      row(`Refunds (${o.refundCount})`, money(-f.totalRefunds));
+      row("Holiday Surcharge", money(f.totalExtraCharge));
+      row("Payment Surcharge", money(f.totalSurcharge));
+      if (f.totalTax > 0) row("Tax", money(f.totalTax));
+      row("Total Revenue", money(f.totalRevenue));
+
+      const diningEntries = Object.entries(officialStats.diningMode).sort(
+        (a, b) => b[1] - a[1]
+      );
+      if (diningEntries.length) {
+        blank();
+        row("Dining Mode");
+        row("Type", "Amount");
+        for (const [n, v] of diningEntries) row(n, money(v));
+      }
+      const paymentEntries = Object.entries(officialStats.paymentMethod).sort(
+        (a, b) => b[1] - a[1]
+      );
+      if (paymentEntries.length) {
+        blank();
+        row("Payment Methods");
+        row("Method", "Amount");
+        for (const [n, v] of paymentEntries) row(n, money(v));
+      }
+      blank();
+    }
+
+    // Abnormal
+    if (officialStats?.abnormal) {
+      const a = officialStats.abnormal;
+      const items: { label: string; count: number; amount: number }[] = [
+        { label: "Voided", count: a.voided.count, amount: a.voided.amount },
+        { label: "Refunds", count: a.refunds.count, amount: a.refunds.amount },
+        { label: "Discounts", count: a.discounts.count, amount: a.discounts.amount },
+        { label: "Coupons", count: a.coupons.count, amount: a.coupons.amount },
+        { label: "Credit Paid", count: a.creditPaid.count, amount: a.creditPaid.amount },
+        { label: "Cancelled", count: a.cancelled.count, amount: a.cancelled.amount },
+      ].filter((it) => it.count > 0 || it.amount !== 0);
+      if (items.length) {
+        row("Abnormal Transactions");
+        row("Type", "Count", "Amount");
+        for (const it of items) row(it.label, it.count, money(it.amount));
+        blank();
+      }
+    }
+
+    // Transactions (optional)
+    if (exportIncludeTxn) {
+      row("Transactions");
+      row("Date", "Order ID", "Module", "Payment", "Items", "Total", "Status");
+      for (const r of exportRows) {
+        row(r.date, r.order_id, r.module, r.payment, r.items, r.total, r.status);
+      }
+    }
+
+    return lines.join("\r\n");
+  }, [
+    exportRows,
+    allTxnPeriodLabel,
+    stat,
+    officialStats,
+    exportIncludeTxn,
+    shopDisplayName,
+  ]);
+
+  const buildPdfHtml = useCallback(() => {
+    const esc = (s: unknown) =>
+      String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    const fmt = (n: number) => formatCurrency(n, 2);
+
+    // ── Statement block (from officialStats) ──
+    let statementHtml = "";
+    if (officialStats) {
+      const f = officialStats.financial;
+      const o = officialStats.operational;
+      const diningEntries = Object.entries(officialStats.diningMode).sort(
+        (a, b) => b[1] - a[1]
+      );
+      const paymentEntries = Object.entries(officialStats.paymentMethod).sort(
+        (a, b) => b[1] - a[1]
+      );
+      const row = (label: string, value: string, opts?: { sub?: boolean; total?: boolean; neg?: boolean }) =>
+        `<tr class="${opts?.sub ? "sub" : ""} ${opts?.total ? "total" : ""}">
+           <td>${opts?.sub ? "<span class=\"glyph\">└</span> " : ""}${esc(label)}</td>
+           <td class="num ${opts?.neg ? "neg" : ""}">${esc(value)}</td>
+         </tr>`;
+      const groupHeader = (label: string) =>
+        `<tr class="group"><td colspan="2">${esc(label)}</td></tr>`;
+      statementHtml = `
+        <table class="stmt">
+          <tbody>
+            ${row(t("sales_stmt_total_orders"), String(o.totalOrders))}
+            ${row(t("sales_stmt_gross_sales"), fmt(f.grossSales))}
+            ${row(t("sales_stmt_item_sales"), fmt(f.totalItemSale), { sub: true })}
+            ${row(t("sales_stmt_credit_recharge"), fmt(f.totalCreditAdded), { sub: true })}
+            ${row(t("sales_stmt_member_credit"), fmt(-f.totalCreditUsage), {
+              sub: true,
+              neg: f.totalCreditUsage > 0,
+            })}
+            ${row(t("sales_stmt_rounding"), fmt(f.totalRounding), { sub: true })}
+            ${row(t("sales_stmt_discounts"), fmt(-f.totalDiscount), {
+              neg: f.totalDiscount > 0,
+            })}
+            ${row(
+              t("sales_stmt_refunds", { count: o.refundCount }),
+              fmt(-f.totalRefunds),
+              { neg: f.totalRefunds > 0 }
+            )}
+            ${row(t("sales_stmt_holiday_surcharge"), fmt(f.totalExtraCharge))}
+            ${row(t("sales_stmt_payment_surcharge"), fmt(f.totalSurcharge))}
+            ${f.totalTax > 0 ? row(t("sales_stmt_tax"), fmt(f.totalTax)) : ""}
+            ${row(t("sales_stmt_total_revenue"), fmt(f.totalRevenue), { total: true })}
+            ${
+              diningEntries.length
+                ? groupHeader(t("sales_stmt_dining_mode")) +
+                  diningEntries.map(([n, v]) => row(n, fmt(v))).join("")
+                : ""
+            }
+            ${
+              paymentEntries.length
+                ? groupHeader(t("sales_stmt_payment_methods")) +
+                  paymentEntries.map(([n, v]) => row(n, fmt(v))).join("")
+                : ""
+            }
+          </tbody>
+        </table>`;
+    }
+
+    // ── Abnormal transactions block ──
+    let abnormalHtml = "";
+    if (officialStats?.abnormal) {
+      const a = officialStats.abnormal;
+      const items: { label: string; count: number; amount: number }[] = [
+        { label: t("sales_abnormal_voided"), count: a.voided.count, amount: a.voided.amount },
+        { label: t("sales_abnormal_refunds"), count: a.refunds.count, amount: a.refunds.amount },
+        { label: t("sales_abnormal_discounts"), count: a.discounts.count, amount: a.discounts.amount },
+        { label: t("sales_abnormal_coupons"), count: a.coupons.count, amount: a.coupons.amount },
+        { label: t("sales_abnormal_credit_paid"), count: a.creditPaid.count, amount: a.creditPaid.amount },
+        { label: t("sales_abnormal_cancelled"), count: a.cancelled.count, amount: a.cancelled.amount },
+      ].filter((it) => it.count > 0 || it.amount !== 0);
+      if (items.length) {
+        abnormalHtml = `
+          <table class="abn">
+            <thead><tr><th>Type</th><th class="num">Count</th><th class="num">Amount</th></tr></thead>
+            <tbody>
+              ${items
+                .map(
+                  (it) => `
+                <tr>
+                  <td>${esc(it.label)}</td>
+                  <td class="num">${esc(it.count)}</td>
+                  <td class="num">${esc(fmt(it.amount))}</td>
+                </tr>`
+                )
+                .join("")}
+            </tbody>
+          </table>`;
+      }
+    }
+
+    // ── Transactions list (optional) ──
+    let txnHtml = "";
+    if (exportIncludeTxn) {
+      const rowsHtml = sections
+        .map(
+          (sec) => `
+          <tr class="group"><td colspan="5">${esc(sec.title)}</td><td class="num">${esc(
+            fmt(sec.total)
+          )}</td></tr>
+          ${sec.data
+            .map(
+              (r) => `
+            <tr>
+              <td>${esc(r.date)}</td>
+              <td>${esc(r.order_id)}</td>
+              <td>${esc(r.module)}</td>
+              <td>${esc(r.payment)}</td>
+              <td class="num">${esc(r.items)}</td>
+              <td class="num">${esc(fmt(parseMoney(r.total)))}</td>
+            </tr>`
+            )
+            .join("")}`
+        )
+        .join("");
+      txnHtml = `
+        <h2>${esc(t("sales_all_txn_eyebrow"))}</h2>
+        <table class="txn">
+          <thead><tr>
+            <th>Date</th><th>Order ID</th><th>Module</th><th>Payment</th>
+            <th class="num">Items</th><th class="num">Total</th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <div class="foot">${esc(exportRows.length)} transaction(s)</div>`;
+    }
+
+    const generated = new Date().toLocaleString();
+    return `<!doctype html>
+<html><head><meta charset="utf-8"/><title>Vend88 Sales — ${esc(allTxnPeriodLabel)}</title>
+<style>
+  @page { size: A4; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, Helvetica, sans-serif;
+    color: #1a1f2e;
+    background: #ffffff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* Dark header band (sits within page margins) */
+  .header {
+    background: #0f1427;
+    color: #ffffff;
+    padding: 18px 22px;
+    margin-bottom: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    border-radius: 10px;
+    border-bottom: 4px solid #d4af37;
+  }
+  .brand {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+  }
+  .brand img {
+    width: 180px;
+    height: 180px;
+    object-fit: contain;
+    display: block;
+    /* Negative vertical margin lets the logo render bigger without
+       inflating the header card height. Top margin is larger than
+       bottom to nudge the logo visually upward. */
+    margin: -30px 0 -35px;
+  }
+  .brand .mark {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    background: #181e38;
+    color: #d4af37;
+    font-weight: 900;
+    font-size: 20px;
+    letter-spacing: 0.5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .title-right { text-align: right; min-width: 0; }
+  .title-right .eyebrow {
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: #d4af37;
+    text-transform: uppercase;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .title-right h1 {
+    font-size: 22px;
+    margin: 0;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+    color: #ffffff;
+  }
+  .title-right .store {
+    margin-top: 6px;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .title-right .meta {
+    margin-top: 4px;
+    color: #aab0c4;
+    font-size: 11px;
+  }
+
+  h2 {
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #6b7280;
+    margin: 0 0 10px;
+    font-weight: 700;
+  }
+  .section { margin-bottom: 22px; page-break-inside: avoid; break-inside: avoid; }
+
+  /* KPI cards */
+  .kpis { display: flex; gap: 12px; margin: 0 0 8px; }
+  .kpi {
+    flex: 1;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: #fafafa;
+  }
+  .kpi .label {
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    color: #6b7280;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .kpi .value {
+    font-size: 20px;
+    font-weight: 800;
+    margin-top: 6px;
+    color: #0f1427;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  thead { display: table-header-group; }
+  tfoot { display: table-row-group; }
+  tr, td, th { page-break-inside: avoid; break-inside: avoid; }
+  th, td { padding: 7px 10px; border-bottom: 1px solid #eef0f4; text-align: left; vertical-align: top; }
+  th {
+    background: #f3f4f8;
+    font-size: 9px;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: #4b5563;
+    font-weight: 700;
+    border-bottom: 1px solid #d1d5db;
+  }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.neg { color: #b91c1c; }
+  tr.group td {
+    background: #f9fafb;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    font-size: 9px;
+    color: #6b7280;
+    padding: 8px 10px;
+    border-top: 1px solid #e5e7eb;
+  }
+  tr.sub td { color: #4b5563; }
+  tr.sub .glyph { color: #9ca3af; margin-right: 4px; }
+  tr.total td {
+    font-weight: 800;
+    border-top: 2px solid #0f1427;
+    border-bottom: 2px solid #0f1427;
+    background: #fafafa;
+    font-size: 12px;
+  }
+
+  /* Two-column layout for statement + abnormal */
+  .two-col {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    margin-bottom: 22px;
+  }
+  .two-col .col { flex: 1; min-width: 0; }
+  .col-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .col-card table { font-size: 10.5px; }
+  .col-card th, .col-card td { padding: 6px 12px; }
+
+  /* Transactions — allow breaking across pages */
+  .txn-section { page-break-inside: auto; break-inside: auto; }
+  .txn table { font-size: 10px; }
+  .txn tbody tr:nth-child(even) td { background: #fbfbfd; }
+  .txn tr.group { page-break-after: avoid; }
+
+  .footer {
+    margin-top: 22px;
+    padding-top: 10px;
+    border-top: 1px solid #e5e7eb;
+    color: #9ca3af;
+    font-size: 9px;
+    display: flex;
+    justify-content: space-between;
+  }
+</style></head><body>
+  <div class="header">
+    <div class="brand">
+      ${
+        logoDataUri
+          ? `<img src="${logoDataUri}" alt="Vend88" />`
+          : `<div class="mark">V88</div>`
+      }
+    </div>
+    <div class="title-right">
+      <div class="eyebrow">Vend88 Dashboard</div>
+      <h1>Sales Report</h1>
+      ${shopDisplayName ? `<div class="store">${esc(shopDisplayName)}</div>` : ""}
+      <div class="meta">${esc(allTxnPeriodLabel)} · generated ${esc(generated)}</div>
+    </div>
+  </div>
+  <div class="section">
+    <h2>Summary</h2>
+    <div class="kpis">
+      <div class="kpi"><div class="label">Revenue</div><div class="value">${esc(
+        fmt(parseMoney(stat.revenue))
+      )}</div></div>
+      <div class="kpi"><div class="label">Orders</div><div class="value">${esc(stat.orders)}</div></div>
+      <div class="kpi"><div class="label">Avg order</div><div class="value">${esc(
+        fmt(parseMoney(stat.avg))
+      )}</div></div>
+    </div>
+  </div>
+  ${
+    statementHtml || abnormalHtml
+      ? `<div class="two-col">
+          ${
+            statementHtml
+              ? `<div class="col section">
+                  <h2>${esc(t("sales_statement"))}</h2>
+                  <div class="col-card">${statementHtml}</div>
+                </div>`
+              : ""
+          }
+          ${
+            abnormalHtml
+              ? `<div class="col section">
+                  <h2>${esc(t("sales_abnormal_section"))}</h2>
+                  <div class="col-card">${abnormalHtml}</div>
+                </div>`
+              : ""
+          }
+        </div>`
+      : ""
+  }
+  ${txnHtml ? `<div class="txn-section txn">${txnHtml}</div>` : ""}
+  <div class="footer">
+    <span>${esc(shopDisplayName ?? "Vend88 Dashboard")} · Sales Report</span>
+    <span>${esc(allTxnPeriodLabel)}</span>
+  </div>
+</body></html>`;
+  }, [
+    sections,
+    allTxnPeriodLabel,
+    stat,
+    exportRows.length,
+    officialStats,
+    exportIncludeTxn,
+    t,
+    logoDataUri,
+    shopDisplayName,
+  ]);
+
+  const showExportToast = useCallback((msg: string) => {
+    setExportToast(msg);
+    setTimeout(() => setExportToast(null), 2200);
+  }, []);
+
+  const handleExport = useCallback(
+    async (kind: "csv" | "pdf") => {
+      if (txnLoading || txnLoadedKey !== txnPeriodKey) {
+        // Transactions for this period haven't finished loading yet.
+        haptic.selection();
+        return;
+      }
+      if (exportRows.length === 0 && !officialStats) {
+        haptic.error();
+        showExportToast(t("sales_export_empty"));
+        setExportOpen(false);
+        return;
+      }
+      try {
+        setExporting(kind);
+        haptic.selection();
+        if (kind === "csv") {
+          const file = new File(Paths.cache, `${exportFileBase}.csv`);
+          if (file.exists) file.delete();
+          file.create();
+          file.write(buildCsv());
+          if (await Sharing.isAvailableAsync()) {
+            await Sharing.shareAsync(file.uri, {
+              mimeType: "text/csv",
+              dialogTitle: t("sales_export_title"),
+              UTI: "public.comma-separated-values-text",
+            });
+          }
+          haptic.success();
+        } else {
+          const { uri } = await Print.printToFileAsync({
+            html: buildPdfHtml(),
+            // Force real page margins on the rendered PDF — WebView print
+            // engines often ignore CSS `@page { margin }`, so set it here.
+            // Units are points (1pt = 1/72in). ~18mm top/bottom, ~14mm sides.
+            margins: { top: 51, bottom: 45, left: 40, right: 40 },
+          });
+          const target = new File(Paths.cache, `${exportFileBase}.pdf`);
+          let shareUri = uri;
+          try {
+            if (target.exists) target.delete();
+            const tmp = new File(uri);
+            tmp.move(target);
+            shareUri = target.uri;
+          } catch {
+            // fall back to the original print uri
+          }
+          if (await Sharing.isAvailableAsync()) {
+            await Sharing.shareAsync(shareUri, {
+              mimeType: "application/pdf",
+              dialogTitle: t("sales_export_title"),
+              UTI: "com.adobe.pdf",
+            });
+          }
+          haptic.success();
+        }
+        setExportOpen(false);
+      } catch (err) {
+        console.log("[sales-export] failed:", err);
+        haptic.error();
+      } finally {
+        setExporting(null);
+      }
+    },
+    [
+      exportRows.length,
+      buildCsv,
+      buildPdfHtml,
+      exportFileBase,
+      showExportToast,
+      t,
+      txnLoading,
+      txnLoadedKey,
+      txnPeriodKey,
+      officialStats,
+    ]
+  );
+
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
       <TopProgressBar visible={isFetching && !loading} />
@@ -2779,17 +3425,16 @@ export default function SalesScreen() {
               </View>
               <Pressable
                 accessibilityLabel={t("sales_export_report")}
-                onPress={() => haptic.selection()}
+                onPress={() => {
+                  haptic.selection();
+                  setExportOpen(true);
+                  if (txnLoadedKey !== txnPeriodKey && !txnLoading) {
+                    fetchAll();
+                  }
+                }}
                 style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
               >
                 <Ionicons name="download-outline" size={18} color={TEXT} />
-              </Pressable>
-              <Pressable
-                accessibilityLabel={t("sales_filters")}
-                onPress={() => haptic.selection()}
-                style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
-              >
-                <Ionicons name="options-outline" size={18} color={TEXT} />
               </Pressable>
             </View>
 
@@ -3689,6 +4334,167 @@ export default function SalesScreen() {
           />
         </SafeAreaView>
       </Modal>
+      <Modal
+        visible={exportOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !exporting && setExportOpen(false)}
+      >
+        <Pressable
+          style={styles.exportBackdrop}
+          onPress={() => !exporting && setExportOpen(false)}
+        >
+          <Pressable style={styles.exportSheet} onPress={() => {}}>
+            <View style={styles.exportHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.exportTitle}>{t("sales_export_title")}</Text>
+                <Text style={styles.exportSubtitle} numberOfLines={1}>
+                  {txnLoading || txnLoadedKey !== txnPeriodKey
+                    ? t("sales_loading_transactions")
+                    : allTxnPeriodLabel}
+                </Text>
+              </View>
+              <Pressable
+                disabled={!!exporting}
+                onPress={() => setExportOpen(false)}
+                hitSlop={10}
+                style={({ pressed }) => [
+                  styles.exportClose,
+                  pressed && { opacity: 0.6 },
+                ]}
+              >
+                <Ionicons name="close" size={18} color={TEXT_DIM} />
+              </Pressable>
+            </View>
+
+            <Text style={styles.exportSectionLabel}>{t("sales_export_format_label")}</Text>
+            <View style={styles.exportFormatRow}>
+              {(["pdf", "csv"] as const).map((fmt) => {
+                const selected = exportFormat === fmt;
+                const isPdf = fmt === "pdf";
+                return (
+                  <Pressable
+                    key={fmt}
+                    disabled={!!exporting}
+                    onPress={() => {
+                      haptic.selection();
+                      setExportFormat(fmt);
+                    }}
+                    style={({ pressed }) => [
+                      styles.exportFormatTile,
+                      selected && styles.exportFormatTileOn,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.exportFormatIcon,
+                        {
+                          backgroundColor: selected
+                            ? isPdf
+                              ? GOLD_DIM
+                              : ACCENT_DIM
+                            : CARD_BORDER,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name={isPdf ? "document-outline" : "document-text-outline"}
+                        size={18}
+                        color={selected ? (isPdf ? GOLD : ACCENT) : TEXT_DIM}
+                      />
+                    </View>
+                    <Text
+                      style={[
+                        styles.exportFormatTitle,
+                        selected && { color: TEXT },
+                      ]}
+                    >
+                      {isPdf ? t("sales_export_pdf") : t("sales_export_csv")}
+                    </Text>
+                    <Text
+                      style={styles.exportFormatDesc}
+                      numberOfLines={2}
+                    >
+                      {isPdf ? t("sales_export_pdf_desc") : t("sales_export_csv_desc")}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Pressable
+              disabled={!!exporting}
+              onPress={() => {
+                haptic.selection();
+                setExportIncludeTxn((v) => !v);
+              }}
+              style={({ pressed }) => [
+                styles.exportToggleRow,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View
+                style={[
+                  styles.exportCheckbox,
+                  exportIncludeTxn && styles.exportCheckboxOn,
+                ]}
+              >
+                {exportIncludeTxn ? (
+                  <Ionicons name="checkmark" size={14} color="#181e38" />
+                ) : null}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.exportRowTitle}>{t("sales_export_include_txn")}</Text>
+                <Text style={styles.exportRowDesc}>{t("sales_export_include_txn_desc")}</Text>
+              </View>
+            </Pressable>
+
+            <Pressable
+              disabled={
+                !!exporting || txnLoading || txnLoadedKey !== txnPeriodKey
+              }
+              onPress={() => handleExport(exportFormat)}
+              style={({ pressed }) => [
+                styles.exportCta,
+                pressed && { opacity: 0.85 },
+                !!exporting && styles.exportCtaDisabled,
+                !exporting &&
+                  (txnLoading || txnLoadedKey !== txnPeriodKey) &&
+                  styles.exportCtaLoading,
+              ]}
+            >
+              {!exporting && (txnLoading || txnLoadedKey !== txnPeriodKey) ? (
+                <View style={styles.exportCtaSkeleton}>
+                  <ShimmerSkeleton width={18} height={18} radius={9} />
+                  <ShimmerSkeleton width={140} height={12} radius={4} />
+                  <ShimmerSkeleton width={48} height={12} radius={4} />
+                </View>
+              ) : (
+                <>
+                  <Ionicons
+                    name={exporting ? "hourglass-outline" : "download-outline"}
+                    size={16}
+                    color="#181e38"
+                  />
+                  <Text style={styles.exportCtaText}>
+                    {exporting
+                      ? t("sales_loading_transactions")
+                      : t("sales_export_download", {
+                          format: exportFormat.toUpperCase(),
+                        })}
+                  </Text>
+                </>
+              )}
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+      {exportToast ? (
+        <View pointerEvents="none" style={styles.exportToast}>
+          <Text style={styles.exportToastText}>{exportToast}</Text>
+        </View>
+      ) : null}
       <DateRangePickerModal
         visible={pickerOpen}
         initialStart={customStart}
@@ -4568,5 +5374,204 @@ const styles = StyleSheet.create({
     color: "#181e38",
     fontSize: 13,
     fontWeight: "800",
+  },
+
+  // Export sheet
+  exportBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(8,10,20,0.55)",
+    justifyContent: "flex-end",
+  },
+  exportSheet: {
+    backgroundColor: BG_ELEVATED,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 22,
+    paddingTop: 18,
+    paddingBottom: 28,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    shadowColor: "#000",
+    shadowOpacity: 0.5,
+    shadowRadius: 32,
+    shadowOffset: { width: 0, height: -8 },
+    elevation: 24,
+  },
+  exportHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 18,
+  },
+  exportClose: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: BG,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  exportTitle: {
+    color: TEXT,
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
+  exportSubtitle: {
+    color: TEXT_DIM,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  exportSectionLabel: {
+    color: TEXT_FAINT,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1.6,
+    textTransform: "uppercase",
+    marginBottom: 10,
+  },
+  exportFormatRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 18,
+  },
+  exportFormatTile: {
+    flex: 1,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: CARD_BORDER,
+    backgroundColor: BG,
+    gap: 8,
+  },
+  exportFormatTileOn: {
+    borderColor: GOLD,
+    backgroundColor: "rgba(212,175,55,0.06)",
+  },
+  exportFormatIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  exportFormatTitle: {
+    color: TEXT_DIM,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  exportFormatDesc: {
+    color: TEXT_FAINT,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  exportToggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: BG,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    marginBottom: 16,
+  },
+  exportRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    backgroundColor: BG,
+  },
+  exportRowActive: {
+    opacity: 0.6,
+  },
+  exportIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  exportCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: CARD_BORDER,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  exportCheckboxOn: {
+    backgroundColor: GOLD,
+    borderColor: GOLD,
+  },
+  exportRowTitle: {
+    color: TEXT,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  exportRowDesc: {
+    color: TEXT_DIM,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  exportCta: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: GOLD,
+  },
+  exportCtaDisabled: {
+    opacity: 0.5,
+  },
+  exportCtaLoading: {
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  exportCtaSkeleton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    width: "100%",
+  },
+  exportCtaText: {
+    color: "#181e38",
+    fontSize: 14,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+  },
+  exportToast: {
+    position: "absolute",
+    left: 24,
+    right: 24,
+    bottom: 110,
+    backgroundColor: "rgba(20,20,24,0.95)",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  exportToastText: {
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "600",
   },
 });

@@ -11,5 +11,8 @@
     "eas:preview": "cd mobile && npx --yes eas-cli build -p android --profile preview",
     "eas:production": "cd mobile && npx --yes eas-cli build -p android --profile production",
     "eas:update": "cd mobile && npx --yes eas-cli update --branch production"
+  },
+  "dependencies": {
+    "expo": "^55.0.25"
   }
 }
