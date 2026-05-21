@@ -19,6 +19,7 @@
     },
     "android": {
       "package": "com.vend88.dashboard",
+      "versionCode": 2,
       "icon": "./assets/images/icon.png",
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
