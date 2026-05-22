@@ -17,8 +17,6 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { File, Paths } from "expo-file-system";
-import * as Sharing from "expo-sharing";
-import * as Print from "expo-print";
 import { Asset } from "expo-asset";
 import { useAuth } from "../../src/context/AuthContext";
 import { useI18n } from "../../src/context/I18nContext";
@@ -63,6 +61,25 @@ import {
   TEXT_FAINT,
   WARNING,
 } from "../../src/theme/tokens";
+
+type SharingModule = typeof import("expo-sharing");
+type PrintModule = typeof import("expo-print");
+
+const Sharing: SharingModule | null = (() => {
+  try {
+    return require("expo-sharing") as SharingModule;
+  } catch {
+    return null;
+  }
+})();
+
+const Print: PrintModule | null = (() => {
+  try {
+    return require("expo-print") as PrintModule;
+  } catch {
+    return null;
+  }
+})();
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -3344,15 +3361,23 @@ export default function SalesScreen() {
           if (file.exists) file.delete();
           file.create();
           file.write(buildCsv());
-          if (await Sharing.isAvailableAsync()) {
+          if (Sharing && (await Sharing.isAvailableAsync())) {
             await Sharing.shareAsync(file.uri, {
               mimeType: "text/csv",
               dialogTitle: t("sales_export_title"),
               UTI: "public.comma-separated-values-text",
             });
+          } else {
+            showExportToast("Sharing unavailable on this device");
           }
           haptic.success();
         } else {
+          if (!Print) {
+            showExportToast("PDF export unavailable on this device");
+            haptic.warning();
+            setExportOpen(false);
+            return;
+          }
           const { uri } = await Print.printToFileAsync({
             html: buildPdfHtml(),
             // Force real page margins on the rendered PDF — WebView print
@@ -3370,12 +3395,14 @@ export default function SalesScreen() {
           } catch {
             // fall back to the original print uri
           }
-          if (await Sharing.isAvailableAsync()) {
+          if (Sharing && (await Sharing.isAvailableAsync())) {
             await Sharing.shareAsync(shareUri, {
               mimeType: "application/pdf",
               dialogTitle: t("sales_export_title"),
               UTI: "com.adobe.pdf",
             });
+          } else {
+            showExportToast("Sharing unavailable on this device");
           }
           haptic.success();
         }

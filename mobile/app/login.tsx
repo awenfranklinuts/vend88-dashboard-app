@@ -5,7 +5,6 @@ import {
   TextInput,
   Pressable,
   StyleSheet,
-  SafeAreaView,
   StatusBar,
   KeyboardAvoidingView,
   ScrollView,
@@ -19,6 +18,7 @@ import {
   Linking,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import * as SecureStore from "expo-secure-store";
 import { Ionicons } from "@expo/vector-icons";

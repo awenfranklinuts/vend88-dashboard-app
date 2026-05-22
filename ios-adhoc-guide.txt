@@ -1,0 +1,147 @@
+VEND88 iOS Ad Hoc Distribution Guide (Expo + EAS)
+Date: 2026-05-22
+
+====================================================
+1) WHAT THIS GUIDE IS FOR
+====================================================
+Use this when you want to install iOS builds without App Store review,
+using Ad Hoc (internal distribution) from EAS.
+
+Key points:
+- No 7-day limit (paid Apple Developer account required).
+- Each Ad Hoc provisioning profile is valid about 1 year.
+- You only register each device once (unless device list changes).
+
+
+====================================================
+2) RUN FROM THE CORRECT FOLDER
+====================================================
+Always run EAS from the mobile app folder:
+
+cd /Users/awenfranklin/Documents/GitHub/vend88-dashboard-app/mobile
+
+If you run from repo root by mistake, Expo may read the wrong app.json.
+
+
+====================================================
+3) ONE-TIME SETUP
+====================================================
+A) Login to Expo
+npx --yes eas-cli login
+npx --yes eas-cli whoami
+
+B) Register iPhone/iPad (only once per new device)
+npx --yes eas-cli device:create
+
+What to do on iPhone during device:create:
+1. Open the provided URL in Safari.
+2. Install the registration profile.
+3. Return and complete registration.
+
+Check registered devices:
+npx --yes eas-cli device:list
+
+
+====================================================
+4) BUILD AD HOC IOS
+====================================================
+Use this command (from mobile folder):
+
+EAS_SKIP_AUTO_FINGERPRINT=1 npx --yes eas-cli build -p ios --profile preview
+
+Notes:
+- Skipping fingerprint is OK for preview/internal builds.
+- Building a new artifact does NOT change currently installed app
+  until you install the new build link.
+
+
+====================================================
+5) INSTALL ON IPHONE
+====================================================
+1. Open the new EAS build link on iPhone Safari.
+2. Tap Install.
+3. If prompted, trust profile in:
+   Settings > General > VPN & Device Management
+
+You do NOT need device:create again unless:
+- New iPhone/iPad added
+- Device removed/re-added
+- Credentials/provisioning reset and device list lost
+
+
+====================================================
+6) WHY NEW INSTALL SOMETIMES LOOKS LIKE OLD VERSION
+====================================================
+Usually due to OTA update behavior, not install cache.
+
+Current project behavior can load older JS updates if runtimeVersion/channel
+is unchanged.
+
+How to reduce confusion:
+- Bump app version for each release.
+- Keep preview updates separate from production.
+- Optionally use runtime version policy by app version.
+
+Also note:
+- iOS keychain data can survive uninstall (login/session may remain).
+
+
+====================================================
+7) EXPO GO VS DEV BUILD (IMPORTANT)
+====================================================
+If terminal shows:
+"Using development build"
+then Expo Go cannot open that QR/url.
+
+Press:
+s
+
+This switches to Expo Go mode.
+
+
+====================================================
+8) METRO/CONNECTION TROUBLESHOOTING
+====================================================
+A) Confirm Metro project path is correct:
+- Should be .../vend88-dashboard-app/mobile
+
+B) If stuck or phone cannot connect:
+1. Ctrl+C
+2. pkill -f "expo|metro|react-native" || true
+3. watchman watch-del-all || true
+4. rm -rf .expo /tmp/metro-* /tmp/haste-map-*
+5. npx expo start --lan --clear
+
+C) If LAN still fails:
+npx expo start --tunnel --clear
+
+D) If prompt says port in use (8081):
+- Accept alternate port, or
+- kill old Metro and restart
+
+
+====================================================
+9) CURRENT KNOWN FIX APPLIED IN CODEBASE
+====================================================
+To avoid route crashes in Expo Go when certain native modules are unavailable:
+- sales screen now guards expo-sharing/expo-print runtime usage.
+- login screen SafeAreaView import updated to react-native-safe-area-context.
+
+
+====================================================
+10) QUICK DAILY COMMANDS
+====================================================
+Start Expo (mobile folder):
+cd /Users/awenfranklin/Documents/GitHub/vend88-dashboard-app/mobile
+npx expo start --lan --clear
+
+Build iOS Ad Hoc preview:
+cd /Users/awenfranklin/Documents/GitHub/vend88-dashboard-app/mobile
+EAS_SKIP_AUTO_FINGERPRINT=1 npx --yes eas-cli build -p ios --profile preview
+
+List devices:
+cd /Users/awenfranklin/Documents/GitHub/vend88-dashboard-app/mobile
+npx --yes eas-cli device:list
+
+
+End of guide.

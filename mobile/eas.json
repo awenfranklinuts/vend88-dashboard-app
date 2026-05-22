@@ -12,6 +12,9 @@
     "preview": {
       "distribution": "internal",
       "channel": "preview",
+      "ios": {
+        "autoIncrement": true
+      },
       "android": {
         "buildType": "apk"
       }

@@ -162,3 +162,7 @@ When build finishes, open the install link from EAS on the iPhone
 Tap install
 First launch trust step (one-time per certificate)
 iPhone Settings > General > VPN & Device Management
+
+EAS_SKIP_AUTO_FINGERPRINT=1 npx --yes eas-cli build -p ios --profile preview
+
+npx --yes eas-cli device:create

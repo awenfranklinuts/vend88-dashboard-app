@@ -2,7 +2,7 @@
   "expo": {
     "name": "Dashboard",
     "slug": "vend88-dashboard-app",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "vend88mobile",
@@ -19,7 +19,6 @@
     },
     "android": {
       "package": "com.vend88.dashboard",
-      "versionCode": 2,
       "icon": "./assets/images/icon.png",
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
@@ -51,13 +50,14 @@
             "deploymentTarget": "15.1"
           }
         }
-      ],
-      "expo-web-browser"
+      ]
     ],
     "updates": {
       "url": "https://u.expo.dev/19929edd-50b1-492e-babf-140d6dcaab95"
     },
-    "runtimeVersion": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
