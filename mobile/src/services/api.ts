@@ -86,6 +86,20 @@ function notifyNetworkFailure() {
   }
 }
 
+function isRequestCancellation(error: unknown): boolean {
+  const e = error as
+    | { code?: string; name?: string; message?: string; __CANCEL__?: boolean }
+    | undefined;
+  if (!e) return false;
+  if (e.__CANCEL__) return true;
+  if (e.code === "ERR_CANCELED") return true;
+  if (e.name === "CanceledError") return true;
+  if (typeof e.message === "string" && /aborted|canceled/i.test(e.message)) {
+    return true;
+  }
+  return false;
+}
+
 function isAuthFailurePayload(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const body = value as { status_code?: unknown; message?: unknown; detail?: unknown };
@@ -130,7 +144,9 @@ api.interceptors.response.use(
       notifyAuthFailure("http-auth-failure");
     }
     // No response at all → most likely a network/DNS/timeout failure.
-    if (!error?.response) {
+    // Ignore explicit request cancellations (AbortController / axios cancel)
+    // so period-switch aborts don't briefly flip the app into offline state.
+    if (!error?.response && !isRequestCancellation(error)) {
       notifyNetworkFailure();
     }
     return Promise.reject(error);

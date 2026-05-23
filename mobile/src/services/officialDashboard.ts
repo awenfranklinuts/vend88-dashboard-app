@@ -771,6 +771,7 @@ type StoreStatisticsSnapshot = {
   operational: NonNullable<StoreStatisticsResponse["operational_summary"]>;
   breakdowns: NonNullable<StoreStatisticsResponse["breakdowns"]>;
   abnormal: NonNullable<StoreStatisticsResponse["abnormal_transactions"]>;
+  topProducts: Array<{ id?: string; name: string; qty: number; total: number }>;
 };
 
 async function fetchStoreStatisticsSnapshot(
@@ -794,6 +795,30 @@ async function fetchStoreStatisticsSnapshot(
     throw new Error("Store statistics request failed.");
   }
 
+  const topProducts = Array.isArray(data.top_products)
+    ? data.top_products
+        .map((row) => {
+          if (!row || typeof row !== "object") return null;
+          const rec = row as Record<string, unknown>;
+          const nameRaw =
+            pickString(rec, ["name", "product_name", "title", "item_name"]) ?? "";
+          const name = nameRaw.trim();
+          if (!name) return null;
+          const idRaw = pickString(rec, ["id", "product_id", "_id", "product"]);
+          const id = typeof idRaw === "string" ? idRaw.trim() : "";
+          return {
+            id: id || undefined,
+            name,
+            qty: toNumber(rec.qty ?? rec.quantity ?? rec.count),
+            total: toNumber(rec.total ?? rec.amount ?? rec.price),
+          };
+        })
+        .filter(
+          (row): row is { id?: string; name: string; qty: number; total: number } =>
+            row !== null
+        )
+    : [];
+
   return {
     ordersTotal: toNumber(data.operational_summary?.total_orders),
     revenueTotal: toNumber(data.financial_summary?.total_revenue),
@@ -802,6 +827,7 @@ async function fetchStoreStatisticsSnapshot(
     operational: data.operational_summary ?? {},
     breakdowns: data.breakdowns ?? {},
     abnormal: data.abnormal_transactions ?? {},
+    topProducts,
   };
 }
 
@@ -843,6 +869,7 @@ export type OfficialStoreStatisticsRange = {
     refunds: { amount: number; count: number };
     voided: { amount: number; count: number };
   };
+  topProducts: Array<{ id?: string; name: string; qty: number; total: number }>;
 };
 
 export async function fetchOfficialStoreStatisticsRange(
@@ -920,6 +947,7 @@ export async function fetchOfficialStoreStatisticsRange(
         refunds: abn(a.refunds),
         voided: abn(a.voided),
       },
+      topProducts: snapshot.topProducts,
     };
 
     storeStatsCache.set(cacheKey, { ts: Date.now(), data: result });
@@ -2357,7 +2385,22 @@ export type OfficialCloseHistoryItem = {
     staff_performance?: Record<string, number>;
   };
   ServiceTax?: Record<string, number>;
-  top_products?: Array<{ name: string; qty: number; total: number }>;
+  top_products?: Array<{
+    id?: string;
+    _id?: string;
+    product_id?: string;
+    product?: string;
+    name?: string;
+    product_name?: string;
+    title?: string;
+    item_name?: string;
+    qty?: number;
+    quantity?: number;
+    count?: number;
+    total?: number;
+    amount?: number;
+    price?: number;
+  }>;
 };
 
 type CloseHistoryResponse = {

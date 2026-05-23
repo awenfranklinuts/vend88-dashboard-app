@@ -1562,8 +1562,11 @@ export default function DashboardScreen() {
 
             {/* Revenue Chart removed — sparkline lives in the hero */}
 
-            {/* Top Selling Items — vertical list with progress bars */}
-            {topProducts.length > 0 && (
+            {/* Top Selling Items — vertical list with progress bars.
+                Always rendered (even when empty) so the section doesn't
+                disappear on periods with no activity yet — we show a
+                friendly empty state instead. */}
+            {(
               <>
                 <SectionLabel
                   label={`${t("dashboard_top_products")} · ${periodLabel}`}
@@ -1636,6 +1639,20 @@ export default function DashboardScreen() {
                   ]}
                 >
                   {(() => {
+                    if (topProducts.length === 0) {
+                      return (
+                        <View style={styles.emptyBlock}>
+                          <Ionicons
+                            name="basket-outline"
+                            size={22}
+                            color={TEXT_DIM}
+                          />
+                          <Text style={styles.emptyText}>
+                            {t("dashboard_no_recent_orders")}
+                          </Text>
+                        </View>
+                      );
+                    }
                     const maxUnits = Math.max(...topProducts.map((p) => p.units), 1);
                     // Tiered gold tints — #1 brightest, descending so the
                     // ranking reads at a glance via the bar saturation alone.
@@ -1649,11 +1666,10 @@ export default function DashboardScreen() {
                       const initial = (p.name?.trim()?.[0] ?? "?").toUpperCase();
                       const fillColor =
                         i < rankFill.length ? rankFill[i] : GOLD + "66";
-                      const showRankBadge = i < 3;
                       return (
                         <View
                           key={p.id}
-                          accessibilityLabel={`${p.name}, rank ${i + 1}, ${p.units} sold`}
+                          accessibilityLabel={`${p.name}, rank ${i + 1}, ${shortMoney(parseMoney(p.revenue))} in sales`}
                           style={[
                             styles.topRow,
                             i !== topProducts.length - 1 && styles.topRowDivider,
@@ -1669,27 +1685,13 @@ export default function DashboardScreen() {
                             ) : (
                               <Text style={styles.topThumbText}>{initial}</Text>
                             )}
-                            {showRankBadge && (
-                              <View
-                                style={[
-                                  styles.topRankBadge,
-                                  i === 0 && styles.topRankBadgeGold,
-                                  i === 1 && styles.topRankBadgeSilver,
-                                  i === 2 && styles.topRankBadgeBronze,
-                                ]}
-                              >
-                                <Text style={styles.topRankBadgeText}>
-                                  {i + 1}
-                                </Text>
-                              </View>
-                            )}
                           </View>
                           <View style={styles.topBody}>
                             <View style={styles.topBodyRow}>
                               <Text style={styles.topName} numberOfLines={1}>
                                 {p.name}
                               </Text>
-                              <Text style={styles.topUnits}>{p.units}</Text>
+                              <Text style={styles.topUnits}>{shortMoney(parseMoney(p.revenue))}</Text>
                             </View>
                             <View style={styles.topBarTrack}>
                               <View
@@ -1780,7 +1782,7 @@ export default function DashboardScreen() {
                           <Ionicons
                             name="restaurant-outline"
                             size={14}
-                            color={activeTab === "dining" ? GOLD : TEXT_DIM}
+                            color={activeTab === "dining" ? "#181e38" : TEXT_DIM}
                           />
                           <Text
                             style={[
@@ -1803,7 +1805,7 @@ export default function DashboardScreen() {
                           <Ionicons
                             name="card-outline"
                             size={14}
-                            color={activeTab === "methods" ? GOLD : TEXT_DIM}
+                            color={activeTab === "methods" ? "#181e38" : TEXT_DIM}
                           />
                           <Text
                             style={[
@@ -2041,7 +2043,7 @@ export default function DashboardScreen() {
                     return (
                       <View
                         key={`${p.id}-${i}`}
-                        accessibilityLabel={`${p.name}, ${p.units} sold`}
+                        accessibilityLabel={`${p.name}, ${shortMoney(parseMoney(p.revenue))} in sales`}
                         style={[
                           styles.topRow,
                           i !== topAll.length - 1 && styles.topRowDivider,
@@ -2064,7 +2066,7 @@ export default function DashboardScreen() {
                             <Text style={styles.topName} numberOfLines={1}>
                               {p.name}
                             </Text>
-                            <Text style={styles.topUnits}>{p.units}</Text>
+                            <Text style={styles.topUnits}>{shortMoney(parseMoney(p.revenue))}</Text>
                           </View>
                           <View style={styles.topBarTrack}>
                             <View
@@ -2433,22 +2435,6 @@ export default function DashboardScreen() {
                       </Pressable>
                     </View>
                   )}
-
-                  <Pressable
-                    accessibilityLabel="View full sales report"
-                    onPress={() => {
-                      haptic.medium();
-                      closeChartModal();
-                      router.push("/(tabs)/sales");
-                    }}
-                    style={({ pressed }) => [
-                      styles.modalCta,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <Text style={styles.modalCtaText}>View full report</Text>
-                    <Ionicons name="arrow-forward" size={14} color="#181e38" />
-                  </Pressable>
                 </>
               );
             })()}
@@ -2472,7 +2458,11 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   safeContainer: { flex: 1, backgroundColor: BG },
   container: { flex: 1, backgroundColor: "transparent" },
-  content: { padding: SCREEN_PADDING, paddingTop: 8, paddingBottom: 120, gap: 24 },
+  // Vertical rhythm — `gap` here is the spacing between adjacent top-level
+  // sections. SectionLabel adds its own marginTop:16/marginBottom:8 so the
+  // parent gap is intentionally smaller (14) to avoid compounding into
+  // excessive empty space between a section heading and its content.
+  content: { padding: SCREEN_PADDING, paddingTop: 8, paddingBottom: 120, gap: 14 },
   pressed: { opacity: 0.7 },
 
   // Header
@@ -3088,27 +3078,6 @@ const styles = StyleSheet.create({
     letterSpacing: -0.3,
   },
 
-  // Modal CTA
-  modalCta: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: GOLD,
-    borderRadius: 14,
-    paddingVertical: 14,
-    shadowColor: GOLD,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-  },
-  modalCtaText: {
-    color: "#181e38",
-    fontSize: 14,
-    fontWeight: "800",
-    letterSpacing: 0.2,
-  },
-
   // KPI row — flat cells with hairline dividers
   kpiRow: {
     flexDirection: "row",
@@ -3454,16 +3423,15 @@ const styles = StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 14,
   },
-  // Unified donut card — segmented tab with an animated sliding thumb that
-  // glides between Dining Options and Sales Methods.
+  // Unified donut card — segmented switcher with a fully-rounded sliding
+  // thumb. Active segment sits on a solid gold pill with dark contrast text
+  // for a premium, deliberate feel rather than a flat "tinted" look.
   donutTabRow: {
     flexDirection: "row",
-    backgroundColor: CARD,
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 999,
     padding: 4,
-    marginBottom: 6,
+    marginBottom: 10,
     position: "relative",
     overflow: "hidden",
   },
@@ -3472,10 +3440,13 @@ const styles = StyleSheet.create({
     top: 4,
     bottom: 4,
     left: 4,
-    borderRadius: 10,
-    backgroundColor: GOLD + "1f",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: GOLD + "45",
+    borderRadius: 999,
+    backgroundColor: GOLD,
+    shadowColor: GOLD,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 3,
   },
   donutTab: {
     flex: 1,
@@ -3483,9 +3454,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    paddingVertical: 9,
-    paddingHorizontal: 10,
-    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 999,
   },
   donutTabText: {
     color: TEXT_DIM,
@@ -3494,8 +3465,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   donutTabTextActive: {
-    color: GOLD,
-    fontWeight: "700",
+    color: "#181e38",
+    fontWeight: "800",
+    letterSpacing: 0.2,
   },
   // Live pulsing pill for Recent Orders section header.
   livePill: {

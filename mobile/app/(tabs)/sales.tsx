@@ -30,7 +30,9 @@ import {
   fetchOfficialSalesHistory,
   fetchOfficialShopDetail,
   fetchOfficialStoreStatisticsRange,
+  fetchOfficialTopSellingItems,
   invalidateOfficialDashboardCaches,
+  type DashboardTopItem,
   type OfficialOrderDetail,
   type OfficialStoreStatisticsRange,
 } from "../../src/services/officialDashboard";
@@ -110,12 +112,16 @@ type ModuleStat = { module: string; revenue: number; orders: number; pct: number
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const MODULE_COLORS: Record<string, string> = {
-  POS: "#4064dc",
-  KDS: "#f59e0b",
-  Vending: "#10b981",
-  Kiosk: "#8b5cf6",
-  Loyalty: "#ec4899",
+  // POS is intentionally blue to match the dashboard's POS module tag
+  // (see `orderModTag` in index.tsx — text #3b82f6 / bg rgba(59,130,246,0.16)).
+  POS: "#3b82f6",
+  KDS: "#c084fc",
+  Vending: "#4ade80",
+  Kiosk: "#fdba74",
+  Loyalty: "#67e8f9",
 };
+
+const MODULE_UNKNOWN_COLOR = "#94a3b8";
 
 const PAYMENT_ICONS: Record<string, keyof typeof import("@expo/vector-icons").Ionicons.glyphMap> = {
   Cash: "cash-outline",
@@ -126,12 +132,60 @@ const PAYMENT_ICONS: Record<string, keyof typeof import("@expo/vector-icons").Io
 };
 
 const PAYMENT_COLORS: Record<string, string> = {
+  // Cash green and Tyro grey both mirror the dashboard's `orderGlyph` palette
+  // in index.tsx so the same payment reads as the same color across screens.
   Cash: "#10b981",
-  Card: "#4064dc",
-  QR: "#8b5cf6",
-  Wallet: "#f59e0b",
-  Mobile: "#06b6d4",
+  Card: "#5eead4",
+  QR: "#a78bfa",
+  Wallet: "#818cf8",
+  Mobile: "#67e8f9",
+  Tyro: "#64748b",
 };
+
+const PAYMENT_UNKNOWN_COLOR = "#94a3b8";
+const PAYMENT_FALLBACK_PALETTE = [
+  "#93c5fd",
+  "#5eead4",
+  "#c4b5fd",
+  "#a5b4fc",
+  "#7dd3fc",
+  "#67e8f9",
+  "#60a5fa",
+];
+
+function getPaymentColor(name: string): string {
+  const known = PAYMENT_COLORS[name];
+  if (known) return known;
+  const key = (name ?? "").trim().toLowerCase();
+  if (!key) return PAYMENT_UNKNOWN_COLOR;
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  }
+  const idx = Math.abs(hash) % PAYMENT_FALLBACK_PALETTE.length;
+  return PAYMENT_FALLBACK_PALETTE[idx];
+}
+
+// Dining-mode palette — intentionally different from payment/module palettes
+// so each breakdown section has its own visual identity.
+const DINING_COLORS: Record<string, string> = {
+  "Dine-in": "#fda4af",
+  "Dine In": "#fda4af",
+  Takeaway: "#fcd34d",
+  "Take Away": "#fcd34d",
+  Delivery: "#bef264",
+  "Drive-thru": "#5eead4",
+  "Drive Thru": "#5eead4",
+  Pickup: "#7dd3fc",
+};
+const DINING_FALLBACK_PALETTE = [
+  "#fda4af",
+  "#fdba74",
+  "#fde047",
+  "#bef264",
+  "#99f6e4",
+  "#bae6fd",
+];
 
 // Normalise raw payment-method keys returned by the storeStatistics breakdown
 // (e.g. "cash", "card", "eftpos") into the same display labels used elsewhere
@@ -644,6 +698,33 @@ function StatementSubRow({
 
 function StatementDivider() {
   return <View style={styles.statementDivider} />;
+}
+
+// Empty-state card for breakdown chapters — small icon + one-liner so the
+// page never silently drops a section. Uses the same `breakdownGroup` shell
+// so it sits visually flush with the populated cards.
+function EmptyBreakdownCard({
+  icon,
+  title,
+  message,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  message: string;
+}) {
+  return (
+    <View style={styles.breakdownGroup}>
+      <View style={styles.emptyBreakdownInner}>
+        <View style={styles.emptyBreakdownIconWrap}>
+          <Ionicons name={icon} size={18} color={TEXT_DIM} />
+        </View>
+        <View style={styles.emptyBreakdownTextWrap}>
+          <Text style={styles.emptyBreakdownTitle}>{title}</Text>
+          <Text style={styles.emptyBreakdownMessage}>{message}</Text>
+        </View>
+      </View>
+    </View>
+  );
 }
 
 // ─── Date range picker modal ─────────────────────────────────────────────────
@@ -1971,6 +2052,24 @@ export default function SalesScreen() {
   const [officialPeriodStat, setOfficialPeriodStat] = useState<PeriodSummary | null>(null);
   const [officialStats, setOfficialStats] = useState<OfficialStoreStatisticsRange | null>(null);
   const [officialItemsSold, setOfficialItemsSold] = useState<number | null>(null);
+  const [topItems, setTopItems] = useState<DashboardTopItem[] | null>(null);
+  const [topProductDetailImages, setTopProductDetailImages] = useState<
+    Record<string, string>
+  >({});
+  // Persistent image library learned from any successful /pos/dashboard fetch
+  // (any period). Today's /pos/dashboard call often returns nothing, so we
+  // reuse images learned during week/month fetches keyed by product name.
+  const topImageLibraryRef = useRef<{
+    byName: Map<string, string>;
+    byNormalized: Map<string, string>;
+    normalizedAmbiguous: Set<string>;
+  }>({
+    byName: new Map(),
+    byNormalized: new Map(),
+    normalizedAmbiguous: new Set(),
+  });
+  // Bumped whenever the image library learns new entries so memos recompute.
+  const [topImageLibraryRev, setTopImageLibraryRev] = useState(0);
   const [revenueChangePct, setRevenueChangePct] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
@@ -2253,6 +2352,7 @@ export default function SalesScreen() {
     [selectedBounds]
   );
   const txnFetchInFlightKeyRef = useRef<string | null>(null);
+  const txnAbortControllerRef = useRef<AbortController | null>(null);
 
   // Reset cached sales-history when the selected period changes so the modal
   // re-fetches the correct range the next time it's opened. We deliberately
@@ -2261,8 +2361,13 @@ export default function SalesScreen() {
   const lastTxnPeriodKey = useRef<string | null>(null);
   useEffect(() => {
     if (lastTxnPeriodKey.current === txnPeriodKey) return;
+    // Cancel any in-flight fetch for the previous period so it doesn't keep
+    // `txnLoading` locked and block background warmup for the new period.
+    txnAbortControllerRef.current?.abort();
+    txnAbortControllerRef.current = null;
     lastTxnPeriodKey.current = txnPeriodKey;
     txnFetchInFlightKeyRef.current = null;
+    setTxnLoading(false);
     setTxnLoadedKey(null);
     setSales([]);
   }, [txnPeriodKey]);
@@ -2273,15 +2378,20 @@ export default function SalesScreen() {
     }
     txnFetchInFlightKeyRef.current = txnPeriodKey;
     const fetchKey = txnPeriodKey;
+    const localController = signal ? null : new AbortController();
+    const activeSignal = signal ?? localController?.signal;
+    if (localController) {
+      txnAbortControllerRef.current = localController;
+    }
     setTxnLoading(true);
     try {
       const history = await fetchOfficialSalesHistory(
         selectedBounds.start,
         selectedBounds.endInclusive,
         { email, token },
-        signal,
+        activeSignal,
         (progress) => {
-          if (signal?.aborted || lastTxnPeriodKey.current !== fetchKey) return;
+          if (activeSignal?.aborted || lastTxnPeriodKey.current !== fetchKey) return;
           const mappedSales: Sale[] = progress.rows.map((sale) => ({
             id: sale.id,
             rawId: sale.rawId,
@@ -2299,7 +2409,7 @@ export default function SalesScreen() {
         }
       );
 
-      if (signal?.aborted) return;
+      if (activeSignal?.aborted) return;
 
       const mappedSales: Sale[] = history.map((sale) => ({
         id: sale.id,
@@ -2315,7 +2425,7 @@ export default function SalesScreen() {
       }));
       setSales(mappedSales);
       setSummary(buildSalesSummary(mappedSales));
-      setTxnLoadedKey(txnPeriodKey);
+      setTxnLoadedKey(fetchKey);
       setLoadError(false);
 
       const endAnchor = startOfDay(selectedBounds.endInclusive);
@@ -2337,16 +2447,24 @@ export default function SalesScreen() {
         }))
       );
     } catch {
-      if (signal?.aborted) return;
+      if (activeSignal?.aborted) return;
       // Preserve previously loaded sales/summary/chart so the user still sees
       // the last-known values when the network drops. Flip the error flag so
       // the UI can surface a notice when there is genuinely nothing to show.
       setLoadError(true);
     } finally {
+      if (txnAbortControllerRef.current === localController) {
+        txnAbortControllerRef.current = null;
+      }
+      const shouldClearLoading =
+        txnFetchInFlightKeyRef.current === fetchKey ||
+        txnFetchInFlightKeyRef.current === null;
       if (txnFetchInFlightKeyRef.current === fetchKey) {
         txnFetchInFlightKeyRef.current = null;
       }
-      if (!signal?.aborted) setTxnLoading(false);
+      if (shouldClearLoading) {
+        setTxnLoading(false);
+      }
     }
   }, [email, token, selectedBounds, txnPeriodKey]);
 
@@ -2447,6 +2565,7 @@ export default function SalesScreen() {
       setOfficialPeriodStat(null);
       setOfficialStats(null);
       setOfficialItemsSold(null);
+      setTopItems(null);
       setRevenueChangePct(null);
       return;
     }
@@ -2493,8 +2612,7 @@ export default function SalesScreen() {
         setRevenueChangePct(
           calcRevenueChangePct(stats.revenue, previousStats.revenue)
         );
-        setLoadError(false);
-      } catch (err) {
+        setLoadError(false);      } catch (err) {
         console.log("[sales-period] storeStatistics fetch failed:", err);
         if (!cancelled) {
           // Keep prior officialStats/officialPeriodStat/officialItemsSold so
@@ -2531,6 +2649,205 @@ export default function SalesScreen() {
     });
     return () => cancelAnimationFrame(id);
   }, [officialStats, statementAnim]);
+
+  // Stacked-bar growth animation — segments interpolate width from 0% → pct%
+  // on every fresh `officialStats`. Driven on the JS thread because width is
+  // a layout prop and not bridgeable via useNativeDriver.
+  const barAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!officialStats) return;
+    barAnim.setValue(0);
+    const id = requestAnimationFrame(() => {
+      Animated.timing(barAnim, {
+        toValue: 1,
+        duration: 520,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }).start();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [officialStats, barAnim]);
+
+  // Top selling items for the active period — surfaced as its own card
+  // between Revenue by Module and Abnormal Transactions.
+  useEffect(() => {
+    if (API_TARGET !== "official" || authLoading) return;
+    const topPeriod: "today" | "week" | "month" =
+      period === "today"
+        ? "today"
+        : period === "this_week"
+        ? "week"
+        : "month";
+    let cancelled = false;
+    (async () => {
+      try {
+        const items = await fetchOfficialTopSellingItems(5, topPeriod, {
+          email,
+          token,
+        });
+        if (!cancelled) setTopItems(items);
+      } catch (err) {
+        console.log("[sales-period] top items fetch failed:", err);
+        if (!cancelled) setTopItems([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, email, token, period, selectedBounds, refreshKey]);
+
+  // Seed the image library from the month period in the background so Today
+  // can render thumbnails even when /pos/dashboard returns no data for it.
+  useEffect(() => {
+    if (API_TARGET !== "official" || authLoading) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const items = await fetchOfficialTopSellingItems(20, "month", {
+          email,
+          token,
+        });
+        if (cancelled || !Array.isArray(items) || items.length === 0) return;
+        ingestTopImageLibrary(items);
+      } catch (err) {
+        // Non-fatal — the active-period fetch may still populate images.
+        console.log("[sales-period] top items image seed failed:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, email, token, refreshKey]);
+
+  // Whenever the active-period top items arrive with image URLs, ingest them
+  // into the persistent image library so future periods (notably Today) can
+  // reuse those mappings.
+  useEffect(() => {
+    if (!topItems || topItems.length === 0) return;
+    ingestTopImageLibrary(topItems);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topItems]);
+
+  // Resolve images by product id from storeStatistics top_products so Today
+  // can render the same thumbnails even when names differ slightly.
+  useEffect(() => {
+    if (API_TARGET !== "official" || authLoading) return;
+    const ids = Array.from(
+      new Set(
+        (officialStats?.topProducts ?? [])
+          .map((p) => (typeof p.id === "string" ? p.id.trim() : ""))
+          .filter((id): id is string => id.length > 0)
+      )
+    );
+    if (ids.length === 0) {
+      setTopProductDetailImages({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const details = await fetchOfficialProductDetails(ids, { email, token });
+        if (cancelled) return;
+        const next: Record<string, string> = {};
+        for (const id of ids) {
+          const image = details[id]?.image;
+          if (typeof image === "string" && image.trim().length > 0) {
+            next[id] = image;
+          }
+        }
+        setTopProductDetailImages(next);
+      } catch (err) {
+        console.log("[sales-period] top product detail image fetch failed:", err);
+        if (!cancelled) setTopProductDetailImages({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, email, token, officialStats, period, selectedBounds, refreshKey]);
+
+  const normalizeTopItemName = useCallback((value: string): string => {
+    return value
+      .toLowerCase()
+      .replace(/\([^)]*\)/g, " ")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }, []);
+
+  const ingestTopImageLibrary = useCallback(
+    (items: DashboardTopItem[]) => {
+      const lib = topImageLibraryRef.current;
+      let added = false;
+      for (const it of items) {
+        if (!it?.image || !it?.name) continue;
+        if (!lib.byName.has(it.name)) {
+          lib.byName.set(it.name, it.image);
+          added = true;
+        }
+        const normalized = normalizeTopItemName(it.name);
+        if (!normalized) continue;
+        if (lib.normalizedAmbiguous.has(normalized)) continue;
+        const existing = lib.byNormalized.get(normalized);
+        if (!existing) {
+          lib.byNormalized.set(normalized, it.image);
+          added = true;
+        } else if (existing !== it.image) {
+          // Conflicting images for same normalized name — drop to avoid
+          // assigning the wrong thumbnail.
+          lib.byNormalized.delete(normalized);
+          lib.normalizedAmbiguous.add(normalized);
+          added = true;
+        }
+      }
+      if (added) setTopImageLibraryRev((r) => r + 1);
+    },
+    [normalizeTopItemName]
+  );
+
+  // Prefer top items derived from /dashboard/storeStatistics (same source
+  // as the Statement card) so the list stays consistent with the headline
+  // revenue figures. Image URLs are resolved via the persistent image library
+  // populated by /pos/dashboard fetches across all periods.
+  const displayTopItems = useMemo<DashboardTopItem[] | null>(() => {
+    const fromStats = officialStats?.topProducts ?? null;
+    const lib = topImageLibraryRef.current;
+    const imagesByName = lib.byName;
+    const imagesByNormalizedName = lib.byNormalized;
+    const ambiguousNormalizedNames = lib.normalizedAmbiguous;
+    if (fromStats && fromStats.length > 0) {
+      return fromStats
+        .slice()
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 5)
+        .map((p, i) => {
+          const normalized = normalizeTopItemName(p.name);
+          const normalizedImage =
+            normalized && !ambiguousNormalizedNames.has(normalized)
+              ? imagesByNormalizedName.get(normalized)
+              : undefined;
+          const byId =
+            typeof p.id === "string" && p.id.trim().length > 0
+              ? topProductDetailImages[p.id.trim()]
+              : undefined;
+          return {
+            id: p.id ? `stat:${p.id}` : `stat:${p.name}:${i}`,
+            name: p.name,
+            units: Math.round(p.qty),
+            revenue: String(p.total),
+            image: byId ?? imagesByName.get(p.name) ?? normalizedImage,
+          };
+        });
+    }
+    return topItems;
+  }, [
+    officialStats,
+    topItems,
+    topProductDetailImages,
+    topImageLibraryRev,
+    normalizeTopItemName,
+  ]);
 
   const fallbackStat = useMemo(
     () => buildPeriodSummary(sales, selectedBounds.start, selectedBounds.endExclusive),
@@ -2876,7 +3193,7 @@ export default function SalesScreen() {
     }) => {
       const d = parseDate(item.date);
       const payIcon = PAYMENT_ICONS[item.payment] ?? "card-outline";
-      const payColor = PAYMENT_COLORS[item.payment] ?? "#64748b";
+      const payColor = getPaymentColor(item.payment);
       const isLastInSection = index === section.data.length - 1;
       const statusMeta = getTransactionStatusMeta(item.rawStatus ?? item.status);
       const statusLabel = statusMeta.label;
@@ -2906,13 +3223,16 @@ export default function SalesScreen() {
               <View
                 style={[
                   styles.modTag,
-                  { backgroundColor: (MODULE_COLORS[item.module] ?? "#64748b") + "1f" },
+                  {
+                    backgroundColor:
+                      (MODULE_COLORS[item.module] ?? MODULE_UNKNOWN_COLOR) + "1f",
+                  },
                 ]}
               >
                 <Text
                   style={[
                     styles.modTagText,
-                    { color: MODULE_COLORS[item.module] ?? "#64748b" },
+                    { color: MODULE_COLORS[item.module] ?? MODULE_UNKNOWN_COLOR },
                   ]}
                 >
                   {item.module}
@@ -3223,7 +3543,9 @@ export default function SalesScreen() {
     return `<!doctype html>
 <html><head><meta charset="utf-8"/><title>Vend88 Sales — ${esc(allTxnPeriodLabel)}</title>
 <style>
-  @page { size: A4; }
+  /* Single page sized to content — height is set by printToFileAsync.
+     'auto' lets the print engine match the requested canvas height. */
+  @page { size: 210mm auto; margin: 14mm 14mm; }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
@@ -3311,10 +3633,10 @@ export default function SalesScreen() {
     margin: 0 0 10px;
     font-weight: 700;
   }
-  .section { margin-bottom: 22px; page-break-inside: avoid; break-inside: avoid; }
+  .section { margin-bottom: 22px; }
 
   /* KPI cards */
-  .kpis { display: flex; gap: 12px; margin: 0 0 8px; }
+  .kpis { display: flex; gap: 12px; margin: 0 0 8px; page-break-inside: avoid; break-inside: avoid; }
   .kpi {
     flex: 1;
     border: 1px solid #e5e7eb;
@@ -3374,14 +3696,17 @@ export default function SalesScreen() {
     font-size: 12px;
   }
 
-  /* Two-column layout for statement + abnormal */
+  /* Two-column layout for statement + abnormal.
+     Uses display:table so the block flows immediately after the summary
+     instead of being forced onto the next page by flex break-inside rules. */
   .two-col {
-    display: flex;
-    gap: 16px;
-    align-items: flex-start;
-    margin-bottom: 22px;
+    display: table;
+    width: 100%;
+    border-spacing: 16px 0;
+    margin: 0 -16px 22px;
+    table-layout: fixed;
   }
-  .two-col .col { flex: 1; min-width: 0; }
+  .two-col .col { display: table-cell; vertical-align: top; width: 50%; min-width: 0; }
   .col-card {
     border: 1px solid #e5e7eb;
     border-radius: 10px;
@@ -3518,12 +3843,60 @@ export default function SalesScreen() {
             setExportOpen(false);
             return;
           }
+          // ── Estimate output height so the PDF fits content tightly
+          // instead of leaving a huge blank tail. Values are in points
+          // (1pt = 1/72in). Tuned to match the CSS row heights/padding.
+          const ROW = 24; // table row incl. padding
+          const SECTION_HEADER = 32; // h2 + margin
+          let statementRows = 0;
+          if (officialStats) {
+            // Base statement rows (Total Orders, Gross Sales + 4 sub,
+            // Discounts, Refunds, Holiday, Payment surcharge, Tax?,
+            // Total Revenue) ≈ 11
+            statementRows = 11;
+            if (officialStats.financial.totalTax > 0) statementRows += 1;
+            const diningCount = Object.keys(officialStats.diningMode).length;
+            const paymentCount = Object.keys(officialStats.paymentMethod).length;
+            if (diningCount) statementRows += 1 + diningCount; // group header + entries
+            if (paymentCount) statementRows += 1 + paymentCount;
+          }
+          let abnormalRows = 0;
+          if (officialStats?.abnormal) {
+            const a = officialStats.abnormal;
+            abnormalRows = [
+              a.voided, a.refunds, a.discounts,
+              a.coupons, a.creditPaid, a.cancelled,
+            ].filter((it) => it.count > 0 || it.amount !== 0).length;
+            if (abnormalRows) abnormalRows += 1; // thead row
+          }
+          const twoColHeight = Math.max(
+            statementRows ? SECTION_HEADER + statementRows * ROW + 16 : 0,
+            abnormalRows ? SECTION_HEADER + abnormalRows * ROW + 16 : 0
+          );
+          let txnHeight = 0;
+          if (exportIncludeTxn) {
+            const totalTxnRows =
+              sections.reduce((acc, sec) => acc + sec.data.length, 0) +
+              sections.length; // group header per section
+            txnHeight = SECTION_HEADER + 28 /* thead */ + totalTxnRows * 20 + 30;
+          }
+          const HEADER = 220; // dark brand header
+          const SUMMARY = 110; // KPI cards section
+          const FOOTER = 60;
+          const PADDING = 60; // top/bottom margins safety
+          const estimatedHeight = Math.max(
+            842, // never shorter than A4 portrait
+            HEADER + SUMMARY + twoColHeight + txnHeight + FOOTER + PADDING
+          );
+
           const { uri } = await Print.printToFileAsync({
             html: buildPdfHtml(),
-            // Force real page margins on the rendered PDF — WebView print
-            // engines often ignore CSS `@page { margin }`, so set it here.
-            // Units are points (1pt = 1/72in). ~18mm top/bottom, ~14mm sides.
-            margins: { top: 51, bottom: 45, left: 40, right: 40 },
+            // Render as a single page sized to fit content — A4 width
+            // with auto-calculated height. Avoids both pagination and
+            // large empty space at the bottom.
+            width: 595,
+            height: estimatedHeight,
+            margins: { top: 40, bottom: 40, left: 40, right: 40 },
           });
           const target = new File(Paths.cache, `${exportFileBase}.pdf`);
           let shareUri = uri;
@@ -4115,38 +4488,6 @@ export default function SalesScreen() {
                         value={fmt(f.totalRevenue)}
                         total
                       />
-
-                      {diningEntries.length > 0 && (
-                        <>
-                          <View style={styles.statementSectionHeader}>
-                            <Text style={styles.statementSectionHeaderText}>
-                              {t("sales_stmt_dining_mode")}
-                            </Text>
-                          </View>
-                          {diningEntries.map(([name, value], idx) => (
-                            <View key={`d-${name}`}>
-                              {idx > 0 && <StatementDivider />}
-                              <StatementRow label={name} value={fmt(value)} />
-                            </View>
-                          ))}
-                        </>
-                      )}
-
-                      {paymentEntries.length > 0 && (
-                        <>
-                          <View style={styles.statementSectionHeader}>
-                            <Text style={styles.statementSectionHeaderText}>
-                              {t("sales_stmt_payment_methods")}
-                            </Text>
-                          </View>
-                          {paymentEntries.map(([name, value], idx) => (
-                            <View key={`p-${name}`}>
-                              {idx > 0 && <StatementDivider />}
-                              <StatementRow label={name} value={fmt(value)} />
-                            </View>
-                          ))}
-                        </>
-                      )}
                     </Animated.View>
                   </View>
                 );
@@ -4154,7 +4495,319 @@ export default function SalesScreen() {
               </FadingContent>
             )}
 
-            {/* Abnormal transactions — voided / refunds / discounts / coupons / credit / cancelled */}
+            {/* Dining Mode — standalone card matching Payment Methods /
+                Revenue by Module: stacked bar + dot/name/amount/% rows. */}
+            {!loading && officialStats?.diningMode && (() => {
+              const entries = Object.entries(officialStats.diningMode)
+                .filter(([, v]) => (v as number) > 0)
+                .sort((a, b) => (b[1] as number) - (a[1] as number)) as [string, number][];
+              if (!entries.length) return null;
+              const total = entries.reduce((s, [, v]) => s + v, 0) || 1;
+              const items = entries.map(([name, value], i) => ({
+                name,
+                value,
+                pct: (value / total) * 100,
+                color:
+                  DINING_COLORS[name] ??
+                  DINING_FALLBACK_PALETTE[i % DINING_FALLBACK_PALETTE.length],
+              }));
+              return (
+                <FadingContent fading={isFetching}>
+                  <View style={styles.breakdownGroup}>
+                    <View style={styles.breakdownSection}>
+                      <SectionLabel
+                        label={t("sales_stmt_dining_mode")}
+                        style={styles.breakdownSectionLabel}
+                        right={
+                          <Text style={styles.sectionHint}>{items.length}</Text>
+                        }
+                      />
+
+                      {/* Stacked bar — dining mix at a glance */}
+                      <View style={styles.stackedBar}>
+                        {items.map((d) => (
+                          <Animated.View
+                            key={d.name}
+                            style={{
+                              width: barAnim.interpolate({
+                                inputRange: [0, 1],
+                                outputRange: ["0%", `${d.pct}%`],
+                              }),
+                              backgroundColor: d.color,
+                            }}
+                          />
+                        ))}
+                      </View>
+
+                      {/* Unified rows: dot · name · amount · % */}
+                      <View style={styles.moduleList}>
+                        {items.map((d, i) => (
+                          <View
+                            key={d.name}
+                            style={[
+                              styles.paymentRow,
+                              i !== items.length - 1 && styles.moduleRowDivider,
+                            ]}
+                          >
+                            <View style={styles.moduleLeft}>
+                              <View
+                                style={[
+                                  styles.moduleDot,
+                                  { backgroundColor: d.color },
+                                ]}
+                              />
+                              <Text style={styles.moduleName} numberOfLines={1}>
+                                {d.name}
+                              </Text>
+                            </View>
+                            <Text style={styles.paymentAmount}>
+                              {formatCurrency(d.value, 0)}
+                            </Text>
+                            <Text style={styles.paymentPct}>
+                              {d.pct.toFixed(0)}%
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  </View>
+                </FadingContent>
+              );
+            })()}
+
+            {/* Payment Methods — unified card: stacked bar + dot/name/amount/%
+                rows. Replaces the old separate amount-table and percent-mix. */}
+            {!loading && displayPaymentBreakdown.length > 0 && (
+              <View style={styles.breakdownGroup}>
+                <View style={styles.breakdownSection}>
+                  <SectionLabel
+                    label={t("sales_stmt_payment_methods")}
+                    style={styles.breakdownSectionLabel}
+                    right={
+                      <Text style={styles.sectionHint}>
+                        {displayPaymentBreakdown.length}{" "}
+                        {displayPaymentBreakdown.length === 1
+                          ? t("sales_method_one")
+                          : t("sales_method_other")}
+                      </Text>
+                    }
+                  />
+
+                  {/* Stacked bar — overall mix at a glance */}
+                  <View style={styles.stackedBar}>
+                    {displayPaymentBreakdown.map((p) => (
+                      <Animated.View
+                        key={p.name}
+                        style={{
+                          width: barAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: ["0%", `${p.pct}%`],
+                          }),
+                            backgroundColor: getPaymentColor(p.name),
+                        }}
+                      />
+                    ))}
+                  </View>
+
+                  {/* Unified rows: dot · name · amount · % */}
+                  <View style={styles.moduleList}>
+                    {displayPaymentBreakdown.map((p, i) => (
+                      <View
+                        key={p.name}
+                        style={[
+                          styles.paymentRow,
+                          i !== displayPaymentBreakdown.length - 1 && styles.moduleRowDivider,
+                        ]}
+                      >
+                        <View style={styles.moduleLeft}>
+                          <View
+                            style={[
+                              styles.moduleDot,
+                              {
+                                backgroundColor: getPaymentColor(p.name),
+                              },
+                            ]}
+                          />
+                          <Text style={styles.moduleName} numberOfLines={1}>
+                            {p.name}
+                          </Text>
+                        </View>
+                        <Text style={styles.paymentAmount}>
+                          {formatCurrency(p.value, 0)}
+                        </Text>
+                        <Text style={styles.paymentPct}>
+                          {p.pct.toFixed(0)}%
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </View>
+            )}
+
+            {/* Revenue by Module — separate card, same visual language as
+                Payment Methods (stacked bar + dot/name/amount/% rows) so the
+                two breakdown chapters read consistently. */}
+            {!loading && displayModuleBreakdown.length > 0 && (
+              <FadingContent fading={isFetching}>
+                <View style={styles.breakdownGroup}>
+                  <View style={styles.breakdownSection}>
+                    <SectionLabel
+                      label={t("sales_revenue_by_module")}
+                      style={styles.breakdownSectionLabel}
+                      right={
+                        <Text style={styles.sectionHint}>
+                          {displayModuleBreakdown.length}
+                        </Text>
+                      }
+                    />
+
+                    {/* Stacked bar — module mix at a glance */}
+                    <View style={styles.stackedBar}>
+                      {displayModuleBreakdown.map((m) => (
+                        <Animated.View
+                          key={m.module}
+                          style={{
+                            width: barAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: ["0%", `${m.pct}%`],
+                            }),
+                            backgroundColor:
+                              MODULE_COLORS[m.module] ?? MODULE_UNKNOWN_COLOR,
+                          }}
+                        />
+                      ))}
+                    </View>
+
+                    {/* Unified rows: dot · name · amount · % */}
+                    <View style={styles.moduleList}>
+                      {displayModuleBreakdown.map((m, i) => (
+                        <View
+                          key={m.module}
+                          style={[
+                            styles.paymentRow,
+                            i !== displayModuleBreakdown.length - 1 && styles.moduleRowDivider,
+                          ]}
+                        >
+                          <View style={styles.moduleLeft}>
+                            <View
+                              style={[
+                                styles.moduleDot,
+                                {
+                                  backgroundColor:
+                                    MODULE_COLORS[m.module] ?? MODULE_UNKNOWN_COLOR,
+                                },
+                              ]}
+                            />
+                            <Text style={styles.moduleName} numberOfLines={1}>
+                              {m.module}
+                            </Text>
+                          </View>
+                          <Text style={styles.paymentAmount}>
+                            {formatCurrency(m.revenue, 0)}
+                          </Text>
+                          <Text style={styles.paymentPct}>
+                            {m.pct.toFixed(0)}%
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                </View>
+              </FadingContent>
+            )}
+
+            {/* Top Items — top 5 best-selling SKUs for the active period.
+                Mirrors the dashboard's top-items row: image thumbnail with
+                medal badge for ranks 1-3, name, units, and revenue. */}
+            {!loading && displayTopItems && displayTopItems.length > 0 && (
+              <FadingContent fading={isFetching}>
+                <View style={styles.breakdownGroup}>
+                  <View style={styles.breakdownSection}>
+                    <SectionLabel
+                      label={t("sales_top_items")}
+                      style={styles.breakdownSectionLabel}
+                      right={
+                        <Text style={styles.sectionHint}>
+                          {displayTopItems.length}
+                        </Text>
+                      }
+                    />
+                    <View style={styles.moduleList}>
+                      {displayTopItems.map((item, i) => {
+                        const initial = (item.name?.[0] ?? "?").toUpperCase();
+                        return (
+                          <View
+                            key={item.id}
+                            style={[
+                              styles.topItemRow,
+                              i !== displayTopItems.length - 1 && styles.moduleRowDivider,
+                            ]}
+                          >
+                            <View style={styles.topItemThumb}>
+                              {item.image ? (
+                                <Image
+                                  source={{ uri: item.image }}
+                                  style={styles.topItemThumbImage}
+                                  resizeMode="cover"
+                                />
+                              ) : (
+                                <Text style={styles.topItemThumbText}>
+                                  {initial}
+                                </Text>
+                              )}
+                            </View>
+                            <Text style={styles.topItemName} numberOfLines={1}>
+                              {item.name}
+                            </Text>
+                            <Text style={styles.topItemUnits}>
+                              {item.units}
+                            </Text>
+                            <Text style={styles.paymentAmount}>
+                              {formatCurrency(parseFloat(item.revenue), 0)}
+                            </Text>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </View>
+                </View>
+              </FadingContent>
+            )}
+
+            {/* Empty-state placeholders — surface a small icon + one-liner
+                when a period has no data for a given breakdown so the page
+                doesn't quietly hide entire chapters. */}
+            {!loading && officialStats && displayPaymentBreakdown.length === 0 && (
+              <EmptyBreakdownCard
+                icon="card-outline"
+                title={t("sales_stmt_payment_methods")}
+                message={t("sales_empty_payment")}
+              />
+            )}
+            {!loading && officialStats && displayModuleBreakdown.length === 0 && (
+              <EmptyBreakdownCard
+                icon="apps-outline"
+                title={t("sales_revenue_by_module")}
+                message={t("sales_empty_module")}
+              />
+            )}
+            {!loading && displayTopItems !== null && displayTopItems.length === 0 && (
+              <EmptyBreakdownCard
+                icon="bag-outline"
+                title={t("sales_top_items")}
+                message={t("sales_empty_top_items")}
+              />
+            )}
+
+            {/* Loading-state placeholder for the module breakdown lives outside
+                the unified card because payment-mix is also gated on !loading. */}
+            {loading && <LoadingModuleBreakdown />}
+
+            {/* Abnormal transactions — placed AFTER Statement + Revenue
+                breakdown so the positive revenue narrative reads first,
+                with exception cases (voided / refunds / discounts /
+                coupons / credit / cancelled) closing the chapter. */}
             {!loading && officialStats && (() => {
               const a = officialStats.abnormal;
               const items: {
@@ -4236,114 +4889,6 @@ export default function SalesScreen() {
                 </FadingContent>
               );
             })()}
-
-            {/* Revenue breakdown group — Payment Mix + Revenue by Module live
-                inside one unified card so they read as a single "where did
-                the money come from?" chapter, separated by a hairline. */}
-            {!loading &&
-              (displayPaymentBreakdown.length > 0 ||
-                displayModuleBreakdown.length > 0) && (
-                <View style={styles.breakdownGroup}>
-                  {displayPaymentBreakdown.length > 0 && (
-                    <View style={styles.breakdownSection}>
-                      <SectionLabel
-                        label={t("sales_payment_mix")}
-                        style={styles.breakdownSectionLabel}
-                        right={
-                          <Text style={styles.sectionHint}>
-                            {displayPaymentBreakdown.length}{" "}
-                            {displayPaymentBreakdown.length === 1
-                              ? t("sales_method_one")
-                              : t("sales_method_other")}
-                          </Text>
-                        }
-                      />
-
-                      {/* Stacked bar */}
-                      <View style={styles.stackedBar}>
-                        {displayPaymentBreakdown.map((p) => (
-                          <View
-                            key={p.name}
-                            style={{
-                              width: `${p.pct}%`,
-                              backgroundColor: PAYMENT_COLORS[p.name] ?? "#64748b",
-                            }}
-                          />
-                        ))}
-                      </View>
-
-                      {/* Legend */}
-                      <View style={styles.legend}>
-                        {displayPaymentBreakdown.map((p) => (
-                          <View key={p.name} style={styles.legendItem}>
-                            <View
-                              style={[
-                                styles.legendDot,
-                                { backgroundColor: PAYMENT_COLORS[p.name] ?? "#64748b" },
-                              ]}
-                            />
-                            <Text style={styles.legendName}>{p.name}</Text>
-                            <Text style={styles.legendPct}>{p.pct.toFixed(0)}%</Text>
-                          </View>
-                        ))}
-                      </View>
-                    </View>
-                  )}
-
-                  {displayPaymentBreakdown.length > 0 &&
-                    displayModuleBreakdown.length > 0 && (
-                      <View style={styles.breakdownGap} />
-                    )}
-
-                  {displayModuleBreakdown.length > 0 && (
-                    <FadingContent fading={isFetching}>
-                      <View style={styles.breakdownSection}>
-                        <SectionLabel
-                          label={t("sales_revenue_by_module")}
-                          style={styles.breakdownSectionLabel}
-                        />
-                        <View style={styles.moduleList}>
-                          {displayModuleBreakdown.map((m, i) => (
-                            <View
-                              key={m.module}
-                              style={[
-                                styles.moduleRow,
-                                i !== displayModuleBreakdown.length - 1 && styles.moduleRowDivider,
-                              ]}
-                            >
-                              <View style={styles.moduleLeft}>
-                                <View
-                                  style={[
-                                    styles.moduleDot,
-                                    { backgroundColor: MODULE_COLORS[m.module] ?? "#64748b" },
-                                  ]}
-                                />
-                                <Text style={styles.moduleName}>{m.module}</Text>
-                              </View>
-                              <View style={styles.barWrap}>
-                                <View
-                                  style={[
-                                    styles.barFill,
-                                    {
-                                      width: `${m.pct}%`,
-                                      backgroundColor: MODULE_COLORS[m.module] ?? "#64748b",
-                                    },
-                                  ]}
-                                />
-                              </View>
-                              <Text style={styles.moduleRevenue}>{formatCurrency(m.revenue, 0)}</Text>
-                            </View>
-                          ))}
-                        </View>
-                      </View>
-                    </FadingContent>
-                  )}
-                </View>
-              )}
-
-            {/* Loading-state placeholder for the module breakdown lives outside
-                the unified card because payment-mix is also gated on !loading. */}
-            {loading && <LoadingModuleBreakdown />}
 
             {/* Txn header — chapter break: extra top margin separates the
                 transactions CTA from the revenue breakdown card above. */}
@@ -5263,6 +5808,118 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: TEXT,
     letterSpacing: -0.2,
+  },
+  // Unified payment-methods row: name (flexes) · amount · % — sits on the
+  // same moduleList container so it shares the hairline-top divider.
+  paymentRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 12,
+  },
+  paymentAmount: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: TEXT,
+    letterSpacing: -0.2,
+    marginLeft: "auto",
+  },
+  paymentPct: {
+    width: 40,
+    textAlign: "right",
+    fontSize: 12,
+    fontWeight: "600",
+    color: TEXT_DIM,
+  },
+
+  // Top items rows — image thumbnail (with medal badge for top 3) + name +
+  // units + revenue. Mirrors the dashboard's top-items row.
+  topItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 12,
+  },
+  topItemThumb: {
+    width: 36,
+    height: 36,
+    borderRadius: 9,
+    backgroundColor: GOLD_DIM,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  topItemThumbImage: {
+    width: "100%",
+    height: "100%",
+  },
+  topItemThumbText: {
+    color: GOLD,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  topItemRankBadge: {
+    position: "absolute",
+    top: -4,
+    left: -4,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: BG,
+  },
+  topItemRankBadgeGold: { backgroundColor: GOLD },
+  topItemRankBadgeSilver: { backgroundColor: "#c0c4cc" },
+  topItemRankBadgeBronze: { backgroundColor: "#cd7f32" },
+  topItemRankBadgeText: {
+    color: "#181e38",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.2,
+  },
+  topItemName: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "600",
+    color: TEXT,
+  },
+  topItemUnits: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: TEXT_DIM,
+    width: 40,
+    textAlign: "right",
+  },
+
+  // Empty-state breakdown card
+  emptyBreakdownInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 14,
+  },
+  emptyBreakdownIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emptyBreakdownTextWrap: { flex: 1 },
+  emptyBreakdownTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: TEXT,
+    marginBottom: 2,
+  },
+  emptyBreakdownMessage: {
+    fontSize: 11,
+    color: TEXT_DIM,
+    lineHeight: 15,
   },
 
   // Search — focus-aware pill
