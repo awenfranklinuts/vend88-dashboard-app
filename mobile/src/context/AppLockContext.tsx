@@ -66,6 +66,7 @@ export function AppLockProvider({ children }: { children: React.ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
   const backgroundedAtRef = useRef<number | null>(null);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  const prevTokenRef = useRef<string | null>(null);
 
   // Hydrate persisted state on mount.
   useEffect(() => {
@@ -131,11 +132,18 @@ export function AppLockProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.remove();
   }, [enabled, supported, token, graceMs, locked]);
 
-  // If the session is cleared (sign out), drop the lock so we route to /login cleanly.
+  // If a previously authenticated session is cleared, reset lock state in-memory
+  // so next sign-in starts fresh and must opt-in again.
   useEffect(() => {
+    const wasLoggedIn = Boolean(prevTokenRef.current);
+    prevTokenRef.current = token;
+
     if (!token) {
       setLocked(false);
       backgroundedAtRef.current = null;
+      if (wasLoggedIn) {
+        setEnabled(false);
+      }
     }
   }, [token]);
 

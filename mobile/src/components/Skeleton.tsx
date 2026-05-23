@@ -55,7 +55,7 @@ export function SkeletonRow({ gap = 8, children }: { gap?: number; children?: Re
 const styles = StyleSheet.create({
   base: {
     backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
   },
   row: { flexDirection: "row" },

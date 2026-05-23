@@ -9,7 +9,8 @@ import "react-native-reanimated";
 
 import { AuthProvider } from "../src/context/AuthContext";
 import { I18nProvider } from "../src/context/I18nContext";
-import { OfflineBanner } from "../src/components/OfflineBanner";
+import { NetworkProvider } from "../src/context/NetworkContext";
+import { OfflineScreen } from "../src/components/OfflineScreen";
 import { BG } from "../src/theme/tokens";
 
 const navTheme = {
@@ -59,22 +60,24 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ThemeProvider value={navTheme}>
           <I18nProvider>
-            <AuthProvider>
-              <Stack
-                screenOptions={{
-                  headerShown: false,
-                  animation: "fade",
-                  animationDuration: 140,
-                  contentStyle: { backgroundColor: BG },
-                }}
-              >
-                <Stack.Screen name="index" />
-                <Stack.Screen name="login" />
-                <Stack.Screen name="(tabs)" />
-                <Stack.Screen name="product/[id]" />
-              </Stack>
-              <OfflineBanner />
-            </AuthProvider>
+            <NetworkProvider>
+              <AuthProvider>
+                <Stack
+                  screenOptions={{
+                    headerShown: false,
+                    animation: "fade",
+                    animationDuration: 140,
+                    contentStyle: { backgroundColor: BG },
+                  }}
+                >
+                  <Stack.Screen name="index" />
+                  <Stack.Screen name="login" />
+                  <Stack.Screen name="(tabs)" />
+                  <Stack.Screen name="product/[id]" />
+                </Stack>
+                <OfflineScreen />
+              </AuthProvider>
+            </NetworkProvider>
           </I18nProvider>
           <StatusBar style="light" />
         </ThemeProvider>

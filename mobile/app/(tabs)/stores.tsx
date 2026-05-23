@@ -21,6 +21,8 @@ import { useI18n } from "../../src/context/I18nContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { ScreenHeader } from "../../src/components/ScreenHeader";
 import { SectionLabel } from "../../src/components/SectionLabel";
+import { TopProgressBar } from "../../src/components/TopProgressBar";
+import { OfflineNotice } from "../../src/components/OfflineNotice";
 import { haptic } from "../../src/utils/haptics";
 import {
   fetchOfficialShopDetail,
@@ -1063,15 +1065,19 @@ export default function StoresScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
+      <OfflineNotice />
+      <TopProgressBar visible={refreshing && !loading} />
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={refreshing}
+            refreshing={false}
             onRefresh={onRefresh}
-            tintColor={GOLD}
+            tintColor="transparent"
+            colors={["transparent"]}
+            progressBackgroundColor="transparent"
           />
         }
       >

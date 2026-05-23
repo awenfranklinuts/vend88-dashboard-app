@@ -35,6 +35,7 @@ import {
   SCREEN_PADDING,
 } from "../../src/theme/tokens";
 import { ScreenHeader } from "../../src/components/ScreenHeader";
+import { OfflineNotice } from "../../src/components/OfflineNotice";
 
 const NOTIFY_KEY = "vend88-notifications-enabled";
 const AUTH_TOKEN_KEY = "vend88-auth-token";
@@ -283,6 +284,7 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
+      <OfflineNotice />
       <ScrollView
         contentContainerStyle={[
           styles.content,

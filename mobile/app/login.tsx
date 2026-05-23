@@ -15,7 +15,6 @@ import {
   Easing,
   ActivityIndicator,
   Alert,
-  Linking,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -37,7 +36,15 @@ try {
 const AUTH_TOKEN_KEY = "vend88-auth-token";
 const BIOMETRIC_KEY = "vend88-biometric-enabled";
 const BIOMETRIC_ASKED_KEY = "vend88-biometric-asked";
-const REQUEST_ACCESS_EMAIL = "accounts@vend88.com";
+// Contact email shown in password-reset help dialog.
+const SUPPORT_EMAIL = "accounts@vend88.com";
+// Demo account for App Store reviewers and curious visitors.
+// Authenticates against the real backend account but presents a
+// reviewer-friendly email in the input field. Update DEMO_PASSWORD here if
+// the backend credentials change.
+const DEMO_AUTH_EMAIL = "accounts@vend88.com";
+const DEMO_DISPLAY_EMAIL = "demo@vend88.com";
+const DEMO_PASSWORD = "Vend8866";
 
 const C = {
   bg: "#0F1427",
@@ -97,37 +104,40 @@ export default function LoginScreen() {
     outputRange: [C.border, C.borderFocus],
   });
 
-  const handleRequestAccess = useCallback(async () => {
-    const subject = "Vend88 Dashboard Access Request";
-    const body = [
-      "Hello Vend88 Accounts Team,",
-      "",
-      "I would like to request access to the Vend88 dashboard.",
-      "",
-      "Name:",
-      "Best contact number:",
-      "Company / Store:",
-      "Role / Position:",
-      "Work email:",
-      "Reason for access:",
-      "",
-      "Thank you.",
-    ].join("\n");
-    const mailtoUrl = `mailto:${REQUEST_ACCESS_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  // Sign in with the shared demo account so App Store reviewers (and anyone
+  // exploring the app) can land in the dashboard without provisioning their
+  // own credentials. The email field is populated with a reviewer-friendly
+  // address (`demo@vend88.com`) but the actual auth request uses the real
+  // backend account behind the scenes.
+  const handleDemoAccess = async () => {
+    if (loading) return;
+    setError("");
+    setEmail(DEMO_DISPLAY_EMAIL);
+    setPassword(DEMO_PASSWORD);
+    setSkipAutoRedirect(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setLoading(true);
+    const result = await signIn(DEMO_AUTH_EMAIL, DEMO_PASSWORD);
+    setLoading(false);
 
-    try {
-      const supported = await Linking.canOpenURL(mailtoUrl);
-      if (!supported) {
-        throw new Error("No email app available");
-      }
-      await Linking.openURL(mailtoUrl);
-    } catch {
-      Alert.alert(
-        "Email unavailable",
-        `Please email ${REQUEST_ACCESS_EMAIL} to request access.`
-      );
+    if (!result.ok) {
+      setSkipAutoRedirect(false);
+      triggerError(result.message ?? t("login_sign_in_failed"));
+      return;
     }
-  }, []);
+
+    // Skip biometric onboarding for the shared demo account — App Store
+    // reviewers shouldn't be prompted to bind Face ID / fingerprint to a
+    // throwaway account, and the next user of the demo would inherit it.
+    await SecureStore.setItemAsync(BIOMETRIC_ASKED_KEY, "1");
+    await SecureStore.deleteItemAsync(BIOMETRIC_KEY);
+
+    Animated.timing(screenOpacity, {
+      toValue: 0,
+      duration: 160,
+      useNativeDriver: true,
+    }).start(() => router.replace("/(tabs)"));
+  };
 
   const triggerShake = () => {
     Animated.sequence([
@@ -466,7 +476,7 @@ export default function LoginScreen() {
                       onPress={() =>
                         Alert.alert(
                           "Password Reset",
-                          `Please contact administrator or email to ${REQUEST_ACCESS_EMAIL} for password reset requests.`
+                          `Please contact administrator or email to ${SUPPORT_EMAIL} for password reset requests.`
                         )
                       }
                     >
@@ -575,9 +585,12 @@ export default function LoginScreen() {
 
               {/* Footer */}
               <View style={styles.footer}>
-                <Text style={styles.footerText}>Don&apos;t have access?</Text>
-                <Pressable hitSlop={8} onPress={handleRequestAccess}>
-                  <Text style={styles.footerLink}> Request access</Text>
+                <Text style={styles.footerText}>Just exploring?</Text>
+                <Pressable hitSlop={8} onPress={handleDemoAccess} disabled={loading}>
+                  <Text style={[styles.footerLink, loading && styles.footerLinkDisabled]}>
+                    {" "}
+                    {t("login_request_access")}
+                  </Text>
                 </Pressable>
               </View>
             </Animated.View>
@@ -805,5 +818,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     color: C.gold,
+  },
+  footerLinkDisabled: {
+    opacity: 0.4,
   },
 });

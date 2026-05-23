@@ -8,6 +8,7 @@ export type DashboardSummary = {
   today_sales: string;
   today_revenue_change_pct?: number;
   week_revenue?: string;
+  week_revenue_change_pct?: number;
   today_items?: number;
   week_items?: number;
   today_orders?: number;
@@ -32,9 +33,13 @@ export type DashboardRecentOrder = {
   id: string;
   item: string;
   module: string;
+  payment?: string;
   total: string;
   status: string;
+  rawStatus?: string;
   time: string;
+  rawId?: string;
+  rawTime?: string;
 };
 
 type AuthOverride = {
@@ -53,6 +58,12 @@ export type OfficialSaleRecord = {
   total: string;
   rawStatus?: string;
   status: string;
+};
+
+export type OfficialSalesHistoryProgress = {
+  loaded: number;
+  total: number;
+  rows: OfficialSaleRecord[];
 };
 
 /**
@@ -224,21 +235,39 @@ function getWeeklyRange(now = new Date()) {
   };
 }
 
+function getPreviousWeeklyRange(now = new Date()) {
+  // Compare against the FULL previous calendar week (Mon–Sun), not a
+  // same-elapsed-time shift. This keeps the dashboard's week % consistent
+  // with the previous-week total the user sees, and avoids the surprising
+  // case where a partial week-to-date can show a positive change vs a
+  // smaller same-elapsed-time slice of the previous week even though the
+  // full previous week was higher.
+  const thisWeekStart = getWeekStartMonday(now);
+  const prevWeekStart = new Date(thisWeekStart);
+  prevWeekStart.setDate(prevWeekStart.getDate() - 7);
+  const prevWeekEnd = new Date(thisWeekStart.getTime() - 1); // Sun 23:59:59.999
+  return {
+    startDate: formatBusinessDate(prevWeekStart, false),
+    endDate: formatBusinessDateExact(prevWeekEnd),
+  };
+}
+
 function getTodayRange(now = new Date()) {
   const start = new Date(now);
-  const end = new Date(now);
   return {
     startDate: formatBusinessDate(start, false),
-    endDate: formatBusinessDate(end, true),
+    endDate: formatBusinessDateExact(now),
   };
 }
 
 function getPreviousDayRange(now = new Date()) {
-  const prev = new Date(now);
-  prev.setDate(prev.getDate() - 1);
+  const prevStart = new Date(now);
+  prevStart.setDate(prevStart.getDate() - 1);
+  const prevNow = new Date(now);
+  prevNow.setDate(prevNow.getDate() - 1);
   return {
-    startDate: formatBusinessDate(prev, false),
-    endDate: formatBusinessDate(prev, true),
+    startDate: formatBusinessDate(prevStart, false),
+    endDate: formatBusinessDateExact(prevNow),
   };
 }
 
@@ -292,6 +321,9 @@ function toRelativeTime(value?: string): string {
 
 function mapOrderStatus(status?: string): string {
   const raw = (status ?? "").toLowerCase();
+  if (/refund/.test(raw)) return "refunded";
+  if (/cancel|void/.test(raw)) return "cancelled";
+  if (/unpaid/.test(raw)) return "unpaid";
   return raw === "paid" || raw === "completed" || raw === "complete"
     ? "completed"
     : "in_progress";
@@ -600,6 +632,10 @@ async function requestScopedOrders(
   businessId: string | null,
   storeId: string | null
 ): Promise<Array<OrderSearchItem | string>> {
+  let attempts = 0;
+  let anyResponse = false;
+  let lastError: unknown = null;
+
   for (const query of buildScopedQueries(baseQuery, businessId, storeId)) {
     const payloads: Array<Record<string, unknown>> = [
       {
@@ -618,18 +654,28 @@ async function requestScopedOrders(
     ];
 
     for (const payload of payloads) {
+      attempts++;
       try {
         const response = await api.post<OrderSearchResponse>(
           "/search/order_search",
           payload
         );
+        anyResponse = true;
         if (Array.isArray(response.data?.orders) && response.data.orders.length > 0) {
           return response.data.orders;
         }
-      } catch {
+      } catch (err) {
+        lastError = err;
         // Try the next scoped query variation.
       }
     }
+  }
+
+  // If every attempt threw (e.g. device offline / DNS down), propagate the
+  // error so callers can preserve any cached UI state instead of mistakenly
+  // showing an "empty" response.
+  if (attempts > 0 && !anyResponse) {
+    throw lastError instanceof Error ? lastError : new Error("Network unreachable");
   }
 
   return [];
@@ -1019,6 +1065,16 @@ async function fetchPosDashboardSalesTotal(
   return snapshot.revenueTotal;
 }
 
+async function fetchStoreStatisticsRevenueTotal(
+  shopId: string,
+  token: string,
+  startDate: string,
+  endDate: string
+): Promise<number> {
+  const snapshot = await fetchStoreStatisticsSnapshot(shopId, token, startDate, endDate);
+  return snapshot.revenueTotal;
+}
+
 type OfficialShopContext = {
   email: string;
   token: string;
@@ -1248,7 +1304,10 @@ async function fetchOfficialWeekRevenueSeries(
     }
   );
 
-  return Promise.all(
+  // allSettled (not all) so a single flaky day-revenue request can't blank
+  // the entire week chart — failed days fall back to revenue=0 and the axis
+  // still renders all 7 days.
+  const results = await Promise.allSettled(
     allDays.map(async ({ dateKey, isToday, isFuture }) => {
       const dayStart = new Date(`${dateKey}T00:00:00`);
       const label = dayStart.toLocaleDateString(undefined, { weekday: "short" });
@@ -1256,7 +1315,7 @@ async function fetchOfficialWeekRevenueSeries(
         return { day: label, revenue: 0 };
       }
       const dayEnd = isToday ? new Date(now) : new Date(`${dateKey}T23:59:59`);
-      const revenue = await fetchPosDashboardSalesTotal(
+      const revenue = await fetchStoreStatisticsRevenueTotal(
         shopId,
         token,
         formatBusinessDate(dayStart, false),
@@ -1265,6 +1324,15 @@ async function fetchOfficialWeekRevenueSeries(
       return { day: label, revenue };
     })
   );
+  return results.map((r, i) => {
+    if (r.status === "fulfilled") return r.value;
+    const dateKey = allDays[i].dateKey;
+    const label = new Date(`${dateKey}T00:00:00`).toLocaleDateString(undefined, {
+      weekday: "short",
+    });
+    console.log(`[hero-week] day ${dateKey} fetch failed, using 0:`, r.reason);
+    return { day: label, revenue: 0 };
+  });
 }
 
 async function fetchOfficialMonthRevenueSeries(
@@ -1276,7 +1344,8 @@ async function fetchOfficialMonthRevenueSeries(
   const totalDaysElapsed = now.getDate();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
 
-  return Promise.all(
+  // allSettled so a single failing weekly bucket doesn't blank the whole month.
+  const results = await Promise.allSettled(
     Array.from({ length: 4 }, async (_, i) => {
       const startDay = Math.floor((daysInMonth * i) / 4) + 1;
       const endDay = Math.floor((daysInMonth * (i + 1)) / 4);
@@ -1298,7 +1367,7 @@ async function fetchOfficialMonthRevenueSeries(
       bucketEnd.setHours(23, 59, 59, 0);
       const isCurrentPartialBucket = totalDaysElapsed < endDay;
 
-      const revenue = await fetchPosDashboardSalesTotal(
+      const revenue = await fetchStoreStatisticsRevenueTotal(
         shopId,
         token,
         formatBusinessDate(bucketStart, false),
@@ -1311,6 +1380,11 @@ async function fetchOfficialMonthRevenueSeries(
       };
     })
   );
+  return results.map((r, i) => {
+    if (r.status === "fulfilled") return r.value;
+    console.log(`[hero-month] bucket W${i + 1} fetch failed, using 0:`, r.reason);
+    return { day: `W${i + 1}`, revenue: 0 };
+  });
 }
 
 async function fetchOfficialTodayRevenueSeries(
@@ -1631,52 +1705,24 @@ export async function fetchOfficialMonthRevenueDataForAuth(
   const { startDate, endDate } = getMonthRange(now);
   const previousMonthRange = getPreviousMonthRange(now);
   const weekRange = getWeeklyRange();
+  const previousWeekRange = getPreviousWeeklyRange(now);
   const todayRange = getTodayRange();
   const previousDayRange = getPreviousDayRange(now);
-  const rawOrders = await requestScopedOrders(
-    token,
-    { time: [startDate, endDate] },
-    businessId,
-    storeId
-  );
-
-  const detailedOrders = rawOrders.filter(
-    (order): order is OrderSearchItem => typeof order === "object" && order !== null
-  );
-
-  const revenueByDay = new Map<string, number>();
   const [
-    monthSnapshot,
-    weekSnapshot,
-    todaySnapshot,
-    previousDaySnapshot,
+    weekChart,
     monthBusinessSales,
     weekBusinessSales,
     todayBusinessSales,
     monthStats,
     weekStats,
+    previousWeekStats,
     todayStats,
+    previousDayStats,
     previousMonthStats,
   ] = await Promise.all([
-    fetchPosDashboardSnapshot(storeId, token, startDate, endDate),
-    fetchPosDashboardSnapshot(
-      storeId,
-      token,
-      weekRange.startDate,
-      weekRange.endDate
-    ),
-    fetchPosDashboardSnapshot(
-      storeId,
-      token,
-      todayRange.startDate,
-      todayRange.endDate
-    ),
-    fetchPosDashboardSnapshot(
-      storeId,
-      token,
-      previousDayRange.startDate,
-      previousDayRange.endDate
-    ),
+    // Reuse the same hero-series cache/in-flight path the dashboard screen
+    // uses so the first page load doesn't race a duplicate week-series fetch.
+    fetchOfficialHeroRevenuePeriod("week", auth),
     fetchBusinessSalesSnapshot(businessId, token, startDate, endDate),
     fetchBusinessSalesSnapshot(
       businessId,
@@ -1700,8 +1746,20 @@ export async function fetchOfficialMonthRevenueDataForAuth(
     fetchStoreStatisticsSnapshot(
       storeId,
       token,
+      previousWeekRange.startDate,
+      previousWeekRange.endDate
+    ),
+    fetchStoreStatisticsSnapshot(
+      storeId,
+      token,
       todayRange.startDate,
       todayRange.endDate
+    ),
+    fetchStoreStatisticsSnapshot(
+      storeId,
+      token,
+      previousDayRange.startDate,
+      previousDayRange.endDate
     ),
     fetchStoreStatisticsSnapshot(
       storeId,
@@ -1710,28 +1768,7 @@ export async function fetchOfficialMonthRevenueDataForAuth(
       previousMonthRange.endDate
     ),
   ]);
-
-  let totalProductsFromOrders = 0;
-  for (const order of detailedOrders) {
-    if (Array.isArray(order.qtys)) {
-      totalProductsFromOrders += order.qtys.reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0);
-    }
-    if (order.time) {
-      const parsedDate = parseApiDateToLocal(order.time);
-      if (!parsedDate) continue;
-      const dayKey = toLocalDateKey(parsedDate);
-      revenueByDay.set(dayKey, (revenueByDay.get(dayKey) ?? 0) + toNumber(order.price));
-    }
-  }
-
-  const weekToDateKeys = buildWeekToDateKeys(now);
-  const chart: DashboardChartPoint[] = weekToDateKeys.map((dateKey) => {
-    const d = new Date(`${dateKey}T00:00:00`);
-    return {
-      day: d.toLocaleDateString(undefined, { weekday: "short" }),
-      revenue: revenueByDay.get(dateKey) ?? 0,
-    };
-  });
+  const chart = weekChart;
 
   const monthOrders = Math.round(monthStats.ordersTotal);
   const weekOrders = Math.round(weekStats.ordersTotal);
@@ -1743,12 +1780,20 @@ export async function fetchOfficialMonthRevenueDataForAuth(
     previousMonthRevenue > 0
       ? ((monthRevenue - previousMonthRevenue) / previousMonthRevenue) * 100
       : 0;
-  const todayRevenue = todaySnapshot.revenueTotal;
-  const previousDayRevenue = previousDaySnapshot.revenueTotal;
+  const todayRevenue = todayStats.revenueTotal;
+  const previousDayRevenue = previousDayStats.revenueTotal;
   const todayRevenueChangePct =
     previousDayRevenue > 0
       ? ((todayRevenue - previousDayRevenue) / previousDayRevenue) * 100
       : todayRevenue > 0
+      ? 100
+      : 0;
+  const weekRevenue = weekStats.revenueTotal;
+  const previousWeekRevenue = previousWeekStats.revenueTotal;
+  const weekRevenueChangePct =
+    previousWeekRevenue > 0
+      ? ((weekRevenue - previousWeekRevenue) / previousWeekRevenue) * 100
+      : weekRevenue > 0
       ? 100
       : 0;
   const ordersChangePct =
@@ -1756,13 +1801,12 @@ export async function fetchOfficialMonthRevenueDataForAuth(
       ? ((monthOrders - previousMonthOrders) / previousMonthOrders) * 100
       : 0;
   const avgOrder = monthOrders > 0 ? monthRevenue / monthOrders : 0;
-  void totalProductsFromOrders;
-
   return {
     summary: {
       today_sales: todayRevenue.toFixed(2),
       today_revenue_change_pct: todayRevenueChangePct,
-      week_revenue: weekSnapshot.revenueTotal.toFixed(2),
+      week_revenue: weekRevenue.toFixed(2),
+      week_revenue_change_pct: weekRevenueChangePct,
       today_items: Math.round(todayBusinessSales.numProductsTotal),
       week_items: Math.round(weekBusinessSales.numProductsTotal),
       today_orders: todayOrders,
@@ -1830,9 +1874,13 @@ export async function fetchOfficialRecentOrdersForAuth(
       id: order.order_num ? `#${order.order_num}` : order.order_id ?? "-",
       item: `${qty || 1} item${qty === 1 ? "" : "s"}${order.pick_method ? ` • ${order.pick_method}` : ""}`,
       module: mapOrderModule(order.source),
+      payment: mapPayment(order.transactions?.[0]?.platform),
       total: toNumber(order.price).toFixed(2),
       status: mapOrderStatus(order.status),
+      rawStatus: typeof order.status === "string" ? order.status : undefined,
       time: toRelativeTime(order.time),
+      rawId: typeof order.order_id === "string" ? order.order_id : undefined,
+      rawTime: typeof order.time === "string" ? order.time : undefined,
     };
   });
 }
@@ -1900,7 +1948,8 @@ export async function fetchOfficialSalesHistory(
   start: Date,
   end: Date,
   auth?: AuthOverride,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (progress: OfficialSalesHistoryProgress) => void
 ): Promise<OfficialSaleRecord[]> {
   const { token, businessId, shopId } = await resolveOfficialShopContext(auth);
 
@@ -2077,6 +2126,50 @@ export async function fetchOfficialSalesHistory(
     (order): order is string => typeof order === "string" && order.trim().length > 0
   );
 
+  const toSaleRecord = (order: OrderSearchItem, index: number): OfficialSaleRecord => {
+    const items = Array.isArray(order.qtys)
+      ? order.qtys.reduce((sum, qty) => sum + (Number.isFinite(qty) ? qty : 0), 0)
+      : 0;
+    const payment = mapPayment(order.transactions?.[0]?.platform);
+    const resolvedDate = resolveOrderTime(order) ?? start.toISOString();
+    return {
+      id: order.order_num ?? order.order_id ?? index,
+      rawId: typeof order.order_id === "string" ? order.order_id : undefined,
+      date: resolvedDate,
+      order_id: order.order_num ? `#${order.order_num}` : order.order_id ?? `#${index}`,
+      items: items || 1,
+      module: mapOrderModule(order.source),
+      payment,
+      total: toNumber(order.price).toFixed(2),
+      rawStatus: typeof order.status === "string" ? order.status : undefined,
+      status: mapOrderStatus(order.status),
+    };
+  };
+
+  const mergeOrders = (...buckets: OrderSearchItem[][]): OrderSearchItem[] => {
+    const seen = new Set<string>();
+    const list: OrderSearchItem[] = [];
+    for (const bucket of buckets) {
+      for (const order of bucket) {
+        const key = String(order.order_id ?? order.order_num ?? "");
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        list.push(order);
+      }
+    }
+    return list;
+  };
+
+  const emitProgress = (rows: OrderSearchItem[], totalHint: number) => {
+    if (!onProgress || signal?.aborted) return;
+    const records = rows.map((order, index) => toSaleRecord(order, index));
+    onProgress({
+      loaded: records.length,
+      total: Math.max(totalHint, records.length),
+      rows: records,
+    });
+  };
+
   let resolvedById: OrderSearchItem[] = [];
   if (orderIds.length > 0) {
     // Throttle the per-id fan-out so we don't open hundreds of sockets at
@@ -2111,6 +2204,10 @@ export async function fetchOfficialSalesHistory(
     };
 
     const collected: OrderSearchItem[] = [];
+    const totalHint = detailedOrders.length + orderIds.length;
+    if (detailedOrders.length > 0) {
+      emitProgress(mergeOrders(detailedOrders), totalHint);
+    }
     for (let i = 0; i < orderIds.length; i += ID_CONCURRENCY) {
       if (signal?.aborted) break;
       const batch = orderIds.slice(i, i + ID_CONCURRENCY);
@@ -2118,6 +2215,7 @@ export async function fetchOfficialSalesHistory(
       for (const r of results) {
         if (r.status === "fulfilled" && r.value) collected.push(r.value);
       }
+      emitProgress(mergeOrders(detailedOrders, collected), totalHint);
     }
     resolvedById = collected;
   }
@@ -2134,25 +2232,9 @@ export async function fetchOfficialSalesHistory(
     return list;
   })();
 
-  const result: OfficialSaleRecord[] = mergedOrders.map((order, index) => {
-    const items = Array.isArray(order.qtys)
-      ? order.qtys.reduce((sum, qty) => sum + (Number.isFinite(qty) ? qty : 0), 0)
-      : 0;
-    const payment = mapPayment(order.transactions?.[0]?.platform);
-    const resolvedDate = resolveOrderTime(order) ?? start.toISOString();
-    return {
-      id: order.order_num ?? order.order_id ?? index,
-      rawId: typeof order.order_id === "string" ? order.order_id : undefined,
-      date: resolvedDate,
-      order_id: order.order_num ? `#${order.order_num}` : order.order_id ?? `#${index}`,
-      items: items || 1,
-      module: mapOrderModule(order.source),
-      payment,
-      total: toNumber(order.price).toFixed(2),
-      rawStatus: typeof order.status === "string" ? order.status : undefined,
-      status: mapOrderStatus(order.status),
-    };
-  });
+  const result: OfficialSaleRecord[] = mergedOrders.map((order, index) =>
+    toSaleRecord(order, index)
+  );
 
   if (!signal?.aborted) {
     salesHistoryCache.set(cacheKey, { ts: Date.now(), data: result });

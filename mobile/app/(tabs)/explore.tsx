@@ -13,6 +13,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useI18n } from "../../src/context/I18nContext";
 import { PulsingDot } from "../../src/components/PulsingDot";
 import { Skeleton } from "../../src/components/Skeleton";
+import { TopProgressBar } from "../../src/components/TopProgressBar";
+import { OfflineNotice } from "../../src/components/OfflineNotice";
 import { haptic } from "../../src/utils/haptics";
 import {
   BG,
@@ -177,6 +179,8 @@ export default function ModulesScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
+      <OfflineNotice />
+      <TopProgressBar visible={refreshing && !loading} />
       <StatusBar barStyle="light-content" backgroundColor={BG} />
 
       <View style={styles.headerWrap}>
@@ -211,7 +215,13 @@ export default function ModulesScreen() {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={GOLD} />
+            <RefreshControl
+              refreshing={false}
+              onRefresh={onRefresh}
+              tintColor="transparent"
+              colors={["transparent"]}
+              progressBackgroundColor="transparent"
+            />
           }
         >
           {online.length > 0 && (

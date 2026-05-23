@@ -26,6 +26,8 @@ import {
 } from "../../src/services/officialDashboard";
 import { AnimatedNumber } from "../../src/components/AnimatedNumber";
 import { Skeleton } from "../../src/components/Skeleton";
+import { TopProgressBar } from "../../src/components/TopProgressBar";
+import { OfflineNotice } from "../../src/components/OfflineNotice";
 import { SectionLabel } from "../../src/components/SectionLabel";
 import { haptic } from "../../src/utils/haptics";
 import {
@@ -1024,6 +1026,8 @@ export default function ProductsScreen() {
 
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
+      <OfflineNotice />
+      <TopProgressBar visible={refreshing && !loading} />
       {loading ? (
         <ScrollView
           style={styles.container}
@@ -1059,9 +1063,11 @@ export default function ProductsScreen() {
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
-              refreshing={refreshing}
+              refreshing={false}
               onRefresh={onRefresh}
-              tintColor={GOLD}
+              tintColor="transparent"
+              colors={["transparent"]}
+              progressBackgroundColor="transparent"
             />
           }
           ListHeaderComponent={Header}
@@ -1092,9 +1098,11 @@ export default function ProductsScreen() {
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
-              refreshing={refreshing}
+              refreshing={false}
               onRefresh={onRefresh}
-              tintColor={GOLD}
+              tintColor="transparent"
+              colors={["transparent"]}
+              progressBackgroundColor="transparent"
             />
           }
           ListHeaderComponent={Header}

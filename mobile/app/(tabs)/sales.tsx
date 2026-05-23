@@ -16,10 +16,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useLocalSearchParams } from "expo-router";
 import { File, Paths } from "expo-file-system";
 import { Asset } from "expo-asset";
 import { useAuth } from "../../src/context/AuthContext";
 import { useI18n } from "../../src/context/I18nContext";
+import { useNetwork } from "../../src/context/NetworkContext";
 import { API_TARGET } from "../../src/services/api";
 import {
   fetchOfficialBusinessItemsSoldRange,
@@ -42,6 +44,7 @@ import {
   ShimmerSkeleton,
 } from "../../src/components/ShimmerSkeleton";
 import { TopProgressBar } from "../../src/components/TopProgressBar";
+import { OfflineNotice } from "../../src/components/OfflineNotice";
 import { FadingContent } from "../../src/components/FadingContent";
 import { SectionLabel } from "../../src/components/SectionLabel";
 import { haptic } from "../../src/utils/haptics";
@@ -201,7 +204,10 @@ function getTransactionStatusMeta(rawStatus?: string): {
         .replace(/\b\w/g, (char) => char.toUpperCase())
     : "Unknown";
 
-  if (/paid|complete|done/.test(normalized)) {
+  if (/unpaid/.test(normalized)) {
+    return { label, color: WARNING };
+  }
+  if (/\bpaid\b|complete|done/.test(normalized)) {
     return { label, color: SUCCESS };
   }
   if (/refund|cancel|void/.test(normalized)) {
@@ -510,17 +516,39 @@ function getPreviousComparisonBounds(
     };
   }
   if (period === "this_week") {
+    // Compare against the full previous calendar week (Mon–Sun), not the
+    // same elapsed slice. This matches the dashboard's week % and avoids
+    // a partial week-to-date appearing positive vs a same-elapsed slice of
+    // the previous week even when the full previous week was higher.
+    const previousWeekStart = shiftDays(bounds.start, -7);
+    const previousWeekEndExclusive = new Date(bounds.start);
+    const previousWeekEndInclusive = new Date(previousWeekEndExclusive.getTime() - 1);
     return {
-      start: shiftDays(bounds.start, -7),
-      endInclusive: shiftDays(bounds.endInclusive, -7),
-      endExclusive: shiftDays(bounds.endExclusive, -7),
+      start: previousWeekStart,
+      endInclusive: previousWeekEndInclusive,
+      endExclusive: previousWeekEndExclusive,
     };
   }
   if (period === "this_month") {
+    const previousMonthStart = new Date(
+      bounds.start.getFullYear(),
+      bounds.start.getMonth() - 1,
+      1
+    );
+    const previousMonthEndExclusive = new Date(
+      bounds.start.getFullYear(),
+      bounds.start.getMonth(),
+      1
+    );
+    const previousMonthEndInclusive = new Date(previousMonthEndExclusive.getTime() - 1);
+
     return {
-      start: shiftMonths(bounds.start, -1),
-      endInclusive: shiftMonths(bounds.endInclusive, -1),
-      endExclusive: shiftMonths(bounds.endExclusive, -1),
+      // Month comparison should always use the full previous calendar month.
+      // This matches the dashboard summary and avoids misleading MTD-vs-MTD
+      // percentages such as comparing May 1-23 only against Apr 1-23.
+      start: previousMonthStart,
+      endInclusive: previousMonthEndInclusive,
+      endExclusive: previousMonthEndExclusive,
     };
   }
   // custom: keep the duration-shift behaviour.
@@ -1164,7 +1192,11 @@ function StatusPill({ status }: { status?: string }) {
   let bg = TEXT_DIM + "22";
   let fg = TEXT_DIM;
   let label = status ?? "—";
-  if (/paid|complete|done/.test(s)) {
+  if (/unpaid/.test(s)) {
+    bg = WARNING + "22";
+    fg = WARNING;
+    label = "Unpaid";
+  } else if (/\bpaid\b|complete|done/.test(s)) {
     bg = SUCCESS + "22";
     fg = SUCCESS;
     label = t("sales_status_paid");
@@ -1927,6 +1959,12 @@ const detailStyles = StyleSheet.create({
 export default function SalesScreen() {
   const { email, token, loading: authLoading } = useAuth();
   const { t } = useI18n();
+  const { online } = useNetwork();
+  const params = useLocalSearchParams<{
+    openTodayTxn?: string;
+    openWeekTxn?: string;
+    intentId?: string;
+  }>();
   const [sales, setSales] = useState<Sale[]>([]);
   const [summary, setSummary] = useState<SalesSummary | null>(null);
   const [chart, setChart] = useState<{ day: string; revenue: number }[]>([]);
@@ -1938,6 +1976,7 @@ export default function SalesScreen() {
   const [isFetching, setIsFetching] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [loadError, setLoadError] = useState(false);
   const [period, setPeriod] = useState<Period>("this_week");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(ALL_STATUS_FILTER);
   const [search, setSearch] = useState("");
@@ -1951,7 +1990,9 @@ export default function SalesScreen() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exporting, setExporting] = useState<null | "csv" | "pdf">(null);
   const [exportToast, setExportToast] = useState<string | null>(null);
-  const [exportIncludeTxn, setExportIncludeTxn] = useState(true);
+  // Default to OFF — including transactions can require a full sales fetch
+  // (potentially slow). Users opt in explicitly when they want it.
+  const [exportIncludeTxn, setExportIncludeTxn] = useState(false);
   const [exportFormat, setExportFormat] = useState<"csv" | "pdf">("pdf");
   const [logoDataUri, setLogoDataUri] = useState<string | null>(null);
   const [shopDisplayName, setShopDisplayName] = useState<string | null>(null);
@@ -2010,6 +2051,8 @@ export default function SalesScreen() {
   );
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const consumedIntentRef = useRef<string | null>(null);
+  const intentOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const today = useMemo(() => startOfDay(new Date()), []);
 
@@ -2209,6 +2252,7 @@ export default function SalesScreen() {
       `${selectedBounds.start.getTime()}-${selectedBounds.endInclusive.getTime()}`,
     [selectedBounds]
   );
+  const txnFetchInFlightKeyRef = useRef<string | null>(null);
 
   // Reset cached sales-history when the selected period changes so the modal
   // re-fetches the correct range the next time it's opened. We deliberately
@@ -2218,18 +2262,41 @@ export default function SalesScreen() {
   useEffect(() => {
     if (lastTxnPeriodKey.current === txnPeriodKey) return;
     lastTxnPeriodKey.current = txnPeriodKey;
+    txnFetchInFlightKeyRef.current = null;
     setTxnLoadedKey(null);
     setSales([]);
   }, [txnPeriodKey]);
 
   const fetchAll = useCallback(async (signal?: AbortSignal) => {
+    if (txnFetchInFlightKeyRef.current === txnPeriodKey) {
+      return;
+    }
+    txnFetchInFlightKeyRef.current = txnPeriodKey;
+    const fetchKey = txnPeriodKey;
     setTxnLoading(true);
     try {
       const history = await fetchOfficialSalesHistory(
         selectedBounds.start,
         selectedBounds.endInclusive,
         { email, token },
-        signal
+        signal,
+        (progress) => {
+          if (signal?.aborted || lastTxnPeriodKey.current !== fetchKey) return;
+          const mappedSales: Sale[] = progress.rows.map((sale) => ({
+            id: sale.id,
+            rawId: sale.rawId,
+            date: sale.date,
+            order_id: sale.order_id,
+            items: sale.items,
+            module: sale.module,
+            payment: sale.payment,
+            total: sale.total,
+            rawStatus: sale.rawStatus,
+            status: sale.status,
+          }));
+          setSales(mappedSales);
+          setSummary(buildSalesSummary(mappedSales));
+        }
       );
 
       if (signal?.aborted) return;
@@ -2249,6 +2316,7 @@ export default function SalesScreen() {
       setSales(mappedSales);
       setSummary(buildSalesSummary(mappedSales));
       setTxnLoadedKey(txnPeriodKey);
+      setLoadError(false);
 
       const endAnchor = startOfDay(selectedBounds.endInclusive);
       const dayKeys = Array.from({ length: 7 }, (_, i) =>
@@ -2270,19 +2338,83 @@ export default function SalesScreen() {
       );
     } catch {
       if (signal?.aborted) return;
-      setSales([]);
-      setSummary(buildSalesSummary([]));
-      setChart([]);
+      // Preserve previously loaded sales/summary/chart so the user still sees
+      // the last-known values when the network drops. Flip the error flag so
+      // the UI can surface a notice when there is genuinely nothing to show.
+      setLoadError(true);
     } finally {
+      if (txnFetchInFlightKeyRef.current === fetchKey) {
+        txnFetchInFlightKeyRef.current = null;
+      }
       if (!signal?.aborted) setTxnLoading(false);
     }
   }, [email, token, selectedBounds, txnPeriodKey]);
 
-  // Note: we intentionally do NOT call `fetchAll` (sales-history) on initial
-  // page load. The Statement card, KPIs, payment mix, dining mode, etc. all
-  // come from `fetchOfficialStoreStatisticsRange` which is one cached call.
-  // The per-order list (which fans out to N x /order/{id} requests) is only
-  // fetched when the user taps the Transactions CTA.
+  // Deep-link intent from Dashboard Recent Orders: land on the selected
+  // period first, then open the transactions sheet shortly after so users
+  // see the weekly sales page transition before the modal appears.
+  useEffect(() => {
+    const wantsWeek = params.openWeekTxn === "1";
+    const wantsLegacyToday = params.openTodayTxn === "1";
+    if (!wantsWeek && !wantsLegacyToday) return;
+
+    const intentKey = `${wantsWeek ? "week" : "today"}:${params.intentId ?? "default"}`;
+    if (consumedIntentRef.current === intentKey) return;
+    consumedIntentRef.current = intentKey;
+
+    if (wantsWeek) {
+      setPeriod("this_week");
+      setSelectedWeekStart(weekStart(new Date()));
+    } else {
+      // Backward compatibility for older in-app links.
+      setPeriod("today");
+      setSelectedDate(startOfDay(new Date()));
+    }
+    setStatusFilter(ALL_STATUS_FILTER);
+    setSearch("");
+
+    if (intentOpenTimerRef.current) {
+      clearTimeout(intentOpenTimerRef.current);
+      intentOpenTimerRef.current = null;
+    }
+
+    intentOpenTimerRef.current = setTimeout(() => {
+      setAllTxnOpen(true);
+      intentOpenTimerRef.current = null;
+    }, 420);
+
+    return () => {
+      if (intentOpenTimerRef.current) {
+        clearTimeout(intentOpenTimerRef.current);
+        intentOpenTimerRef.current = null;
+      }
+    };
+  }, [params.openWeekTxn, params.openTodayTxn, params.intentId]);
+
+  // When the modal is opened (manually or via deep-link), ensure the
+  // transaction rows for the active period are loaded.
+  useEffect(() => {
+    if (!allTxnOpen) return;
+    if (txnLoading || txnLoadedKey === txnPeriodKey) return;
+    void fetchAll();
+  }, [allTxnOpen, txnLoading, txnLoadedKey, txnPeriodKey, fetchAll]);
+
+  // Warm transactions in the background once summary data has settled for the
+  // active period, so opening the Transactions sheet feels instant.
+  useEffect(() => {
+    if (authLoading) return;
+    if (loading || isFetching) return;
+    if (txnLoading || txnLoadedKey === txnPeriodKey) return;
+    void fetchAll();
+  }, [
+    authLoading,
+    loading,
+    isFetching,
+    txnLoading,
+    txnLoadedKey,
+    txnPeriodKey,
+    fetchAll,
+  ]);
 
   const onRefresh = async () => {
     haptic.light();
@@ -2361,13 +2493,15 @@ export default function SalesScreen() {
         setRevenueChangePct(
           calcRevenueChangePct(stats.revenue, previousStats.revenue)
         );
+        setLoadError(false);
       } catch (err) {
         console.log("[sales-period] storeStatistics fetch failed:", err);
         if (!cancelled) {
-          setOfficialPeriodStat(null);
-          setOfficialStats(null);
-          setOfficialItemsSold(null);
-          setRevenueChangePct(null);
+          // Keep prior officialStats/officialPeriodStat/officialItemsSold so
+          // the dashboard still renders the most recent values during a
+          // network outage. Only flip the error flag so we can show a notice
+          // when there is no cached data at all.
+          setLoadError(true);
         }
       } finally {
         if (!cancelled) {
@@ -2819,9 +2953,13 @@ export default function SalesScreen() {
     ({ section }: { section: { title: string; total: number } }) => (
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionHeaderText}>{section.title}</Text>
-        <Text style={styles.sectionHeaderTotal}>
-          {formatCurrency(section.total, 2)}
-        </Text>
+        <AnimatedNumber
+          value={section.total}
+          style={styles.sectionHeaderTotal}
+          prefix="$"
+          decimals={2}
+          duration={520}
+        />
       </View>
     ),
     []
@@ -3342,7 +3480,9 @@ export default function SalesScreen() {
 
   const handleExport = useCallback(
     async (kind: "csv" | "pdf") => {
-      if (txnLoading || txnLoadedKey !== txnPeriodKey) {
+      // Only wait for the transactions list when the user has opted to
+      // include it. Otherwise the statement export can proceed immediately.
+      if (exportIncludeTxn && (txnLoading || txnLoadedKey !== txnPeriodKey)) {
         // Transactions for this period haven't finished loading yet.
         haptic.selection();
         return;
@@ -3430,6 +3570,7 @@ export default function SalesScreen() {
 
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
+      <OfflineNotice />
       <TopProgressBar visible={isFetching && !loading} />
       <View style={{ flex: 1 }} {...panResponder.panHandlers}>
       <SectionList<Sale, { title: string; total: number; data: Sale[] }>
@@ -3440,7 +3581,13 @@ export default function SalesScreen() {
         showsVerticalScrollIndicator={false}
         stickySectionHeadersEnabled
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={GOLD} />
+          <RefreshControl
+            refreshing={false}
+            onRefresh={onRefresh}
+            tintColor="transparent"
+            colors={["transparent"]}
+            progressBackgroundColor="transparent"
+          />
         }
         ListHeaderComponent={
           <>
@@ -3455,9 +3602,9 @@ export default function SalesScreen() {
                 onPress={() => {
                   haptic.selection();
                   setExportOpen(true);
-                  if (txnLoadedKey !== txnPeriodKey && !txnLoading) {
-                    fetchAll();
-                  }
+                  // Do NOT prefetch the transaction list by default — it can
+                  // be slow and is only needed when the user ticks the
+                  // “Include transaction list” option in the export sheet.
                 }}
                 style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
               >
@@ -3505,7 +3652,7 @@ export default function SalesScreen() {
               })}
             </View>
 
-            {/* Date pager — [<] label [>]  +  Today reset */}
+            {/* Date pager — unified pill: [<]  📅 label  ·  [>] */}
             {(() => {
               if (period === "custom") {
                 const hasRange = !!(customStart && customEnd);
@@ -3520,29 +3667,37 @@ export default function SalesScreen() {
                         haptic.selection();
                         setPickerOpen(true);
                       }}
-                      style={({ pressed }) => [styles.pagerArrow, pressed && styles.pressed]}
-                      hitSlop={8}
+                      style={({ pressed }) => [
+                        styles.pagerArrow,
+                        pressed && styles.pagerArrowPressed,
+                      ]}
+                      hitSlop={6}
                     >
                       <Ionicons name="calendar-outline" size={16} color={TEXT} />
                     </Pressable>
 
-                    <View style={styles.pagerCenter}>
-                      <Text style={styles.pagerLabel} numberOfLines={1}>
-                        {rangeLabel}
-                      </Text>
-                      <Pressable
-                        accessibilityLabel={t("sales_pager_change_range")}
-                        onPress={() => {
-                          haptic.selection();
-                          setPickerOpen(true);
-                        }}
-                        hitSlop={6}
-                      >
-                        <Text style={styles.pagerJump}>
-                          {hasRange ? t("sales_pager_change_range_btn") : t("sales_pager_tap_choose")}
+                    <View style={styles.pagerDivider} />
+
+                    <Pressable
+                      accessibilityLabel={t("sales_pager_change_range")}
+                      onPress={() => {
+                        haptic.selection();
+                        setPickerOpen(true);
+                      }}
+                      style={styles.pagerCenter}
+                      hitSlop={6}
+                    >
+                      <View style={styles.pagerLabelRow}>
+                        <Text style={styles.pagerLabel} numberOfLines={1}>
+                          {rangeLabel}
                         </Text>
-                      </Pressable>
-                    </View>
+                      </View>
+                      <Text style={styles.pagerJump}>
+                        {hasRange ? t("sales_pager_change_range_btn") : t("sales_pager_tap_choose")}
+                      </Text>
+                    </Pressable>
+
+                    <View style={styles.pagerDivider} />
 
                     <Pressable
                       accessibilityLabel={t("sales_pager_edit_range")}
@@ -3550,8 +3705,11 @@ export default function SalesScreen() {
                         haptic.selection();
                         setPickerOpen(true);
                       }}
-                      style={({ pressed }) => [styles.pagerArrow, pressed && styles.pressed]}
-                      hitSlop={8}
+                      style={({ pressed }) => [
+                        styles.pagerArrow,
+                        pressed && styles.pagerArrowPressed,
+                      ]}
+                      hitSlop={6}
                     >
                       <Ionicons name="create-outline" size={16} color={TEXT} />
                     </Pressable>
@@ -3630,16 +3788,33 @@ export default function SalesScreen() {
                   <Pressable
                     accessibilityLabel={t("sales_pager_previous")}
                     onPress={goPrev}
-                    style={({ pressed }) => [styles.pagerArrow, pressed && styles.pressed]}
-                    hitSlop={8}
+                    style={({ pressed }) => [
+                      styles.pagerArrow,
+                      pressed && styles.pagerArrowPressed,
+                    ]}
+                    hitSlop={6}
                   >
                     <Ionicons name="chevron-back" size={18} color={TEXT} />
                   </Pressable>
 
-                  <View style={styles.pagerCenter}>
-                    <Text style={styles.pagerLabel} numberOfLines={1}>
-                      {label}
-                    </Text>
+                  <View style={styles.pagerDivider} />
+
+                  <Pressable
+                    accessibilityLabel={
+                      isCurrent
+                        ? t("sales_pager_today_tag")
+                        : t("sales_pager_jump_current")
+                    }
+                    onPress={isCurrent ? undefined : goCurrent}
+                    style={styles.pagerCenter}
+                    hitSlop={6}
+                  >
+                    <View style={styles.pagerLabelRow}>
+                      <Text style={styles.pagerLabel} numberOfLines={1}>
+                        {label}
+                      </Text>
+                      {isCurrent ? <View style={styles.pagerCurrentDot} /> : null}
+                    </View>
                     {isCurrent ? (
                       <Text style={styles.pagerCurrentTag}>
                         {period === "today"
@@ -3649,21 +3824,17 @@ export default function SalesScreen() {
                           : t("sales_pager_this_month_tag")}
                       </Text>
                     ) : (
-                      <Pressable
-                        accessibilityLabel={t("sales_pager_jump_current")}
-                        onPress={goCurrent}
-                        hitSlop={6}
-                      >
-                        <Text style={styles.pagerJump}>
-                          {period === "today"
-                            ? t("sales_pager_jump_today")
-                            : period === "this_week"
-                            ? t("sales_pager_jump_week")
-                            : t("sales_pager_jump_month")}
-                        </Text>
-                      </Pressable>
+                      <Text style={styles.pagerJump}>
+                        {period === "today"
+                          ? t("sales_pager_jump_today")
+                          : period === "this_week"
+                          ? t("sales_pager_jump_week")
+                          : t("sales_pager_jump_month")}
+                      </Text>
                     )}
-                  </View>
+                  </Pressable>
+
+                  <View style={styles.pagerDivider} />
 
                   <Pressable
                     accessibilityLabel={t("sales_pager_next")}
@@ -3672,9 +3843,9 @@ export default function SalesScreen() {
                     style={({ pressed }) => [
                       styles.pagerArrow,
                       !canGoNext && styles.pagerArrowDisabled,
-                      pressed && canGoNext && styles.pressed,
+                      pressed && canGoNext && styles.pagerArrowPressed,
                     ]}
-                    hitSlop={8}
+                    hitSlop={6}
                   >
                     <Ionicons
                       name="chevron-forward"
@@ -3686,13 +3857,61 @@ export default function SalesScreen() {
               );
             })()}
 
+            {/* Network/empty state notice — shown when we couldn't load any
+                data AND there is nothing cached to display, so the user
+                isn't left looking at silent zeros. */}
+            {!loading && !officialStats && sales.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Ionicons
+                  name={
+                    loadError
+                      ? online
+                        ? "alert-circle-outline"
+                        : "cloud-offline-outline"
+                      : "stats-chart-outline"
+                  }
+                  size={32}
+                  color={loadError ? (online ? DANGER : GOLD) : TEXT_DIM}
+                />
+                <Text style={styles.emptyTitle}>
+                  {loadError
+                    ? online
+                      ? t("sales_load_error_title")
+                      : t("sales_offline_title")
+                    : t("sales_no_data_title")}
+                </Text>
+                <Text style={styles.emptyBody}>
+                  {loadError
+                    ? online
+                      ? t("sales_load_error_body")
+                      : t("sales_offline_body")
+                    : t("sales_no_data_body")}
+                </Text>
+                <Pressable
+                  onPress={() => {
+                    haptic.selection();
+                    if (API_TARGET === "official") {
+                      invalidateOfficialDashboardCaches();
+                    }
+                    setRefreshKey((k) => k + 1);
+                    if (txnLoadedKey) {
+                      void fetchAll();
+                    }
+                  }}
+                  style={styles.emptyBtn}
+                >
+                  <Text style={styles.emptyBtnText}>{t("common_retry")}</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
             {/* Hero revenue — flat, dashboard-style */}
             {loading ? (
               <>
                 <LoadingHero />
                 <LoadingKpiRow />
               </>
-            ) : (
+            ) : !officialStats && sales.length === 0 ? null : (
               <FadingContent fading={isFetching}>
                 <View style={styles.hero}>
                   <View style={styles.heroLeft}>
@@ -4018,100 +4237,120 @@ export default function SalesScreen() {
               );
             })()}
 
-            {/* Payment breakdown */}
-            {!loading && displayPaymentBreakdown.length > 0 && (
-              <View style={styles.block}>
-                <SectionLabel
-                  label={t("sales_payment_mix")}
-                  right={
-                    <Text style={styles.sectionHint}>
-                      {displayPaymentBreakdown.length}{" "}
-                      {displayPaymentBreakdown.length === 1
-                        ? t("sales_method_one")
-                        : t("sales_method_other")}
-                    </Text>
-                  }
-                />
-
-                {/* Stacked bar */}
-                <View style={styles.stackedBar}>
-                  {displayPaymentBreakdown.map((p) => (
-                    <View
-                      key={p.name}
-                      style={{
-                        width: `${p.pct}%`,
-                        backgroundColor: PAYMENT_COLORS[p.name] ?? "#64748b",
-                      }}
-                    />
-                  ))}
-                </View>
-
-                {/* Legend */}
-                <View style={styles.legend}>
-                  {displayPaymentBreakdown.map((p) => (
-                    <View key={p.name} style={styles.legendItem}>
-                      <View
-                        style={[
-                          styles.legendDot,
-                          { backgroundColor: PAYMENT_COLORS[p.name] ?? "#64748b" },
-                        ]}
+            {/* Revenue breakdown group — Payment Mix + Revenue by Module live
+                inside one unified card so they read as a single "where did
+                the money come from?" chapter, separated by a hairline. */}
+            {!loading &&
+              (displayPaymentBreakdown.length > 0 ||
+                displayModuleBreakdown.length > 0) && (
+                <View style={styles.breakdownGroup}>
+                  {displayPaymentBreakdown.length > 0 && (
+                    <View style={styles.breakdownSection}>
+                      <SectionLabel
+                        label={t("sales_payment_mix")}
+                        style={styles.breakdownSectionLabel}
+                        right={
+                          <Text style={styles.sectionHint}>
+                            {displayPaymentBreakdown.length}{" "}
+                            {displayPaymentBreakdown.length === 1
+                              ? t("sales_method_one")
+                              : t("sales_method_other")}
+                          </Text>
+                        }
                       />
-                      <Text style={styles.legendName}>{p.name}</Text>
-                      <Text style={styles.legendPct}>{p.pct.toFixed(0)}%</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            )}
 
-            {/* Module breakdown */}
-            {loading ? (
-              <LoadingModuleBreakdown />
-            ) : (
-              <FadingContent fading={isFetching}>
-                {displayModuleBreakdown.length > 0 && (
-                  <View style={styles.block}>
-                    <SectionLabel label={t("sales_revenue_by_module")} />
-                    <View style={styles.moduleList}>
-                      {displayModuleBreakdown.map((m, i) => (
-                        <View
-                          key={m.module}
-                          style={[
-                            styles.moduleRow,
-                            i !== displayModuleBreakdown.length - 1 && styles.moduleRowDivider,
-                          ]}
-                        >
-                          <View style={styles.moduleLeft}>
+                      {/* Stacked bar */}
+                      <View style={styles.stackedBar}>
+                        {displayPaymentBreakdown.map((p) => (
+                          <View
+                            key={p.name}
+                            style={{
+                              width: `${p.pct}%`,
+                              backgroundColor: PAYMENT_COLORS[p.name] ?? "#64748b",
+                            }}
+                          />
+                        ))}
+                      </View>
+
+                      {/* Legend */}
+                      <View style={styles.legend}>
+                        {displayPaymentBreakdown.map((p) => (
+                          <View key={p.name} style={styles.legendItem}>
                             <View
                               style={[
-                                styles.moduleDot,
-                                { backgroundColor: MODULE_COLORS[m.module] ?? "#64748b" },
+                                styles.legendDot,
+                                { backgroundColor: PAYMENT_COLORS[p.name] ?? "#64748b" },
                               ]}
                             />
-                            <Text style={styles.moduleName}>{m.module}</Text>
+                            <Text style={styles.legendName}>{p.name}</Text>
+                            <Text style={styles.legendPct}>{p.pct.toFixed(0)}%</Text>
                           </View>
-                          <View style={styles.barWrap}>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+
+                  {displayPaymentBreakdown.length > 0 &&
+                    displayModuleBreakdown.length > 0 && (
+                      <View style={styles.breakdownGap} />
+                    )}
+
+                  {displayModuleBreakdown.length > 0 && (
+                    <FadingContent fading={isFetching}>
+                      <View style={styles.breakdownSection}>
+                        <SectionLabel
+                          label={t("sales_revenue_by_module")}
+                          style={styles.breakdownSectionLabel}
+                        />
+                        <View style={styles.moduleList}>
+                          {displayModuleBreakdown.map((m, i) => (
                             <View
+                              key={m.module}
                               style={[
-                                styles.barFill,
-                                {
-                                  width: `${m.pct}%`,
-                                  backgroundColor: MODULE_COLORS[m.module] ?? "#64748b",
-                                },
+                                styles.moduleRow,
+                                i !== displayModuleBreakdown.length - 1 && styles.moduleRowDivider,
                               ]}
-                            />
-                          </View>
-                          <Text style={styles.moduleRevenue}>{formatCurrency(m.revenue, 0)}</Text>
+                            >
+                              <View style={styles.moduleLeft}>
+                                <View
+                                  style={[
+                                    styles.moduleDot,
+                                    { backgroundColor: MODULE_COLORS[m.module] ?? "#64748b" },
+                                  ]}
+                                />
+                                <Text style={styles.moduleName}>{m.module}</Text>
+                              </View>
+                              <View style={styles.barWrap}>
+                                <View
+                                  style={[
+                                    styles.barFill,
+                                    {
+                                      width: `${m.pct}%`,
+                                      backgroundColor: MODULE_COLORS[m.module] ?? "#64748b",
+                                    },
+                                  ]}
+                                />
+                              </View>
+                              <Text style={styles.moduleRevenue}>{formatCurrency(m.revenue, 0)}</Text>
+                            </View>
+                          ))}
                         </View>
-                      ))}
-                    </View>
-                  </View>
-                )}
-              </FadingContent>
-            )}
+                      </View>
+                    </FadingContent>
+                  )}
+                </View>
+              )}
 
-            {/* Txn header */}
-            <SectionLabel label={t("sales_transactions")} />
+            {/* Loading-state placeholder for the module breakdown lives outside
+                the unified card because payment-mix is also gated on !loading. */}
+            {loading && <LoadingModuleBreakdown />}
+
+            {/* Txn header — chapter break: extra top margin separates the
+                transactions CTA from the revenue breakdown card above. */}
+            <SectionLabel
+              label={t("sales_transactions")}
+              style={styles.txnChapterLabel}
+            />
           </>
         }
         renderSectionHeader={renderTxnHeader}
@@ -4132,31 +4371,36 @@ export default function SalesScreen() {
                 }
               }}
               style={({ pressed }) => [
-                styles.seeAllCard,
-                pressed && styles.seeAllCardPressed,
+                styles.txnHeroCard,
+                pressed && styles.txnHeroCardPressed,
               ]}
             >
-              <View style={styles.seeAllAccent} />
-              <View style={styles.seeAllInner}>
-                <View style={styles.seeAllIcon}>
+              <View style={styles.txnHeroAccent} />
+              <View style={styles.txnHeroInner}>
+                <View style={styles.txnHeroIcon}>
                   <Ionicons name="receipt-outline" size={20} color={GOLD} />
                 </View>
 
-                <View style={styles.seeAllBody}>
-                  <Text style={styles.seeAllEyebrow}>
+                <View style={styles.txnHeroBody}>
+                  <Text style={styles.txnHeroEyebrow} numberOfLines={1}>
                     {allTxnPeriodLabel.toUpperCase()}
                   </Text>
-                  <View style={styles.seeAllCountRow}>
-                    <Text style={styles.seeAllCount}>{stat.orders}</Text>
-                    <Text style={styles.seeAllCountLabel}>
+                  <View style={styles.txnHeroCountRow}>
+                    <AnimatedNumber
+                      value={stat.orders}
+                      style={styles.txnHeroCount}
+                    />
+                    <Text style={styles.txnHeroCountLabel}>
                       {transactionNoun(stat.orders, t)}
                     </Text>
                   </View>
-                  <Text style={styles.seeAllHint}>{t("sales_tap_to_view_all")}</Text>
+                  <Text style={styles.txnHeroHint}>
+                    {t("sales_tap_to_view_all")}
+                  </Text>
                 </View>
 
-                <View style={styles.seeAllChevron}>
-                  <Ionicons name="chevron-forward" size={18} color={GOLD} />
+                <View style={styles.txnHeroCtaPill}>
+                  <Ionicons name="arrow-forward" size={15} color="#181e38" />
                 </View>
               </View>
             </Pressable>
@@ -4269,7 +4513,13 @@ export default function SalesScreen() {
               ) : null}
             </View>
 
-            <View style={styles.statusTabs}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              style={styles.statusTabsScroll}
+              contentContainerStyle={styles.statusTabs}
+            >
               {statusTabs.map((tab) => {
                 const active = statusFilter === tab.key;
                 const count = statusCounts[tab.key] ?? 0;
@@ -4298,14 +4548,16 @@ export default function SalesScreen() {
                           active && styles.statusTabCountActive,
                         ]}
                       >
-                        <Text
-                          style={[
-                            styles.statusTabCountText,
-                            active && styles.statusTabCountTextActive,
-                          ]}
-                        >
-                          {count}
-                        </Text>
+                        <AnimatedNumber
+                          value={count}
+                          duration={420}
+                          separator
+                          style={
+                            active
+                              ? [styles.statusTabCountText, styles.statusTabCountTextActive]
+                              : styles.statusTabCountText
+                          }
+                        />
                       </View>
                     </View>
                     <View
@@ -4317,7 +4569,7 @@ export default function SalesScreen() {
                   </Pressable>
                 );
               })}
-            </View>
+            </ScrollView>
           </View>
 
           <SectionList<Sale, { title: string; total: number; data: Sale[] }>
@@ -4454,7 +4706,16 @@ export default function SalesScreen() {
               disabled={!!exporting}
               onPress={() => {
                 haptic.selection();
-                setExportIncludeTxn((v) => !v);
+                setExportIncludeTxn((v) => {
+                  const next = !v;
+                  // Kick off the (potentially slow) transactions fetch the
+                  // moment the user opts in, so the wait happens here
+                  // instead of after they press Download.
+                  if (next && !txnLoading && txnLoadedKey !== txnPeriodKey) {
+                    fetchAll();
+                  }
+                  return next;
+                });
               }}
               style={({ pressed }) => [
                 styles.exportToggleRow,
@@ -4479,7 +4740,8 @@ export default function SalesScreen() {
 
             <Pressable
               disabled={
-                !!exporting || txnLoading || txnLoadedKey !== txnPeriodKey
+                !!exporting ||
+                (exportIncludeTxn && (txnLoading || txnLoadedKey !== txnPeriodKey))
               }
               onPress={() => handleExport(exportFormat)}
               style={({ pressed }) => [
@@ -4487,11 +4749,14 @@ export default function SalesScreen() {
                 pressed && { opacity: 0.85 },
                 !!exporting && styles.exportCtaDisabled,
                 !exporting &&
+                  exportIncludeTxn &&
                   (txnLoading || txnLoadedKey !== txnPeriodKey) &&
                   styles.exportCtaLoading,
               ]}
             >
-              {!exporting && (txnLoading || txnLoadedKey !== txnPeriodKey) ? (
+              {!exporting &&
+              exportIncludeTxn &&
+              (txnLoading || txnLoadedKey !== txnPeriodKey) ? (
                 <View style={styles.exportCtaSkeleton}>
                   <ShimmerSkeleton width={18} height={18} radius={9} />
                   <ShimmerSkeleton width={140} height={12} radius={4} />
@@ -4620,48 +4885,74 @@ const styles = StyleSheet.create({
     backgroundColor: GOLD,
   },
 
-  // Date pager — [<] label [>]
+  // Date pager — unified pill navigator
   datePager: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingVertical: 4,
-  },
-  pagerArrow: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: CARD,
+    alignItems: "stretch",
+    height: 48,
+    marginTop: 10,
+    marginBottom: 2,
+    borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
+    backgroundColor: CARD,
+    overflow: "hidden",
+  },
+  pagerArrow: {
+    width: 52,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pagerArrowPressed: {
+    backgroundColor: "rgba(255,255,255,0.04)",
   },
   pagerArrowDisabled: {
-    opacity: 0.4,
+    opacity: 0.35,
+  },
+  pagerDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: "center",
+    height: 24,
+    backgroundColor: CARD_BORDER,
   },
   pagerCenter: {
     flex: 1,
     alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 8,
     gap: 2,
   },
+  pagerLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
   pagerLabel: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: "700",
     color: TEXT,
     letterSpacing: -0.2,
+  },
+  pagerCurrentDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: GOLD,
+    marginLeft: 2,
   },
   pagerCurrentTag: {
     fontSize: 9,
     fontWeight: "700",
     color: GOLD,
-    letterSpacing: 1.5,
+    letterSpacing: 1.4,
+    textTransform: "uppercase",
   },
   pagerJump: {
     fontSize: 10,
     fontWeight: "600",
     color: GOLD,
-    letterSpacing: 0.3,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
   },
 
   // Hero — flat (no card)
@@ -4750,7 +5041,50 @@ const styles = StyleSheet.create({
 
   // Generic flat block (replaces card)
   block: {
-    gap: 10,
+    gap: 8,
+  },
+  // Tighter SectionLabel rhythm used in the stacked Payment Mix → Revenue by
+  // Module → Transactions stretch so the sections don't feel adrift.
+  tightSectionLabel: {
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  // Unified revenue-breakdown card: Payment Mix + Revenue by Module inside one
+  // bordered surface with an internal hairline divider. Reads as a single
+  // "where did the money come from?" chapter instead of two floating blocks.
+  breakdownGroup: {
+    marginTop: 12,
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 14,
+  },
+  breakdownSection: {
+    gap: 8,
+  },
+  breakdownSectionLabel: {
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  breakdownDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: CARD_BORDER,
+    marginTop: 14,
+    marginBottom: 2,
+  },
+  // Plain whitespace gap between Payment Mix and Revenue by Module subsections
+  // — no hairline so the two flow visually inside the unified card.
+  breakdownGap: {
+    height: 10,
+  },
+  // Chapter-break header: stronger top margin separates the Transactions
+  // CTA from the revenue-breakdown card above.
+  txnChapterLabel: {
+    marginTop: 18,
+    marginBottom: 2,
   },
   sectionHint: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
 
@@ -4945,8 +5279,8 @@ const styles = StyleSheet.create({
     marginTop: 30,
   },
   searchRowFocused: {
-    borderColor: GOLD,
-    backgroundColor: GOLD_DIM,
+    borderColor: CARD_BORDER,
+    backgroundColor: CARD,
   },
   searchInput: {
     flex: 1,
@@ -4958,15 +5292,19 @@ const styles = StyleSheet.create({
   },
 
   // Status filter — underline text tabs (matches period tabs)
+  statusTabsScroll: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
   statusTabs: {
     flexDirection: "row",
     gap: 24,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    paddingRight: 10,
   },
   statusTab: {
     paddingVertical: 10,
     alignItems: "center",
+    flexShrink: 0,
   },
   statusTabRow: {
     flexDirection: "row",
@@ -5065,6 +5403,83 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   statusDot: { width: 5, height: 5, borderRadius: 2.5 },
   statusText: { fontSize: 10, fontWeight: "600", letterSpacing: 0.2 },
+
+  // See-all transactions hero CTA — redesigned: vertical gold accent strip,
+  // larger animated count, refined typography, and a filled gold action pill.
+  txnHeroCard: {
+    marginTop: 4,
+    flexDirection: "row",
+    borderRadius: 18,
+    overflow: "hidden",
+    backgroundColor: CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+  },
+  txnHeroCardPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.995 }],
+  },
+  txnHeroAccent: {
+    width: 3,
+    alignSelf: "stretch",
+    backgroundColor: GOLD,
+  },
+  txnHeroInner: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+  },
+  txnHeroIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: GOLD + "14",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GOLD + "33",
+  },
+  txnHeroBody: { flex: 1, gap: 4 },
+  txnHeroEyebrow: {
+    fontSize: 10,
+    letterSpacing: 1.5,
+    fontWeight: "700",
+    color: TEXT_FAINT,
+    textTransform: "uppercase",
+  },
+  txnHeroCountRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 6,
+  },
+  txnHeroCount: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: TEXT,
+    letterSpacing: -0.8,
+  },
+  txnHeroCountLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: TEXT_DIM,
+  },
+  txnHeroHint: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: TEXT_DIM,
+    letterSpacing: 0.1,
+  },
+  txnHeroCtaPill: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: GOLD,
+  },
 
   // See-all transactions hero CTA — replaces the inline preview list.
   seeAllCard: {

@@ -68,6 +68,24 @@ export function setAuthFailureHandler(handler: AuthFailureHandler | null) {
   authFailureHandler = handler;
 }
 
+// ─── Network failure handler (used by NetworkContext) ────────────────────────
+// Fired whenever axios cannot reach the server at all (no response received).
+type NetworkFailureHandler = () => void;
+let networkFailureHandler: NetworkFailureHandler | null = null;
+
+export function setNetworkFailureHandler(handler: NetworkFailureHandler | null) {
+  networkFailureHandler = handler;
+}
+
+function notifyNetworkFailure() {
+  if (!networkFailureHandler) return;
+  try {
+    networkFailureHandler();
+  } catch {
+    // Never break request chains because the offline notifier failed.
+  }
+}
+
 function isAuthFailurePayload(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const body = value as { status_code?: unknown; message?: unknown; detail?: unknown };
@@ -110,6 +128,10 @@ api.interceptors.response.use(
     const status = error?.response?.status;
     if (status === 401 || status === 403 || isAuthFailurePayload(error?.response?.data)) {
       notifyAuthFailure("http-auth-failure");
+    }
+    // No response at all → most likely a network/DNS/timeout failure.
+    if (!error?.response) {
+      notifyNetworkFailure();
     }
     return Promise.reject(error);
   }

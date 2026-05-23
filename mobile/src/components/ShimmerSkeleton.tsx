@@ -81,105 +81,83 @@ export function ShimmerSkeletonCard({
 }
 
 /**
- * Loading Hero — Placeholder for hero section (revenue card).
+ * Loading Hero — Flat placeholder for the hero revenue block.
+ * Matches the dashboard's `bootHero` look: eyebrow + period dots row,
+ * a tall value bar, then a small badge + hint meta row. No card chrome.
  */
 export function LoadingHero() {
   return (
     <View style={styles.heroContainer}>
-      <View style={styles.heroContent}>
-        <ShimmerSkeleton width="60%" height={14} radius={4} />
-        <View style={{ height: 8 }} />
-        <ShimmerSkeleton width="80%" height={40} radius={8} />
-        <View style={{ height: 12 }} />
-        <ShimmerSkeleton width="40%" height={12} radius={4} />
+      <View style={styles.heroHeadRow}>
+        <ShimmerSkeleton width={140} height={10} radius={3} />
+        <View style={styles.heroDots}>
+          <ShimmerSkeleton width={6} height={6} radius={3} />
+          <ShimmerSkeleton width={14} height={6} radius={3} />
+          <ShimmerSkeleton width={6} height={6} radius={3} />
+          <ShimmerSkeleton width={6} height={6} radius={3} />
+        </View>
+      </View>
+      <ShimmerSkeleton width="62%" height={40} radius={6} style={styles.heroValue} />
+      <View style={styles.heroMetaRow}>
+        <ShimmerSkeleton width={56} height={14} radius={7} />
+        <ShimmerSkeleton width={140} height={10} radius={3} />
       </View>
     </View>
   );
 }
 
 /**
- * Loading KPI Row — Placeholder for KPI metrics.
+ * Loading KPI Row — Flat 3-cell row with hairline dividers, mirroring the
+ * real KPI row layout: small icon, large value, small caption per cell.
  */
 export function LoadingKpiRow() {
   return (
     <View style={styles.kpiRowContainer}>
       <View style={styles.kpiCell}>
-        <ShimmerSkeleton width="24" height={24} radius={4} />
-        <View style={{ height: 8 }} />
-        <ShimmerSkeleton width="80%" height={16} radius={3} />
-        <View style={{ height: 4 }} />
-        <ShimmerSkeleton width="60%" height={11} radius={2} />
+        <ShimmerSkeleton width={16} height={16} radius={4} />
+        <ShimmerSkeleton width="60%" height={20} radius={5} style={styles.kpiValue} />
+        <ShimmerSkeleton width="75%" height={9} radius={3} />
       </View>
+      <View style={styles.kpiDivider} />
       <View style={styles.kpiCell}>
-        <ShimmerSkeleton width="24" height={24} radius={4} />
-        <View style={{ height: 8 }} />
-        <ShimmerSkeleton width="70%" height={16} radius={3} />
-        <View style={{ height: 4 }} />
-        <ShimmerSkeleton width="50%" height={11} radius={2} />
+        <ShimmerSkeleton width={16} height={16} radius={4} />
+        <ShimmerSkeleton width="55%" height={20} radius={5} style={styles.kpiValue} />
+        <ShimmerSkeleton width="70%" height={9} radius={3} />
       </View>
+      <View style={styles.kpiDivider} />
       <View style={styles.kpiCell}>
-        <ShimmerSkeleton width="24" height={24} radius={4} />
-        <View style={{ height: 8 }} />
-        <ShimmerSkeleton width="75%" height={16} radius={3} />
-        <View style={{ height: 4 }} />
-        <ShimmerSkeleton width="55%" height={11} radius={2} />
+        <ShimmerSkeleton width={16} height={16} radius={4} />
+        <ShimmerSkeleton width="65%" height={20} radius={5} style={styles.kpiValue} />
+        <ShimmerSkeleton width="70%" height={9} radius={3} />
       </View>
     </View>
   );
 }
 
 /**
- * Loading Statement — Placeholder for statement card.
+ * Loading Statement — Flat itemised list of hairline-divided rows that
+ * mirrors the real Statement table (label on the left, value on the right).
  */
 export function LoadingStatement() {
+  const rows: Array<{ l: `${number}%`; r: `${number}%`; bold?: boolean }> = [
+    { l: "40%", r: "22%" },
+    { l: "55%", r: "30%", bold: true },
+    { l: "38%", r: "24%" },
+    { l: "45%", r: "20%" },
+    { l: "34%", r: "22%" },
+    { l: "42%", r: "26%" },
+    { l: "50%", r: "28%" },
+  ];
   return (
     <View style={styles.statementContainer}>
-      <View style={styles.statementRow}>
-        <ShimmerSkeleton width="40%" height={12} radius={3} />
-        <ShimmerSkeleton width="30%" height={12} radius={3} />
+      <View style={styles.statementHeadRow}>
+        <ShimmerSkeleton width={110} height={10} radius={3} />
+        <ShimmerSkeleton width={70} height={10} radius={3} />
       </View>
-      <View style={{ height: 12 }} />
-      <View style={styles.statementRow}>
-        <ShimmerSkeleton width="50%" height={16} radius={4} />
-        <ShimmerSkeleton width="35%" height={16} radius={4} />
-      </View>
-      <View style={{ height: 16 }} />
-      <View style={styles.statementRow}>
-        <ShimmerSkeleton width="45%" height={12} radius={3} />
-        <ShimmerSkeleton width="28%" height={12} radius={3} />
-      </View>
-      <View style={{ height: 8 }} />
-      <View style={styles.statementRow}>
-        <ShimmerSkeleton width="40%" height={12} radius={3} />
-        <ShimmerSkeleton width="32%" height={12} radius={3} />
-      </View>
-      <View style={{ height: 8 }} />
-      <View style={styles.statementRow}>
-        <ShimmerSkeleton width="35%" height={12} radius={3} />
-        <ShimmerSkeleton width="25%" height={12} radius={3} />
-      </View>
-      <View style={{ height: 16 }} />
-      <View style={styles.statementRow}>
-        <ShimmerSkeleton width="55%" height={14} radius={3} />
-        <ShimmerSkeleton width="30%" height={14} radius={3} />
-      </View>
-    </View>
-  );
-}
-
-/**
- * Loading Module Breakdown — Placeholder for module revenue breakdown.
- */
-export function LoadingModuleBreakdown() {
-  return (
-    <View style={styles.moduleBreakdownContainer}>
-      <ShimmerSkeleton width="40%" height={12} radius={3} />
-      <View style={{ height: 16 }} />
-      {[0, 1, 2].map((i) => (
-        <View key={i} style={styles.moduleBreakdownRow}>
-          <ShimmerSkeleton width="8" height={8} radius={4} />
-          <ShimmerSkeleton width="30%" height={12} radius={3} />
-          <ShimmerSkeleton width="25%" height={12} radius={3} />
+      {rows.map((row, i) => (
+        <View key={i} style={styles.statementRow}>
+          <ShimmerSkeleton width={row.l} height={row.bold ? 14 : 12} radius={3} />
+          <ShimmerSkeleton width={row.r} height={row.bold ? 14 : 12} radius={3} />
         </View>
       ))}
     </View>
@@ -187,19 +165,51 @@ export function LoadingModuleBreakdown() {
 }
 
 /**
- * Loading Transaction List — Placeholder for transaction items.
+ * Loading Module Breakdown — Flat list rows: color dot, label, mini bar,
+ * value. Hairline divider between rows; no card background.
+ */
+export function LoadingModuleBreakdown() {
+  return (
+    <View style={styles.moduleBreakdownContainer}>
+      <View style={styles.statementHeadRow}>
+        <ShimmerSkeleton width={140} height={10} radius={3} />
+        <ShimmerSkeleton width={48} height={10} radius={3} />
+      </View>
+      {[0, 1, 2].map((i) => {
+        const nameWidth = (`${52 - i * 6}%`) as `${number}%`;
+        const barWidth = (`${30 + i * 6}%`) as `${number}%`;
+        return (
+          <View key={i} style={styles.moduleBreakdownRow}>
+            <ShimmerSkeleton width={10} height={10} radius={5} />
+            <View style={styles.moduleBreakdownLabel}>
+              <ShimmerSkeleton width={nameWidth} height={12} radius={3} />
+            </View>
+            <View style={styles.moduleBreakdownBar}>
+              <ShimmerSkeleton width={barWidth} height={4} radius={2} />
+            </View>
+            <ShimmerSkeleton width={54} height={12} radius={3} />
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * Loading Transaction List — Flat hairline-divided rows mirroring the real
+ * transaction items (avatar + id/sub + amount).
  */
 export function LoadingTransactionList() {
   return (
     <View style={styles.transactionListContainer}>
       {[0, 1, 2, 3].map((i) => (
         <View key={i} style={styles.transactionItemLoader}>
+          <ShimmerSkeleton width={36} height={36} radius={18} />
           <View style={styles.transactionLoaderLeft}>
-            <ShimmerSkeleton width="25%" height={12} radius={3} />
-            <View style={{ height: 4 }} />
-            <ShimmerSkeleton width="40%" height={10} radius={2} />
+            <ShimmerSkeleton width="38%" height={12} radius={3} />
+            <ShimmerSkeleton width="58%" height={10} radius={3} />
           </View>
-          <ShimmerSkeleton width="20%" height={12} radius={3} />
+          <ShimmerSkeleton width={56} height={14} radius={3} />
         </View>
       ))}
     </View>
@@ -218,75 +228,104 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
   },
+  // ── Flat hero (matches dashboard bootHero) ──────────────────────────
   heroContainer: {
-    backgroundColor: CARD,
-    borderRadius: 22,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
-    padding: 20,
-    gap: 12,
+    paddingVertical: 4,
+    gap: 14,
   },
-  heroContent: {
-    gap: 8,
+  heroHeadRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
+  heroDots: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  heroValue: {
+    marginTop: 2,
+  },
+  heroMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  // ── Flat KPI row (hairline dividers between cells) ──────────────────
   kpiRowContainer: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 12,
-    backgroundColor: CARD,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "stretch",
+    marginTop: 8,
+    paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: CARD_BORDER,
-    padding: 16,
   },
   kpiCell: {
     flex: 1,
-    alignItems: "center",
     gap: 6,
+    paddingHorizontal: 4,
+    alignItems: "flex-start",
   },
+  kpiDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: CARD_BORDER,
+    marginVertical: 4,
+  },
+  kpiValue: {
+    marginTop: 2,
+  },
+  // ── Flat statement (no card) ───────────────────────────────────────
   statementContainer: {
-    backgroundColor: CARD,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
-    padding: 16,
-    gap: 4,
+    marginTop: 24,
+    gap: 0,
+  },
+  statementHeadRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
   },
   statementRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
   },
+  // ── Flat module breakdown rows ─────────────────────────────────────
   moduleBreakdownContainer: {
-    backgroundColor: CARD,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
-    padding: 16,
-    gap: 8,
+    marginTop: 24,
   },
   moduleBreakdownRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    paddingVertical: 8,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
   },
+  moduleBreakdownLabel: {
+    flexShrink: 0,
+  },
+  moduleBreakdownBar: {
+    flex: 1,
+  },
+  // ── Flat transaction list rows ─────────────────────────────────────
   transactionListContainer: {
-    gap: 8,
-    paddingTop: 12,
+    paddingTop: 4,
   },
   transactionItemLoader: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: CARD,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
-    padding: 12,
+    gap: 12,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
   },
   transactionLoaderLeft: {
     flex: 1,
-    gap: 4,
+    gap: 6,
   },
 });

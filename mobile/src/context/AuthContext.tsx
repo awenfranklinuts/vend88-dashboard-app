@@ -8,6 +8,8 @@ const AUTH_TOKEN_KEY = "vend88-auth-token";
 const AUTH_EMAIL_KEY = "vend88-auth-email";
 const AUTH_FIRST_KEY = "vend88-auth-first-name";
 const AUTH_LAST_KEY = "vend88-auth-last-name";
+const BIOMETRIC_KEY = "vend88-biometric-enabled";
+const BIOMETRIC_ASKED_KEY = "vend88-biometric-asked";
 
 type SignInResult = {
   ok: boolean;
@@ -52,6 +54,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       SecureStore.deleteItemAsync(AUTH_EMAIL_KEY),
       SecureStore.deleteItemAsync(AUTH_FIRST_KEY),
       SecureStore.deleteItemAsync(AUTH_LAST_KEY),
+      // Reset biometric lock onboarding/state so next login must re-enable it.
+      SecureStore.deleteItemAsync(BIOMETRIC_KEY),
+      SecureStore.deleteItemAsync(BIOMETRIC_ASKED_KEY),
     ]);
   }, []);
 

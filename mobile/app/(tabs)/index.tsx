@@ -17,17 +17,23 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useI18n } from "../../src/context/I18nContext";
 import { useAuth } from "../../src/context/AuthContext";
+import { useNetwork } from "../../src/context/NetworkContext";
 import { API_TARGET, api } from "../../src/services/api";
 import {
+  fetchOfficialOrderDetail,
   fetchOfficialHeroRevenuePeriod,
   fetchOfficialMonthRevenueData,
   fetchOfficialRecentOrders,
   fetchOfficialTopSellingItems,
   fetchOfficialPosBreakdown,
   invalidateOfficialDashboardCaches,
+  OfficialOrderDetail,
 } from "../../src/services/officialDashboard";
 import { AnimatedNumber } from "../../src/components/AnimatedNumber";
 import { PulsingDot } from "../../src/components/PulsingDot";
+import { TopProgressBar } from "../../src/components/TopProgressBar";
+import { OfflineNotice } from "../../src/components/OfflineNotice";
+import { OrderDetailModal, OrderDetailSale } from "../../src/components/OrderDetailModal";
 import { Skeleton } from "../../src/components/Skeleton";
 import { haptic } from "../../src/utils/haptics";
 import {
@@ -56,6 +62,7 @@ type Summary = {
   today_sales: string;
   today_revenue_change_pct?: number;
   week_revenue?: string;
+  week_revenue_change_pct?: number;
   today_orders?: number;
   week_orders?: number;
   total_orders: number;
@@ -74,9 +81,13 @@ type RecentOrder = {
   id: string;
   item: string;
   module: string;
+  payment?: string;
   total: string;
   status: string;
+  rawStatus?: string;
   time: string;
+  rawId?: string;
+  rawTime?: string;
 };
 
 type Module = {
@@ -172,6 +183,32 @@ function moduleStatusLabel(status: string, t: (key: any) => string): string {
   return status;
 }
 
+function recentOrderStatusMeta(rawStatus?: string) {
+  const raw = (rawStatus ?? "").trim();
+  const normalized = raw.toLowerCase();
+  const label = raw
+    ? raw
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\b\w/g, (char) => char.toUpperCase())
+    : "Unknown";
+
+  if (/unpaid/.test(normalized)) {
+    return { label, color: WARNING };
+  }
+  if (/\bpaid\b|complete|done/.test(normalized)) {
+    return { label, color: SUCCESS };
+  }
+  if (/refund|cancel|void/.test(normalized)) {
+    return { label, color: DANGER };
+  }
+  if (/active|open|pending|progress/.test(normalized)) {
+    return { label, color: WARNING };
+  }
+  return { label, color: TEXT_DIM };
+}
+
 function parseMoney(v: string | number | undefined): number {
   if (typeof v === "number") return v;
   if (!v) return 0;
@@ -185,14 +222,14 @@ function formatShortDate(date: Date, locale: string): string {
   });
 }
 
-function orderGlyph(moduleName: string): { icon: keyof typeof Ionicons.glyphMap; color: string } {
-  const key = moduleName.toLowerCase();
-  if (key.includes("pos") || key.includes("retail")) return { icon: "storefront-outline", color: "#60a5fa" };
-  if (key.includes("rest") || key.includes("food") || key.includes("dine")) return { icon: "restaurant-outline", color: "#f59e0b" };
-  if (key.includes("vend") || key.includes("machine")) return { icon: "cube-outline", color: "#a78bfa" };
-  if (key.includes("online") || key.includes("web") || key.includes("ecom")) return { icon: "globe-outline", color: "#34d399" };
-  if (key.includes("kiosk")) return { icon: "tablet-portrait-outline", color: "#f472b6" };
-  return { icon: "receipt-outline", color: ACCENT };
+function orderGlyph(payment?: string): { icon: keyof typeof Ionicons.glyphMap; color: string } {
+  const key = (payment ?? "").toLowerCase();
+  if (key === "cash") return { icon: "cash-outline", color: "#10b981" };
+  if (key === "card" || key === "eftpos") return { icon: "card-outline", color: "#4064dc" };
+  if (key === "qr") return { icon: "qr-code-outline", color: "#8b5cf6" };
+  if (key === "wallet") return { icon: "wallet-outline", color: "#f59e0b" };
+  if (key === "mobile") return { icon: "phone-portrait-outline", color: "#06b6d4" };
+  return { icon: "card-outline", color: "#64748b" };
 }
 
 // Pick a "nice" tick step so the Y-axis shows round numbers (1 / 2 / 2.5 / 5 × 10ⁿ).
@@ -266,8 +303,13 @@ export default function DashboardScreen() {
   const router = useRouter();
   const { t, locale } = useI18n();
   const { email, token, firstName, lastName, loading: authLoading } = useAuth();
+  const { online } = useNetwork();
   const identity = buildIdentity(email, firstName, lastName);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const summaryRef = useRef<Summary | null>(null);
+  useEffect(() => {
+    summaryRef.current = summary;
+  }, [summary]);
   const [chart, setChart] = useState<ChartPoint[]>([]);
   const [monthChart, setMonthChart] = useState<ChartPoint[]>([]);
   const [todayChart, setTodayChart] = useState<ChartPoint[]>([]);
@@ -279,12 +321,24 @@ export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [heroPeriod, setHeroPeriod] = useState<"month" | "week" | "today">("month");
+  const [heroChartLoading, setHeroChartLoading] = useState<
+    Record<"month" | "week" | "today", boolean>
+  >({
+    month: false,
+    week: false,
+    today: false,
+  });
   const [chartOpen, setChartOpen] = useState(false);
   const [selectedBar, setSelectedBar] = useState<number | null>(null);
   const [barTrackH, setBarTrackH] = useState(0);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [chartError, setChartError] = useState<string | null>(null);
   const [heroRetryTick, setHeroRetryTick] = useState(0);
+  // Bumped by onRefresh to force the period-keyed effects (hero chart,
+  // top-items, dining/sales breakdown) to re-fetch even when the period
+  // hasn't changed and cached data exists.
+  const [refreshTick, setRefreshTick] = useState(0);
+  const lastSeenRefreshTickRef = useRef(0);
   const lastNonEmptyHeroChartRef = useRef<Record<"month" | "week" | "today", ChartPoint[]>>({
     month: [],
     week: [],
@@ -303,12 +357,31 @@ export default function DashboardScreen() {
   const [topAll, setTopAll] = useState<TopProduct[]>([]);
   const [topAllLoading, setTopAllLoading] = useState(false);
   const [topAllError, setTopAllError] = useState<string | null>(null);
+  const [detailSale, setDetailSale] = useState<OrderDetailSale | null>(null);
+  const [detailOrder, setDetailOrder] = useState<OfficialOrderDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [diningOptions, setDiningOptions] = useState<DiningOption[]>([]);
   // Once we've shown the dining card, keep it mounted so the period-switch
   // fade animation always plays even when a period returns empty data.
   const [diningEverHadData, setDiningEverHadData] = useState(false);
   const [salesMethods, setSalesMethods] = useState<DiningOption[]>([]);
   const [salesMethodEverHadData, setSalesMethodEverHadData] = useState(false);
+  // Unified donut card — segmented tab switches between Dining Options and
+  // Sales Methods so the two breakdowns share one piece of vertical space.
+  const [donutTab, setDonutTab] = useState<"dining" | "methods">("dining");
+  // Animated sliding thumb behind the active donut tab. We measure the row
+  // width once via onLayout, then translate the thumb across the half-width.
+  const donutTabAnim = useRef(new Animated.Value(0)).current;
+  const [donutTabRowWidth, setDonutTabRowWidth] = useState(0);
+  useEffect(() => {
+    Animated.timing(donutTabAnim, {
+      toValue: donutTab === "dining" ? 0 : 1,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [donutTab, donutTabAnim]);
 
   // Mapping of API dine option names to display labels and colors
   const dineOptionConfig: Record<string, { label: string; color: string }> = {
@@ -342,11 +415,10 @@ export default function DashboardScreen() {
     const currentAuth = { email, token };
 
     if (API_TARGET === "official") {
-      setSummary(null);
-      setOrders([]);
-      setSummaryError(null);
-      setChartError(null);
-
+      // NOTE: Do NOT reset summary/orders to empty before the request — if the
+      // network call fails (e.g. offline), we want to keep showing the last
+      // known data instead of flashing an error/empty state. State is only
+      // updated below when individual results succeed.
       const [summaryResult, ordersResult] = await Promise.allSettled([
         fetchOfficialMonthRevenueData(currentAuth),
         fetchOfficialRecentOrders(currentAuth),
@@ -354,7 +426,15 @@ export default function DashboardScreen() {
 
       if (summaryResult.status === "fulfilled") {
         setSummary(summaryResult.value.summary);
-      } else {
+        setSummaryError(null);
+        // Prime weekly series from the summary payload so the hero sparkline
+        // is available immediately when switching to week.
+        if (Array.isArray(summaryResult.value.chart) && summaryResult.value.chart.length > 0) {
+          setChart(summaryResult.value.chart);
+          lastNonEmptyHeroChartRef.current.week = summaryResult.value.chart;
+        }
+      } else if (!summaryRef.current) {
+        // Only surface an error when we have nothing cached to show.
         setSummaryError("Unable to load month revenue for this account.");
       }
 
@@ -392,6 +472,7 @@ export default function DashboardScreen() {
   useEffect(() => {
     if (API_TARGET !== "official") return;
     if (authLoading) return;
+    if (!email || !token) return;
 
     const hasDataForPeriod =
       heroPeriod === "week"
@@ -399,13 +480,21 @@ export default function DashboardScreen() {
         : heroPeriod === "month"
         ? monthChart.length > 0
         : todayChart.length > 0;
-    if (hasDataForPeriod) return;
+    const forceRefresh = lastSeenRefreshTickRef.current !== refreshTick;
+    lastSeenRefreshTickRef.current = refreshTick;
+    if (hasDataForPeriod && !forceRefresh) {
+      setHeroChartLoading((prev) =>
+        prev[heroPeriod] ? { ...prev, [heroPeriod]: false } : prev
+      );
+      return;
+    }
 
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const period = heroPeriod;
     const currentAuth = { email, token };
     setChartError(null);
+    setHeroChartLoading((prev) => ({ ...prev, [period]: true }));
 
     (async () => {
       try {
@@ -428,12 +517,16 @@ export default function DashboardScreen() {
 
           // Auto-retry transient chart failures so users don't need to switch periods manually.
           const retries = heroRetryCountRef.current[period] ?? 0;
-          if (retries < 2) {
+          if (retries < 5) {
             heroRetryCountRef.current[period] = retries + 1;
             retryTimer = setTimeout(() => {
               if (!cancelled) setHeroRetryTick((tick) => tick + 1);
             }, 1200 * (retries + 1));
           }
+        }
+      } finally {
+        if (!cancelled) {
+          setHeroChartLoading((prev) => ({ ...prev, [period]: false }));
         }
       }
     })();
@@ -451,6 +544,7 @@ export default function DashboardScreen() {
     monthChart.length,
     todayChart.length,
     heroRetryTick,
+    refreshTick,
   ]);
 
   // Sparkline fade-cross when heroPeriod changes (number of bars differs per period).
@@ -553,6 +647,71 @@ export default function DashboardScreen() {
     });
   };
 
+  const closeOrderDetail = () => {
+    setDetailSale(null);
+    setDetailOrder(null);
+    setDetailError(null);
+    setDetailLoading(false);
+  };
+
+  const openOrderDetail = async (order: RecentOrder) => {
+    haptic.light();
+
+    const statusMeta = recentOrderStatusMeta(order.rawStatus ?? order.status);
+    const itemSummary = (order.item || "").trim();
+    const moduleSummary = order.module ? order.module.trim() : "";
+    const itemsLine = [itemSummary, moduleSummary].filter(Boolean).join(" · ");
+    const preview = {
+      total: order.total,
+      status: order.rawStatus ?? order.status,
+      statusLabel: statusMeta.label,
+      statusColor: statusMeta.color,
+      payment: order.payment,
+      items: itemsLine || undefined,
+      time: order.time,
+    };
+
+    setDetailSale({
+      order_id: order.id,
+      date: order.rawTime ?? order.time,
+      preview,
+    });
+    setDetailOrder(null);
+    setDetailError(null);
+
+    if (API_TARGET !== "official") {
+      setDetailError(t("sales_detail_unavailable"));
+      return;
+    }
+
+    if (!order.rawId) {
+      setDetailError(t("sales_detail_unavailable"));
+      return;
+    }
+
+    // If we're offline, skip the network call and let the modal render the
+    // preview from the recent-orders row data so the user can still inspect
+    // basic order info.
+    if (!online) {
+      setDetailError(t("sales_detail_load_error"));
+      return;
+    }
+
+    setDetailLoading(true);
+    try {
+      const data = await fetchOfficialOrderDetail(order.rawId, { email, token });
+      if (!data) {
+        setDetailError(t("sales_detail_load_error"));
+      } else {
+        setDetailOrder(data);
+      }
+    } catch {
+      setDetailError(t("sales_detail_load_error"));
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
   // Dining Options & Sales Methods — synced to heroPeriod (today/week/month).
   const diningAnim = useRef(new Animated.Value(1)).current;
   const salesMethodAnim = useRef(new Animated.Value(1)).current;
@@ -647,8 +806,19 @@ export default function DashboardScreen() {
           return;
         } catch (err) {
           console.log("[pos-breakdown] fetch failed:", err);
-          applyDining([]);
-          applySalesMethods([]);
+          // Keep last known dining/sales-method data; just restore visibility.
+          if (!cancelled) {
+            Animated.timing(diningAnim, {
+              toValue: 1,
+              duration: 220,
+              useNativeDriver: true,
+            }).start();
+            Animated.timing(salesMethodAnim, {
+              toValue: 1,
+              duration: 220,
+              useNativeDriver: true,
+            }).start();
+          }
           return;
         }
       }
@@ -677,7 +847,7 @@ export default function DashboardScreen() {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, email, heroPeriod, token, diningAnim, salesMethodAnim]);
+  }, [authLoading, email, heroPeriod, token, diningAnim, salesMethodAnim, refreshTick]);
 
   // Top Selling Items — synced to heroPeriod (today/week/month).
   const topListAnim = useRef(new Animated.Value(1)).current;
@@ -726,8 +896,8 @@ export default function DashboardScreen() {
           return;
         } catch (err) {
           console.log("[top-items] fetch failed:", err);
+          // Keep last known top products; restore visibility only.
           if (!cancelled) {
-            setTopProducts([]);
             Animated.timing(topListAnim, {
               toValue: 1,
               duration: 160,
@@ -757,7 +927,7 @@ export default function DashboardScreen() {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, email, heroPeriod, token, topListAnim]);
+  }, [authLoading, email, heroPeriod, token, topListAnim, refreshTick]);
 
   useEffect(() => {
     if (API_TARGET === "official" && authLoading) {
@@ -773,12 +943,12 @@ export default function DashboardScreen() {
     setRefreshing(true);
     if (API_TARGET === "official") {
       invalidateOfficialDashboardCaches();
-      // Clear in-component series so the period-loader re-fetches the
-      // currently-active hero chart after caches are dropped.
-      setChart([]);
-      setMonthChart([]);
-      setTodayChart([]);
     }
+    // Bump refreshTick to force period-keyed effects (hero chart, top items,
+    // dining/sales breakdown) to re-fetch even when cached. We intentionally
+    // do NOT clear cached arrays here so the UI keeps showing the last known
+    // data if the network is flaky.
+    setRefreshTick((tick) => tick + 1);
     await fetchAll();
     haptic.success();
     setRefreshing(false);
@@ -786,7 +956,10 @@ export default function DashboardScreen() {
 
   const maxRevenue = Math.max(...chart.map((p) => p.revenue), 1);
 
-  const weekRevenue = chart.reduce((acc, p) => acc + p.revenue, 0);
+  const weekRevenue =
+    API_TARGET === "official"
+      ? parseMoney(summary?.week_revenue)
+      : chart.reduce((acc, p) => acc + p.revenue, 0);
   const todayRevenue =
     API_TARGET === "official"
       ? parseMoney(summary?.today_sales)
@@ -802,13 +975,17 @@ export default function DashboardScreen() {
     return ((curr - prev) / prev) * 100;
   };
   const monthChange = summary?.revenue_change_pct ?? 0;
-  const weekChange = (() => {
+  const weekMomentumProxy = (() => {
     if (chart.length < 7) return 0;
     const firstHalf = chart.slice(0, 4).reduce((a, p) => a + p.revenue, 0);
     const secondHalf = chart.slice(4).reduce((a, p) => a + p.revenue, 0);
     // Scale halves to equal-day averages before comparing.
     return pctChange(secondHalf / 3, firstHalf / 4);
   })();
+  const weekChange =
+    API_TARGET === "official"
+      ? summary?.week_revenue_change_pct ?? 0
+      : weekMomentumProxy;
   const todayChange =
     API_TARGET === "official"
       ? summary?.today_revenue_change_pct ?? 0
@@ -937,6 +1114,41 @@ export default function DashboardScreen() {
         })()
       : displayChart;
   const heroChartMax = Math.max(...heroChart.map((p) => p.revenue), 1);
+  // Fallback shape so the spark never renders as a blank area when the period
+  // has no data yet (e.g., today before any orders, or transient fetch miss).
+  // Bars will draw at the min-height stub so users still see the chart shell.
+  const fallbackHeroChart: ChartPoint[] = (() => {
+    if (heroPeriod === "today") {
+      return [0, 3, 6, 9, 12, 15, 18, 21].map((h) => {
+        const suffix = h >= 12 ? "p" : "a";
+        const h12 = h % 12 === 0 ? 12 : h % 12;
+        return { day: `${h12}${suffix}`, revenue: 0 };
+      });
+    }
+    if (heroPeriod === "week") {
+      return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => ({
+        day: d,
+        revenue: 0,
+      }));
+    }
+    return ["W1", "W2", "W3", "W4"].map((d) => ({ day: d, revenue: 0 }));
+  })();
+  const effectiveHeroChart = heroChart.length > 0 ? heroChart : fallbackHeroChart;
+  const effectiveHeroChartMax = Math.max(
+    ...effectiveHeroChart.map((p) => p.revenue),
+    1
+  );
+  const hasCachedForPeriod =
+    heroPeriod === "week"
+      ? lastNonEmptyHeroChartRef.current.week.length > 0
+      : heroPeriod === "month"
+      ? lastNonEmptyHeroChartRef.current.month.length > 0
+      : lastNonEmptyHeroChartRef.current.today.length > 0;
+  const showHeroSparkSkeleton =
+    API_TARGET === "official" &&
+    heroChartLoading[heroPeriod] &&
+    displayChart.length === 0 &&
+    !hasCachedForPeriod;
   const currentHeroBucketLabel = (() => {
     void nowTick;
     if (heroPeriod === "month") {
@@ -1006,11 +1218,21 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView style={styles.safeContainer} edges={["top"]}>
+      <OfflineNotice />
+      <TopProgressBar visible={refreshing && !loading} />
       <ScrollView
         style={styles.container}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={GOLD} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={false}
+            onRefresh={onRefresh}
+            tintColor="transparent"
+            colors={["transparent"]}
+            progressBackgroundColor="transparent"
+          />
+        }
       >
         {/* Header */}
         <View style={styles.header}>
@@ -1069,15 +1291,63 @@ export default function DashboardScreen() {
         </View>
 
         {loading ? (
-          <>
-            <Skeleton height={110} radius={22} />
-            <View style={styles.kpiRow}>
-              <Skeleton height={86} radius={16} style={{ flex: 1 } as any} />
-              <Skeleton height={86} radius={16} style={{ flex: 1 } as any} />
-              <Skeleton height={86} radius={16} style={{ flex: 1 } as any} />
+          <View style={styles.bootSkeleton}>
+            {/* Hero block — eyebrow → big value → meta line, all text-shape */}
+            <View style={styles.bootHero}>
+              <View style={styles.bootHeroHeadRow}>
+                <Skeleton width={120} height={10} radius={3} />
+                <View style={styles.bootHeroDots}>
+                  <Skeleton width={6} height={6} radius={3} />
+                  <Skeleton width={14} height={6} radius={3} />
+                  <Skeleton width={6} height={6} radius={3} />
+                </View>
+              </View>
+              <Skeleton width={"62%" as any} height={40} radius={6} style={styles.bootHeroValue as any} />
+              <View style={styles.bootHeroMetaRow}>
+                <Skeleton width={56} height={14} radius={7} />
+                <Skeleton width={140} height={10} radius={3} />
+              </View>
             </View>
-            <Skeleton height={170} radius={22} />
-          </>
+
+            {/* KPI row — flat cells with hairline dividers (matches real layout) */}
+            <View style={styles.kpiRow}>
+              <View style={styles.bootKpiCell}>
+                <Skeleton width={16} height={16} radius={4} />
+                <Skeleton width={"60%" as any} height={20} radius={5} style={styles.bootKpiValue as any} />
+                <Skeleton width={"75%" as any} height={9} radius={3} />
+              </View>
+              <View style={styles.kpiDivider} />
+              <View style={styles.bootKpiCell}>
+                <Skeleton width={16} height={16} radius={4} />
+                <Skeleton width={"55%" as any} height={20} radius={5} style={styles.bootKpiValue as any} />
+                <Skeleton width={"70%" as any} height={9} radius={3} />
+              </View>
+              <View style={styles.kpiDivider} />
+              <View style={styles.bootKpiCell}>
+                <Skeleton width={16} height={16} radius={4} />
+                <Skeleton width={"65%" as any} height={20} radius={5} style={styles.bootKpiValue as any} />
+                <Skeleton width={"70%" as any} height={9} radius={3} />
+              </View>
+            </View>
+
+            {/* Section label */}
+            <View style={styles.bootSectionRow}>
+              <Skeleton width={140} height={10} radius={3} />
+              <Skeleton width={50} height={10} radius={3} />
+            </View>
+
+            {/* List rows — flat lines, no card backgrounds */}
+            {[0, 1, 2].map((i) => (
+              <View key={i} style={styles.bootListRow}>
+                <Skeleton width={36} height={36} radius={10} />
+                <View style={styles.bootListRowText}>
+                  <Skeleton width={`${70 - i * 10}%` as any} height={12} radius={3} />
+                  <Skeleton width={"100%" as any} height={4} radius={2} />
+                </View>
+                <Skeleton width={40} height={12} radius={3} />
+              </View>
+            ))}
+          </View>
         ) : (
           <>
             {/* Store strip — tap to filter (visual compare for now) */}
@@ -1194,7 +1464,13 @@ export default function DashboardScreen() {
                   )}
                 </View>
               </View>
-              {displayChart.length > 0 && (
+              {showHeroSparkSkeleton ? (
+                <View style={styles.sparkSkeleton} pointerEvents="none">
+                  {[20, 36, 26, 44, 30, 48, 28].map((h, i) => (
+                    <Skeleton key={`spark-skel-${i}`} width={5} height={h} radius={2} />
+                  ))}
+                </View>
+              ) : (
                 <Pressable
                   accessibilityLabel={`Open detailed ${currentHero.label} chart`}
                   onPress={() => {
@@ -1219,9 +1495,12 @@ export default function DashboardScreen() {
                       },
                     ]}
                   >
-                    {heroChart.map((p, i) => {
-                      const heightPct = Math.max(p.revenue / heroChartMax, 0.08);
-                      const isLast = i === heroChart.length - 1;
+                    {effectiveHeroChart.map((p, i) => {
+                      const heightPct = Math.max(
+                        p.revenue / effectiveHeroChartMax,
+                        0.12
+                      );
+                      const isLast = i === effectiveHeroChart.length - 1;
                       const isActive =
                         heroPeriod === "today" || heroPeriod === "month"
                           ? p.day === currentHeroBucketLabel
@@ -1358,13 +1637,23 @@ export default function DashboardScreen() {
                 >
                   {(() => {
                     const maxUnits = Math.max(...topProducts.map((p) => p.units), 1);
+                    // Tiered gold tints — #1 brightest, descending so the
+                    // ranking reads at a glance via the bar saturation alone.
+                    const rankFill = [
+                      GOLD,
+                      GOLD + "cc",
+                      GOLD + "99",
+                    ];
                     return topProducts.map((p, i) => {
                       const pct = Math.max(0.04, p.units / maxUnits);
                       const initial = (p.name?.trim()?.[0] ?? "?").toUpperCase();
+                      const fillColor =
+                        i < rankFill.length ? rankFill[i] : GOLD + "66";
+                      const showRankBadge = i < 3;
                       return (
                         <View
                           key={p.id}
-                          accessibilityLabel={`${p.name}, ${p.units} sold`}
+                          accessibilityLabel={`${p.name}, rank ${i + 1}, ${p.units} sold`}
                           style={[
                             styles.topRow,
                             i !== topProducts.length - 1 && styles.topRowDivider,
@@ -1380,6 +1669,20 @@ export default function DashboardScreen() {
                             ) : (
                               <Text style={styles.topThumbText}>{initial}</Text>
                             )}
+                            {showRankBadge && (
+                              <View
+                                style={[
+                                  styles.topRankBadge,
+                                  i === 0 && styles.topRankBadgeGold,
+                                  i === 1 && styles.topRankBadgeSilver,
+                                  i === 2 && styles.topRankBadgeBronze,
+                                ]}
+                              >
+                                <Text style={styles.topRankBadgeText}>
+                                  {i + 1}
+                                </Text>
+                              </View>
+                            )}
                           </View>
                           <View style={styles.topBody}>
                             <View style={styles.topBodyRow}>
@@ -1390,7 +1693,13 @@ export default function DashboardScreen() {
                             </View>
                             <View style={styles.topBarTrack}>
                               <View
-                                style={[styles.topBarFill, { width: `${Math.round(pct * 100)}%` }]}
+                                style={[
+                                  styles.topBarFill,
+                                  {
+                                    width: `${Math.round(pct * 100)}%`,
+                                    backgroundColor: fillColor,
+                                  },
+                                ]}
                               />
                             </View>
                           </View>
@@ -1402,97 +1711,185 @@ export default function DashboardScreen() {
               </>
             )}
 
-            {/* Dining Options */}
-            {(diningOptions.length > 0 || diningEverHadData) && (
-              <>
-                <SectionLabel
-                  label={`${t("dashboard_dining_options")} · ${periodLabel}`}
-                />
-                <Animated.View
-                  style={[
-                    styles.diningCard,
-                    {
-                      opacity: diningAnim,
-                      transform: [
-                        {
-                          scale: diningAnim.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [0.96, 1],
-                          }),
-                        },
-                        {
-                          translateY: diningAnim.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [8, 0],
-                          }),
-                        },
-                      ],
-                    },
-                  ]}
-                >
-                  <View style={styles.diningChartContainer}>
-                    {diningOptions.length > 0 ? (
-                      <DonutChart items={diningOptions} width={240} height={200} radius={50} strokeWidth={28} />
-                    ) : (
-                      <View style={styles.diningEmpty}>
-                        <Text style={styles.diningEmptyText}>{t("dashboard_no_recent_orders")}</Text>
+            {/* Unified breakdown card — switches between Dining Options and
+                Sales Methods via a segmented tab so the two donuts share one
+                section of vertical space instead of stacking. */}
+            {(diningOptions.length > 0 ||
+              diningEverHadData ||
+              salesMethods.length > 0 ||
+              salesMethodEverHadData) && (() => {
+              const hasDining = diningOptions.length > 0 || diningEverHadData;
+              const hasMethods = salesMethods.length > 0 || salesMethodEverHadData;
+              // Auto-pin to whichever tab has data when only one side is populated.
+              const activeTab = !hasDining
+                ? "methods"
+                : !hasMethods
+                ? "dining"
+                : donutTab;
+              const showDining = activeTab === "dining";
+              const items = showDining ? diningOptions : salesMethods;
+              const anim = showDining ? diningAnim : salesMethodAnim;
+              const sectionTitle = showDining
+                ? t("dashboard_dining_options")
+                : t("dashboard_sales_methods");
+              return (
+                <>
+                  <SectionLabel
+                    label={`${t("dashboard_breakdown")} · ${periodLabel}`}
+                  />
+                  {hasDining && hasMethods && (() => {
+                    const padding = 4;
+                    const thumbWidth =
+                      donutTabRowWidth > 0
+                        ? (donutTabRowWidth - padding * 2) / 2
+                        : 0;
+                    return (
+                      <View
+                        style={styles.donutTabRow}
+                        onLayout={(e) =>
+                          setDonutTabRowWidth(e.nativeEvent.layout.width)
+                        }
+                      >
+                        {thumbWidth > 0 && (
+                          <Animated.View
+                            pointerEvents="none"
+                            style={[
+                              styles.donutTabThumb,
+                              {
+                                width: thumbWidth,
+                                transform: [
+                                  {
+                                    translateX: donutTabAnim.interpolate({
+                                      inputRange: [0, 1],
+                                      outputRange: [0, thumbWidth],
+                                    }),
+                                  },
+                                ],
+                              },
+                            ]}
+                          />
+                        )}
+                        <Pressable
+                          accessibilityLabel={t("dashboard_dining_options")}
+                          onPress={() => {
+                            haptic.selection();
+                            setDonutTab("dining");
+                          }}
+                          style={styles.donutTab}
+                        >
+                          <Ionicons
+                            name="restaurant-outline"
+                            size={14}
+                            color={activeTab === "dining" ? GOLD : TEXT_DIM}
+                          />
+                          <Text
+                            style={[
+                              styles.donutTabText,
+                              activeTab === "dining" && styles.donutTabTextActive,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {t("dashboard_dining_options")}
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          accessibilityLabel={t("dashboard_sales_methods")}
+                          onPress={() => {
+                            haptic.selection();
+                            setDonutTab("methods");
+                          }}
+                          style={styles.donutTab}
+                        >
+                          <Ionicons
+                            name="card-outline"
+                            size={14}
+                            color={activeTab === "methods" ? GOLD : TEXT_DIM}
+                          />
+                          <Text
+                            style={[
+                              styles.donutTabText,
+                              activeTab === "methods" && styles.donutTabTextActive,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {t("dashboard_sales_methods")}
+                          </Text>
+                        </Pressable>
                       </View>
-                    )}
-                  </View>
-                </Animated.View>
-              </>
-            )}
-
-            {/* Sales Methods */}
-            {(salesMethods.length > 0 || salesMethodEverHadData) && (
-              <>
-                <SectionLabel
-                  label={`${t("dashboard_sales_methods")} · ${periodLabel}`}
-                />
-                <Animated.View
-                  style={[
-                    styles.diningCard,
-                    {
-                      opacity: salesMethodAnim,
-                      transform: [
-                        {
-                          scale: salesMethodAnim.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [0.96, 1],
-                          }),
-                        },
-                        {
-                          translateY: salesMethodAnim.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [8, 0],
-                          }),
-                        },
-                      ],
-                    },
-                  ]}
-                >
-                  <View style={styles.diningChartContainer}>
-                    {salesMethods.length > 0 ? (
-                      <DonutChart items={salesMethods} width={240} height={200} radius={50} strokeWidth={28} />
-                    ) : (
-                      <View style={styles.diningEmpty}>
-                        <Text style={styles.diningEmptyText}>{t("dashboard_no_recent_orders")}</Text>
-                      </View>
-                    )}
-                  </View>
-                </Animated.View>
-              </>
-            )}
+                    );
+                  })()}
+                  <Animated.View
+                    key={activeTab}
+                    style={[
+                      styles.diningCard,
+                      {
+                        opacity: anim,
+                        transform: [
+                          {
+                            scale: anim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [0.96, 1],
+                            }),
+                          },
+                          {
+                            translateY: anim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [8, 0],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  >
+                    <View style={styles.diningChartContainer}>
+                      {items.length > 0 ? (
+                        <DonutChart
+                          items={items}
+                          width={170}
+                          height={170}
+                          radius={66}
+                          strokeWidth={16}
+                          layout="row"
+                          centerLabel={sectionTitle}
+                          centerValue={items[0]?.label}
+                          formatValue={(v) => `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                        />
+                      ) : (
+                        <View style={styles.diningEmpty}>
+                          <Text style={styles.diningEmptyText}>{t("dashboard_no_recent_orders")}</Text>
+                        </View>
+                      )}
+                    </View>
+                  </Animated.View>
+                </>
+              );
+            })()}
 
             {/* Recent Orders */}
             <SectionLabel
               label={t("dashboard_recent_orders")}
+              leading={
+                orders.length > 0 ? (
+                  <View style={styles.livePill}>
+                    <PulsingDot color={SUCCESS} size={5} active />
+                    <Text style={styles.livePillText}>
+                      {t("dashboard_live").toUpperCase()}
+                    </Text>
+                  </View>
+                ) : null
+              }
               right={
                 <Pressable
                   accessibilityLabel={t("dashboard_see_all")}
                   onPress={() => {
                     haptic.selection();
-                    router.push("/(tabs)/sales");
+                    router.push({
+                      pathname: "/(tabs)/sales",
+                      params: {
+                        openWeekTxn: "1",
+                        intentId: String(Date.now()),
+                      },
+                    });
                   }}
                   style={({ pressed }) => [
                     styles.seeAllChip,
@@ -1513,13 +1910,18 @@ export default function DashboardScreen() {
             ) : (
               <View style={styles.orderList}>
                 {orders.map((order, i) => {
-                  const glyph = orderGlyph(order.module);
-                  const done = order.status === "completed";
+                  const glyph = orderGlyph(order.payment);
+                  const statusMeta = recentOrderStatusMeta(order.rawStatus ?? order.status);
+                  const detailText = (order.item || "")
+                    .replace(/\s*[•]\s*/g, " · ")
+                    .trim();
                   return (
                     <Pressable
                       key={order.id}
                       accessibilityLabel={`Order ${order.id}, ${order.status}`}
-                      onPress={() => haptic.light()}
+                      onPress={() => {
+                        void openOrderDetail(order);
+                      }}
                       style={({ pressed }) => [
                         styles.orderRow,
                         i !== orders.length - 1 && styles.orderRowDivider,
@@ -1530,11 +1932,18 @@ export default function DashboardScreen() {
                         <Ionicons name={glyph.icon} size={16} color={glyph.color} />
                       </View>
                       <View style={styles.orderMiddle}>
-                        <Text style={styles.orderItem} numberOfLines={1}>
-                          {order.item}
-                        </Text>
+                        <View style={styles.orderTopRow}>
+                          <Text style={styles.orderId} numberOfLines={1}>
+                            {order.id}
+                          </Text>
+                          <View style={styles.orderModTag}>
+                            <Text style={styles.orderModTagText}>{order.module}</Text>
+                          </View>
+                        </View>
                         <Text style={styles.orderSub} numberOfLines={1}>
-                          {order.time} · {order.module}
+                          {detailText
+                            ? `${order.time} · ${detailText} · ${order.payment ?? "Card"}`
+                            : `${order.time} · ${order.payment ?? "Card"}`}
                         </Text>
                       </View>
                       <View style={styles.orderRight}>
@@ -1543,16 +1952,16 @@ export default function DashboardScreen() {
                           <View
                             style={[
                               styles.orderStatusDot,
-                              { backgroundColor: done ? SUCCESS : WARNING },
+                              { backgroundColor: statusMeta.color },
                             ]}
                           />
                           <Text
                             style={[
                               styles.orderStatusText,
-                              { color: done ? SUCCESS : WARNING },
+                              { color: statusMeta.color },
                             ]}
                           >
-                            {done ? t("dashboard_done") : t("dashboard_in_progress")}
+                            {statusMeta.label}
                           </Text>
                         </View>
                       </View>
@@ -2049,6 +2458,13 @@ export default function DashboardScreen() {
         </Animated.View>
         </SafeAreaProvider>
       </Modal>
+      <OrderDetailModal
+        sale={detailSale}
+        order={detailOrder}
+        loading={detailLoading}
+        error={detailError}
+        onClose={closeOrderDetail}
+      />
     </SafeAreaView>
   );
 }
@@ -2229,7 +2645,7 @@ const styles = StyleSheet.create({
     width: 5,
     backgroundColor: "rgba(212,175,55,0.25)",
     borderRadius: 2,
-    minHeight: 4,
+    minHeight: 6,
   },
   sparkBarActive: {
     backgroundColor: GOLD,
@@ -2242,6 +2658,15 @@ const styles = StyleSheet.create({
   sparkLabelActive: {
     color: GOLD,
     fontWeight: "700",
+  },
+  sparkSkeleton: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "flex-end",
+    gap: 4,
+    height: 64,
+    width: 80,
+    paddingBottom: 16,
   },
 
   // ─── Detailed chart full-page ─────────────────────────────────────────
@@ -2720,6 +3145,64 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
+  // ─── Initial dashboard loading skeleton ───────────────────────────────
+  // Unified, flat layout (no card backgrounds) that mirrors the real hero +
+  // KPI + list structure so the first paint feels like a quiet preview of
+  // the dashboard rather than a wall of stacked rectangles.
+  bootSkeleton: {
+    gap: 0,
+  },
+  bootHero: {
+    paddingVertical: 4,
+    gap: 14,
+  },
+  bootHeroHeadRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  bootHeroDots: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  bootHeroValue: {
+    marginTop: 2,
+  },
+  bootHeroMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  bootKpiCell: {
+    flex: 1,
+    gap: 6,
+    paddingHorizontal: 4,
+    alignItems: "flex-start",
+  },
+  bootKpiValue: {
+    marginTop: 2,
+  },
+  bootSectionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 24,
+    marginBottom: 12,
+  },
+  bootListRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CARD_BORDER,
+  },
+  bootListRowText: {
+    flex: 1,
+    gap: 8,
+  },
+
   seeAll: {
     fontSize: 12,
     color: TEXT,
@@ -2792,11 +3275,29 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   orderMiddle: { flex: 1, gap: 3 },
-  orderItem: {
+  orderTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  orderId: {
+    flexShrink: 1,
     fontSize: 14,
     fontWeight: "600",
     color: TEXT,
     letterSpacing: -0.1,
+  },
+  orderModTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: "rgba(59,130,246,0.16)",
+  },
+  orderModTagText: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+    color: "#3b82f6",
   },
   orderSub: {
     fontSize: 11,
@@ -2947,15 +3448,99 @@ const styles = StyleSheet.create({
     backgroundColor: GOLD,
   },
   diningCard: {
-    backgroundColor: CARD,
-    borderRadius: 22,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
+    // Flat container — matches the dashboard's borderless, hairline-divided
+    // sections so the donut + legend reads as part of the page rather than
+    // a heavy boxed widget floating in the middle of the screen.
+    paddingTop: 6,
+    paddingBottom: 14,
   },
-  diningChartContainer: {
+  // Unified donut card — segmented tab with an animated sliding thumb that
+  // glides between Dining Options and Sales Methods.
+  donutTabRow: {
+    flexDirection: "row",
+    backgroundColor: CARD,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: CARD_BORDER,
+    padding: 4,
+    marginBottom: 6,
+    position: "relative",
+    overflow: "hidden",
+  },
+  donutTabThumb: {
+    position: "absolute",
+    top: 4,
+    bottom: 4,
+    left: 4,
+    borderRadius: 10,
+    backgroundColor: GOLD + "1f",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: GOLD + "45",
+  },
+  donutTab: {
+    flex: 1,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: 6,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+  },
+  donutTabText: {
+    color: TEXT_DIM,
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.3,
+  },
+  donutTabTextActive: {
+    color: GOLD,
+    fontWeight: "700",
+  },
+  // Live pulsing pill for Recent Orders section header.
+  livePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: SUCCESS + "1a",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: SUCCESS + "33",
+  },
+  livePillText: {
+    color: SUCCESS,
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+  },
+  // Top-3 rank medal overlay on the thumb of top selling items.
+  topRankBadge: {
+    position: "absolute",
+    top: -4,
+    left: -4,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: BG,
+  },
+  topRankBadgeGold: { backgroundColor: GOLD },
+  topRankBadgeSilver: { backgroundColor: "#c0c4cc" },
+  topRankBadgeBronze: { backgroundColor: "#cd7f32" },
+  topRankBadgeText: {
+    color: "#181e38",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.2,
+  },
+  diningChartContainer: {
+    alignItems: "stretch",
+    justifyContent: "flex-start",
   },
   diningEmpty: {
     height: 200,
