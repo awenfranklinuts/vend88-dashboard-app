@@ -296,6 +296,13 @@ function shortMoney(n: number): string {
   return `$${Math.round(n).toLocaleString()}`;
 }
 
+function formatCurrencyExact(n: number, locale?: string): string {
+  return `$${n.toLocaleString(locale, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 /**
  * Reliable dashed horizontal line for React Native.
  * `borderStyle: "dashed"` with `borderTopWidth` is unreliable across iOS/Android,
@@ -1724,7 +1731,7 @@ export default function DashboardScreen() {
                       return (
                         <View
                           key={p.id}
-                          accessibilityLabel={`${p.name}, rank ${i + 1}, ${shortMoney(parseMoney(p.revenue))} in sales`}
+                          accessibilityLabel={`${p.name}, rank ${i + 1}, ${formatCurrencyExact(parseMoney(p.revenue), locale)} in sales`}
                           style={[
                             styles.topRow,
                             i !== topProducts.length - 1 && styles.topRowDivider,
@@ -1746,7 +1753,7 @@ export default function DashboardScreen() {
                               <Text style={styles.topName} numberOfLines={1}>
                                 {p.name}
                               </Text>
-                              <Text style={styles.topUnits}>{shortMoney(parseMoney(p.revenue))}</Text>
+                              <Text style={styles.topUnits}>{formatCurrencyExact(parseMoney(p.revenue), locale)}</Text>
                             </View>
                             <View style={styles.topBarTrack}>
                               <View
@@ -2098,7 +2105,7 @@ export default function DashboardScreen() {
                     return (
                       <View
                         key={`${p.id}-${i}`}
-                        accessibilityLabel={`${p.name}, ${shortMoney(parseMoney(p.revenue))} in sales`}
+                        accessibilityLabel={`${p.name}, ${formatCurrencyExact(parseMoney(p.revenue), locale)} in sales`}
                         style={[
                           styles.topRow,
                           i !== topAll.length - 1 && styles.topRowDivider,
@@ -2121,7 +2128,7 @@ export default function DashboardScreen() {
                             <Text style={styles.topName} numberOfLines={1}>
                               {p.name}
                             </Text>
-                            <Text style={styles.topUnits}>{shortMoney(parseMoney(p.revenue))}</Text>
+                            <Text style={styles.topUnits}>{formatCurrencyExact(parseMoney(p.revenue), locale)}</Text>
                           </View>
                           <View style={styles.topBarTrack}>
                             <View
@@ -2481,7 +2488,7 @@ export default function DashboardScreen() {
                         <Ionicons name="trending-up" size={12} color={SUCCESS} />
                         <Text style={styles.calloutLabel}>{t("dashboard_chart_best")}</Text>
                         <Text style={styles.calloutValue}>
-                          {localizedDisplayChart[peakIdx]?.day} · {shortMoney(peak)}
+                          {localizedDisplayChart[peakIdx]?.day} · {formatCurrencyExact(peak, locale)}
                         </Text>
                       </Pressable>
                       <Pressable
@@ -2496,7 +2503,7 @@ export default function DashboardScreen() {
                         <Text style={styles.calloutLabel}>{t("dashboard_chart_slowest")}</Text>
                         <Text style={styles.calloutValue}>
                           {localizedDisplayChart[worstIdx]?.day} ·{" "}
-                          {shortMoney(localizedDisplayChart[worstIdx]?.revenue ?? 0)}
+                          {formatCurrencyExact(localizedDisplayChart[worstIdx]?.revenue ?? 0, locale)}
                         </Text>
                       </Pressable>
                     </View>

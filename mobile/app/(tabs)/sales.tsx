@@ -4561,7 +4561,7 @@ export default function SalesScreen() {
                               </Text>
                             </View>
                             <Text style={styles.paymentAmount}>
-                              {formatCurrency(d.value, 0)}
+                              {formatCurrency(d.value, 2)}
                             </Text>
                             <Text style={styles.paymentPct}>
                               {d.pct.toFixed(0)}%
@@ -4633,7 +4633,7 @@ export default function SalesScreen() {
                           </Text>
                         </View>
                         <Text style={styles.paymentAmount}>
-                          {formatCurrency(p.value, 0)}
+                          {formatCurrency(p.value, 2)}
                         </Text>
                         <Text style={styles.paymentPct}>
                           {p.pct.toFixed(0)}%
@@ -4704,7 +4704,7 @@ export default function SalesScreen() {
                             </Text>
                           </View>
                           <Text style={styles.paymentAmount}>
-                            {formatCurrency(m.revenue, 0)}
+                            {formatCurrency(m.revenue, 2)}
                           </Text>
                           <Text style={styles.paymentPct}>
                             {m.pct.toFixed(0)}%
@@ -4764,7 +4764,7 @@ export default function SalesScreen() {
                               {item.units}
                             </Text>
                             <Text style={styles.paymentAmount}>
-                              {formatCurrency(parseFloat(item.revenue), 0)}
+                              {formatCurrency(parseFloat(item.revenue), 2)}
                             </Text>
                           </View>
                         );
