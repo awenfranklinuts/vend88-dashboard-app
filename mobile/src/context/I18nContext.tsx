@@ -722,7 +722,7 @@ const translations = {
     dashboard_chart_avg_active: "活跃时段均值",
     dashboard_chart_peak: "峰值",
     dashboard_chart_highlight_peak: "高亮峰值区间",
-    dashboard_chart_best: "最佳",
+    dashboard_chart_best: "最高",
     dashboard_chart_highlight_best: "高亮最佳区间",
     dashboard_chart_slowest: "最低",
     dashboard_chart_highlight_slowest: "高亮最慢区间",
