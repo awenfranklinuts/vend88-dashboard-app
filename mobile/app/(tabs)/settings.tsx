@@ -21,7 +21,7 @@ import {
   LOCK_GRACE_OPTIONS,
   useAppLock,
 } from "../../src/context/AppLockContext";
-import { api } from "../../src/services/api";
+import { api, isDemoMode } from "../../src/services/api";
 import { haptic } from "../../src/utils/haptics";
 import {
   BG,
@@ -187,7 +187,17 @@ export default function SettingsScreen() {
     }
   }, [defaultProfileName, profileEmail]);
 
+  const isDemo = isDemoMode();
+
   const toggleBiometric = async (value: boolean) => {
+    if (isDemo) {
+      haptic.warning?.();
+      Alert.alert(
+        t("settings_biometric_lock"),
+        "Biometric lock is disabled while using the demo account."
+      );
+      return;
+    }
     haptic.selection();
     const ok = value
       ? await enableLock(t("settings_enable_biometric"))
@@ -317,21 +327,23 @@ export default function SettingsScreen() {
             icon="finger-print-outline"
             label={t("settings_biometric_lock")}
             hint={
-              biometricSupported
+              isDemo
+                ? "Not available in demo mode"
+                : biometricSupported
                 ? t("settings_require_biometric")
                 : t("settings_biometric_unavailable")
             }
             right={
               <Switch
-                value={biometric}
+                value={!isDemo && biometric}
                 onValueChange={toggleBiometric}
-                disabled={!biometricSupported}
+                disabled={isDemo || !biometricSupported}
                 trackColor={{ false: "rgba(255,255,255,0.1)", true: "rgba(212,175,55,0.5)" }}
-                thumbColor={biometric ? GOLD : "#f4f4f5"}
+                thumbColor={!isDemo && biometric ? GOLD : "#f4f4f5"}
               />
             }
           />
-          {biometric && biometricSupported ? (
+          {!isDemo && biometric && biometricSupported ? (
             <>
               <View style={styles.divider} />
               <Row
@@ -349,13 +361,6 @@ export default function SettingsScreen() {
               />
             </>
           ) : null}
-          <View style={styles.divider} />
-          <Row
-            icon="key-outline"
-            label={t("settings_change_password")}
-            hint={t("settings_update_password")}
-            onPress={() => Alert.alert(t("common_coming_soon"), t("settings_password_unavailable"))}
-          />
         </View>
 
         {/* Preferences */}

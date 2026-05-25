@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Dashboard",
+    "name": "VendDashboard",
     "slug": "vend88-dashboard-app",
     "version": "1.0.2",
     "orientation": "portrait",
@@ -16,7 +16,7 @@
         "ITSAppUsesNonExemptEncryption": false,
         "CFBundleDisplayName": "Dashboard"
       },
-      "buildNumber": "2"
+      "buildNumber": "5"
     },
     "android": {
       "package": "com.vend88.dashboard",

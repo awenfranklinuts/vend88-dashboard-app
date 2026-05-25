@@ -2,12 +2,13 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import * as SecureStore from "expo-secure-store";
 import { isAxiosError } from "axios";
 import { loginWithEmail } from "../services/authService";
-import { api, setAuthFailureHandler } from "../services/api";
+import { api, setAuthFailureHandler, setDemoMode } from "../services/api";
 
 const AUTH_TOKEN_KEY = "vend88-auth-token";
 const AUTH_EMAIL_KEY = "vend88-auth-email";
 const AUTH_FIRST_KEY = "vend88-auth-first-name";
 const AUTH_LAST_KEY = "vend88-auth-last-name";
+const AUTH_DEMO_KEY = "vend88-auth-demo";
 const BIOMETRIC_KEY = "vend88-biometric-enabled";
 const BIOMETRIC_ASKED_KEY = "vend88-biometric-asked";
 
@@ -23,6 +24,7 @@ type AuthContextType = {
   lastName: string | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<SignInResult>;
+  signInDemo: () => Promise<SignInResult>;
   signOut: () => Promise<void>;
 };
 
@@ -49,11 +51,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setEmail(null);
     setFirstName(null);
     setLastName(null);
+    setDemoMode(false);
     await Promise.all([
       SecureStore.deleteItemAsync(AUTH_TOKEN_KEY),
       SecureStore.deleteItemAsync(AUTH_EMAIL_KEY),
       SecureStore.deleteItemAsync(AUTH_FIRST_KEY),
       SecureStore.deleteItemAsync(AUTH_LAST_KEY),
+      SecureStore.deleteItemAsync(AUTH_DEMO_KEY),
       // Reset biometric lock onboarding/state so next login must re-enable it.
       SecureStore.deleteItemAsync(BIOMETRIC_KEY),
       SecureStore.deleteItemAsync(BIOMETRIC_ASKED_KEY),
@@ -120,12 +124,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const restoreAuth = async () => {
       try {
-        const [storedToken, storedEmail, storedFirst, storedLast] = await Promise.all([
+        const [storedToken, storedEmail, storedFirst, storedLast, storedDemo] = await Promise.all([
           SecureStore.getItemAsync(AUTH_TOKEN_KEY),
           SecureStore.getItemAsync(AUTH_EMAIL_KEY),
           SecureStore.getItemAsync(AUTH_FIRST_KEY),
           SecureStore.getItemAsync(AUTH_LAST_KEY),
+          SecureStore.getItemAsync(AUTH_DEMO_KEY),
         ]);
+        const isDemo = storedDemo === "1";
+        if (isDemo) setDemoMode(true);
         if (mounted) {
           if (storedToken) setToken(storedToken);
           if (storedEmail) setEmail(storedEmail);
@@ -133,7 +140,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (storedLast) setLastName(storedLast);
         }
         activeTokenRef.current = storedToken;
-        if (storedToken) {
+        if (storedToken && !isDemo) {
           const refreshState = await refreshProfile(storedToken);
           if (refreshState === "auth-failed") {
             await clearSession();
@@ -156,6 +163,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = async (email: string, password: string): Promise<SignInResult> => {
     try {
       const result = await loginWithEmail(email, password);
+      // Real sign-in always exits demo mode.
+      setDemoMode(false);
+      await SecureStore.deleteItemAsync(AUTH_DEMO_KEY);
       activeTokenRef.current = result.token;
       setToken(result.token);
       setEmail(email);
@@ -173,6 +183,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Enter the app in demo mode with a synthetic token and a fake profile.
+  // All API calls are short-circuited via setDemoMode → axios adapter, so the
+  // user sees zeroed/empty data everywhere without any real backend access.
+  const signInDemo = async (): Promise<SignInResult> => {
+    const demoToken = "demo-token";
+    const demoEmail = "demo@vend88.com";
+    setDemoMode(true);
+    activeTokenRef.current = demoToken;
+    setToken(demoToken);
+    setEmail(demoEmail);
+    setFirstName("Demo");
+    setLastName("User");
+    await Promise.all([
+      SecureStore.setItemAsync(AUTH_TOKEN_KEY, demoToken),
+      SecureStore.setItemAsync(AUTH_EMAIL_KEY, demoEmail),
+      SecureStore.setItemAsync(AUTH_FIRST_KEY, "Demo"),
+      SecureStore.setItemAsync(AUTH_LAST_KEY, "User"),
+      SecureStore.setItemAsync(AUTH_DEMO_KEY, "1"),
+      // Skip biometric prompt for demo sessions.
+      SecureStore.setItemAsync(BIOMETRIC_ASKED_KEY, "1"),
+      SecureStore.deleteItemAsync(BIOMETRIC_KEY),
+    ]);
+    return { ok: true };
+  };
+
   const signOut = async () => {
     await clearSession();
   };
@@ -185,6 +220,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       lastName,
       loading,
       signIn,
+      signInDemo,
       signOut,
     }),
     [token, email, firstName, lastName, loading]

@@ -59,6 +59,279 @@ export const api = axios.create({
   },
 });
 
+// ─── Demo mode ───────────────────────────────────────────────────────────────
+// When enabled, all outbound API requests are short-circuited with canned
+// empty/zero-shaped responses so the app can be explored without a backend.
+let demoModeEnabled = false;
+
+export function setDemoMode(enabled: boolean) {
+  demoModeEnabled = !!enabled;
+}
+
+export function isDemoMode(): boolean {
+  return demoModeEnabled;
+}
+
+// Build a permissive zero/empty payload tailored to the request URL so that
+// the various screens get a shape they can render without runtime errors.
+function buildDemoPayload(url: string): unknown {
+  const u = url.toLowerCase();
+
+  // ─── Demo sample data ──────────────────────────────────────────────────────
+  const demoShop = {
+    _id: "demo-shop",
+    business_id: "demo-business",
+    // shop_key intentionally omitted in demo mode so the storefront link
+    // renders as "N/A" instead of pointing at a non-existent demo URL.
+    name: "Demo Cafe",
+    store_name: "Demo Cafe",
+    location: "123 Sample Street, Sydney NSW 2000",
+    phone: "+61 2 0000 0000",
+    description: "Demo store used for previewing the dashboard.",
+    warehouse_id: "demo-warehouse",
+    max_perorderday: 100,
+    open_hour: {
+      monday: [["09:00", "17:00"]],
+      tuesday: [["09:00", "17:00"]],
+      wednesday: [["09:00", "17:00"]],
+      thursday: [["09:00", "17:00"]],
+      friday: [["09:00", "17:00"]],
+      saturday: [["10:00", "16:00"]],
+      sunday: [],
+    },
+    named_surcharges: {},
+    surcharge: {},
+    staff: [],
+  };
+
+  const demoBusiness = {
+    _id: "demo-business",
+    business_key: "DEMOBIZ",
+    name: "Demo Business",
+    shops: ["demo-shop"],
+  };
+
+  const demoProducts = [
+    { _id: "demo-prod-1", name: "Flat White", category: "Coffee", price: 5.5, stock: 120 },
+    { _id: "demo-prod-2", name: "Latte", category: "Coffee", price: 5.5, stock: 90 },
+    { _id: "demo-prod-3", name: "Croissant", category: "Bakery", price: 6.0, stock: 40 },
+    { _id: "demo-prod-4", name: "Sandwich", category: "Food", price: 12.0, stock: 25 },
+    { _id: "demo-prod-5", name: "Iced Tea", category: "Drinks", price: 6.5, stock: 60 },
+  ];
+
+  const demoOrders = Array.from({ length: 5 }).map((_, i) => ({
+    order_id: `demo-order-${i + 1}`,
+    order_num: 1000 + i,
+    source: "POS",
+    status: "COMPLETED",
+    time: new Date(Date.now() - i * 3600_000).toISOString(),
+    price: 10 + i * 5,
+    qtys: [1 + i],
+    pick_method: "IN_STORE",
+    transactions: [{ platform: "CASH" }],
+  }));
+
+  // Auth / profile
+  if (u.includes("/admin/profile")) {
+    return {
+      status_code: 200,
+      email: "demo@vend88.com",
+      first_name: "Demo",
+      last_name: "User",
+    };
+  }
+  if (u.includes("/admin/login")) {
+    return { status_code: 200, token: "demo-token" };
+  }
+
+  // Meta — selections used by dashboard discovery (we bypass discovery, but
+  // some callers still hit this directly).
+  if (u.includes("/meta/get_meta")) {
+    return {
+      status_code: 200,
+      meta: {
+        BUSINESS_SELECTION: "demo-business",
+        STORE_SELECTION: "demo-shop",
+      },
+    };
+  }
+  if (u.includes("/meta")) return { status_code: 200, meta: {} };
+
+  // Search endpoints
+  if (u.includes("/search/shop_search")) {
+    return { status_code: 200, shop: [demoShop] };
+  }
+  if (u.includes("/search/business_search")) {
+    return { status_code: 200, business: [demoBusiness] };
+  }
+  if (u.includes("/search/order_search")) {
+    return { status_code: 200, max_page: 1, orders: demoOrders };
+  }
+  if (u.includes("/search/product_search")) {
+    return { status_code: 200, product: demoProducts, products: demoProducts, total: demoProducts.length };
+  }
+
+  // Dashboard
+  if (u.includes("/dashboard/storestatistics")) {
+    return {
+      status_code: 200,
+      financial_summary: {
+        total_revenue: 1234.5,
+        total_tax: 112.0,
+        total_discount: 25.0,
+        total_refund: 0,
+        net_revenue: 1097.5,
+      },
+      operational_summary: {
+        total_orders: 42,
+        total_items: 87,
+        avg_order_value: 29.39,
+      },
+      breakdowns: {
+        hourly_sales: {},
+        daily_statistics: [],
+        sales_by_method: [
+          { method: "CASH", total: 500 },
+          { method: "CARD", total: 734.5 },
+        ],
+        sales_by_item: demoProducts.map((p) => ({
+          name: p.name,
+          qty: Math.floor(Math.random() * 20) + 1,
+          total: p.price * (Math.floor(Math.random() * 20) + 1),
+        })),
+        sales_by_dine_option: [
+          { option: "IN_STORE", total: 800 },
+          { option: "TAKEAWAY", total: 434.5 },
+        ],
+      },
+      abnormal_transactions: {},
+      top_products: demoProducts.map((p) => ({
+        id: p._id,
+        name: p.name,
+        qty: Math.floor(Math.random() * 30) + 5,
+        total: p.price * (Math.floor(Math.random() * 30) + 5),
+      })),
+    };
+  }
+  if (u.includes("/dashboard/business_sales")) {
+    return {
+      status_code: 200,
+      total_order_count: 42,
+      total_orders: { sales: 1234.5, num_sales: 42, num_products: 87 },
+      daily_statistics: {},
+      total_sales: 1234.5,
+      total_items: 87,
+      sales_by_item: [],
+      sales_by_method: [],
+      sales_by_dine_option: [],
+      hourly_sales: [],
+    };
+  }
+  if (u.includes("/dashboard/summary")) {
+    return {
+      today_sales: "320",
+      today_revenue_change_pct: 12,
+      week_revenue: "2150",
+      week_revenue_change_pct: 8,
+      today_orders: 14,
+      week_orders: 96,
+      total_orders: 42,
+      total_products: 5,
+      avg_order_value: "29.39",
+      total_revenue_month: "1234.5",
+      today_items: 22,
+      week_items: 154,
+      revenue_change_pct: 5,
+      orders_change_pct: 7,
+    };
+  }
+  if (u.includes("/dashboard/recent-orders")) return demoOrders;
+  if (u.includes("/dashboard/top-products")) return demoProducts;
+  if (u.includes("/dashboard")) return { status_code: 200 };
+
+  // POS
+  if (u.includes("/pos/close_history") || u.includes("/pos/close-history")) {
+    return { status_code: 200, close_history: [], list: [], total: 0 };
+  }
+  if (u.includes("/pos/dashboard")) {
+    return {
+      status_code: 200,
+      total_sales: 1234.5,
+      total_orders: 42,
+      total_items: 87,
+      sales_by_item: [],
+      sales_by_method: [],
+      sales_by_dine_option: [],
+      daily_statistics: [],
+      hourly_sales: [],
+    };
+  }
+
+  // Products / catalog
+  if (u.includes("/product/batch_details") || u.includes("/product/detail")) {
+    return { status_code: 200, products: demoProducts, product: demoProducts[0], data: demoProducts[0] };
+  }
+  if (u.includes("/product/all_category")) {
+    return {
+      status_code: 200,
+      categories: [
+        { _id: "cat-1", name: "Coffee" },
+        { _id: "cat-2", name: "Bakery" },
+        { _id: "cat-3", name: "Food" },
+        { _id: "cat-4", name: "Drinks" },
+      ],
+    };
+  }
+  if (u.includes("/product") || u.includes("/catalog")) {
+    return { status_code: 200, products: demoProducts, list: demoProducts, total: demoProducts.length };
+  }
+
+  // Orders by id
+  if (/\/order\/[^/]+$/.test(u)) {
+    return { status_code: 200, data: demoOrders[0], order: demoOrders[0] };
+  }
+  if (u.includes("/order/search")) {
+    return { status_code: 200, orders: demoOrders, list: demoOrders, total: demoOrders.length };
+  }
+
+  // Shop / business / store
+  if (u.includes("/shop/update_shop")) return { status_code: 200, message: "" };
+  if (u.includes("/shop")) return { status_code: 200, shop: [demoShop] };
+  if (u.includes("/business")) return { status_code: 200, business: [demoBusiness] };
+  if (u.includes("/store")) return { status_code: 200, stores: [demoShop], statistics: {} };
+
+  // Generic fallback — permissive empty payload.
+  return {
+    status_code: 200,
+    data: [],
+    items: [],
+    results: [],
+    list: [],
+    total: 0,
+    message: "",
+  };
+}
+
+// Request interceptor that intercepts all requests when demo mode is on and
+// returns a canned response instead of hitting the network.
+api.interceptors.request.use((config) => {
+  if (!demoModeEnabled) return config;
+  const url = `${config.baseURL ?? ""}${config.url ?? ""}`;
+  // Override the adapter for this request to return synthetic data.
+  config.adapter = async () => {
+    const data = buildDemoPayload(url);
+    return {
+      data,
+      status: 200,
+      statusText: "OK (demo)",
+      headers: {},
+      config,
+      request: {},
+    };
+  };
+  return config;
+});
+
 type AuthFailureHandler = (reason: string) => void | Promise<void>;
 
 let authFailureHandler: AuthFailureHandler | null = null;

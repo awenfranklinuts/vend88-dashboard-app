@@ -1193,7 +1193,7 @@ export default function StoresScreen() {
             <View style={styles.linkBox}>
               <Text style={styles.linkLabel}>{t("stores_store_link_label")}</Text>
               <Text style={styles.linkValue} numberOfLines={2}>
-                {storefrontUrl ?? "—"}
+                {storefrontUrl ?? "N/A"}
               </Text>
             </View>
             {storefrontUrl ? (

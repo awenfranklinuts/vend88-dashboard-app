@@ -1,4 +1,4 @@
-import { api } from "./api";
+import { api, isDemoMode } from "./api";
 import * as SecureStore from "expo-secure-store";
 
 const AUTH_TOKEN_KEY = "vend88-auth-token";
@@ -1127,6 +1127,16 @@ function officialContextKey(auth?: AuthOverride): string {
 async function resolveOfficialShopContextUncached(
   auth?: AuthOverride
 ): Promise<OfficialShopContext> {
+  // In demo mode return a synthetic context immediately. All downstream API
+  // calls will be intercepted by the demo adapter and return zero/empty data.
+  if (isDemoMode()) {
+    return {
+      email: auth?.email ?? "demo@vend88.com",
+      token: auth?.token ?? "demo-token",
+      businessId: "demo-business",
+      shopId: "demo-shop",
+    };
+  }
   const { email, token } = await resolveOfficialAuth(auth);
   if (!email || !token) {
     throw new Error("Official dashboard config missing.");

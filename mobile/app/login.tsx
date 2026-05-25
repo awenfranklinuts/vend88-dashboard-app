@@ -38,13 +38,6 @@ const BIOMETRIC_KEY = "vend88-biometric-enabled";
 const BIOMETRIC_ASKED_KEY = "vend88-biometric-asked";
 // Contact email shown in password-reset help dialog.
 const SUPPORT_EMAIL = "accounts@vend88.com";
-// Demo account for App Store reviewers and curious visitors.
-// Authenticates against the real backend account but presents a
-// reviewer-friendly email in the input field. Update DEMO_PASSWORD here if
-// the backend credentials change.
-const DEMO_AUTH_EMAIL = "accounts@vend88.com";
-const DEMO_DISPLAY_EMAIL = "demo@vend88.com";
-const DEMO_PASSWORD = "Vend8866";
 
 const C = {
   bg: "#0F1427",
@@ -64,7 +57,7 @@ const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { token, signIn } = useAuth();
+  const { token, signIn, signInDemo } = useAuth();
   const { t } = useI18n();
   const passwordRef = useRef<TextInput>(null);
 
@@ -104,20 +97,17 @@ export default function LoginScreen() {
     outputRange: [C.border, C.borderFocus],
   });
 
-  // Sign in with the shared demo account so App Store reviewers (and anyone
-  // exploring the app) can land in the dashboard without provisioning their
-  // own credentials. The email field is populated with a reviewer-friendly
-  // address (`demo@vend88.com`) but the actual auth request uses the real
-  // backend account behind the scenes.
+  // Enter the app as a demo user. No real credentials are used and no backend
+  // request is made — a synthetic token is set, and all API calls are
+  // short-circuited to return empty/zero data so the explorer sees the full
+  // UI with nothing sensitive in it.
   const handleDemoAccess = async () => {
     if (loading) return;
     setError("");
-    setEmail(DEMO_DISPLAY_EMAIL);
-    setPassword(DEMO_PASSWORD);
     setSkipAutoRedirect(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setLoading(true);
-    const result = await signIn(DEMO_AUTH_EMAIL, DEMO_PASSWORD);
+    const result = await signInDemo();
     setLoading(false);
 
     if (!result.ok) {
@@ -125,12 +115,6 @@ export default function LoginScreen() {
       triggerError(result.message ?? t("login_sign_in_failed"));
       return;
     }
-
-    // Skip biometric onboarding for the shared demo account — App Store
-    // reviewers shouldn't be prompted to bind Face ID / fingerprint to a
-    // throwaway account, and the next user of the demo would inherit it.
-    await SecureStore.setItemAsync(BIOMETRIC_ASKED_KEY, "1");
-    await SecureStore.deleteItemAsync(BIOMETRIC_KEY);
 
     Animated.timing(screenOpacity, {
       toValue: 0,
