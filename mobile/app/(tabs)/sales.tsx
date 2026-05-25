@@ -2816,8 +2816,8 @@ export default function SalesScreen() {
     const imagesByName = lib.byName;
     const imagesByNormalizedName = lib.byNormalized;
     const ambiguousNormalizedNames = lib.normalizedAmbiguous;
-    if (fromStats && fromStats.length > 0) {
-      return fromStats
+    if (officialStats) {
+      return (fromStats ?? [])
         .slice()
         .sort((a, b) => b.total - a.total)
         .slice(0, 5)

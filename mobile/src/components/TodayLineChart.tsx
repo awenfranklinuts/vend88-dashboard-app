@@ -1,7 +1,14 @@
 // Smooth-curve hourly/daily revenue chart with sticky y-axis, pinch-to-zoom,
 // horizontal swipe, and a draggable selected-point handle. Used by the
 // dashboard detail modal for today/week/month periods.
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Animated,
   Easing,
@@ -102,21 +109,33 @@ function buildSmoothPath(
   return segs.join(" ");
 }
 
-export function TodayLineChart({
-  data,
-  niceMax,
-  ticks,
-  avg,
-  formatMoney,
-  currentLabel,
-  selectedIndex,
-  onSelectIndex,
-  height = 280,
-  xLabelEvery = 1,
-  minPointSpacing = 36,
-  minPointSpacingFloor = 12,
-  minPointSpacingCeil = 96,
-}: Props) {
+export type TodayLineChartHandle = {
+  /**
+   * Scroll the plot horizontally so the bucket at `index` sits in the centre
+   * of the visible viewport. No-op when the chart isn't scrollable (data fits
+   * in the viewport) or the index is out of range.
+   */
+  scrollToIndex: (index: number, opts?: { animated?: boolean }) => void;
+};
+
+export const TodayLineChart = forwardRef<TodayLineChartHandle, Props>(function TodayLineChart(
+  {
+    data,
+    niceMax,
+    ticks,
+    avg,
+    formatMoney,
+    currentLabel,
+    selectedIndex,
+    onSelectIndex,
+    height = 280,
+    xLabelEvery = 1,
+    minPointSpacing = 36,
+    minPointSpacingFloor = 12,
+    minPointSpacingCeil = 96,
+  },
+  ref
+) {
   const [outerW, setOuterW] = useState(0);
   const [spacing, setSpacing] = useState(minPointSpacing);
   const [scrollEnabled, setScrollEnabled] = useState(true);
@@ -365,6 +384,35 @@ export function TodayLineChart({
     scrollRef.current?.scrollTo({ x: offset, animated: false });
     didAutoScroll.current = true;
   }, [currentIdx, viewportPlotW, intrinsicPlotW, points]);
+
+  // Imperative API: lets the parent (e.g. dashboard Best/Slowest callouts)
+  // recentre the plot on a specific bucket. We read points/intrinsicPlotW/
+  // viewportPlotW via refs so the handler stays stable while still seeing
+  // the latest measurements.
+  const pointsForCenterRef = useRef(points);
+  const intrinsicPlotWRef = useRef(intrinsicPlotW);
+  const viewportPlotWRef = useRef(viewportPlotW);
+  pointsForCenterRef.current = points;
+  intrinsicPlotWRef.current = intrinsicPlotW;
+  viewportPlotWRef.current = viewportPlotW;
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToIndex: (index: number, opts) => {
+        const pts = pointsForCenterRef.current;
+        const vw = viewportPlotWRef.current;
+        const iw = intrinsicPlotWRef.current;
+        if (!pts || index < 0 || index >= pts.length || vw <= 0) return;
+        const targetX = pts[index].x;
+        const offset = Math.max(0, Math.min(iw - vw, targetX - vw / 2));
+        scrollRef.current?.scrollTo({
+          x: offset,
+          animated: opts?.animated ?? true,
+        });
+      },
+    }),
+    []
+  );
 
   return (
     <View style={[styles.wrap, { height }]} onLayout={onLayout}>
@@ -627,7 +675,7 @@ export function TodayLineChart({
       </GestureDetector>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   wrap: {

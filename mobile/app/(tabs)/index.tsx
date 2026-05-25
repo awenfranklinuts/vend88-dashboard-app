@@ -55,7 +55,7 @@ import {
   SCREEN_PADDING,
 } from "../../src/theme/tokens";
 import { SectionLabel } from "../../src/components/SectionLabel";
-import { TodayLineChart } from "../../src/components/TodayLineChart";
+import { TodayLineChart, type TodayLineChartHandle } from "../../src/components/TodayLineChart";
 import { DonutChart } from "../../src/components/DonutChart";
 
 type Summary = {
@@ -222,6 +222,48 @@ function formatShortDate(date: Date, locale: string): string {
   });
 }
 
+function formatWeekBucketLabel(
+  index: number,
+  t: (
+    key: "dashboard_chart_week_bucket",
+    params?: Record<string, string | number>
+  ) => string
+): string {
+  return t("dashboard_chart_week_bucket", { index });
+}
+
+function localizeDetailChartPoints(
+  points: ChartPoint[],
+  period: "month" | "week" | "today",
+  locale: string,
+  t: (
+    key: "dashboard_chart_week_bucket",
+    params?: Record<string, string | number>
+  ) => string
+): ChartPoint[] {
+  if (period === "week") {
+    const weekStart = new Date();
+    const dow = weekStart.getDay() || 7;
+    weekStart.setDate(weekStart.getDate() - (dow - 1));
+    weekStart.setHours(0, 0, 0, 0);
+    return points.map((point, index) => {
+      const day = new Date(weekStart);
+      day.setDate(weekStart.getDate() + index);
+      return {
+        ...point,
+        day: day.toLocaleDateString(locale, { weekday: "short" }),
+      };
+    });
+  }
+  if (period === "month") {
+    return points.map((point, index) => ({
+      ...point,
+      day: formatWeekBucketLabel(index + 1, t),
+    }));
+  }
+  return points;
+}
+
 function orderGlyph(payment?: string): { icon: keyof typeof Ionicons.glyphMap; color: string } {
   const key = (payment ?? "").toLowerCase();
   if (key === "cash") return { icon: "cash-outline", color: "#10b981" };
@@ -330,6 +372,19 @@ export default function DashboardScreen() {
   });
   const [chartOpen, setChartOpen] = useState(false);
   const [selectedBar, setSelectedBar] = useState<number | null>(null);
+  // Imperative handle to recentre the plot horizontally when the user taps
+  // Best / Slowest / Peak callouts so the chosen bucket actually scrolls
+  // into view (otherwise the selection dot can land off-screen on Today /
+  // Month where the plot is wider than the viewport).
+  const todayChartRef = useRef<TodayLineChartHandle>(null);
+  const selectAndCenterBar = (idx: number) => {
+    setSelectedBar(idx);
+    // Defer to next frame so the chart has re-rendered with the new
+    // selection before we ask it to scroll.
+    requestAnimationFrame(() => {
+      todayChartRef.current?.scrollToIndex(idx, { animated: true });
+    });
+  };
   const [barTrackH, setBarTrackH] = useState(0);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [chartError, setChartError] = useState<string | null>(null);
@@ -713,29 +768,23 @@ export default function DashboardScreen() {
   };
 
   // Dining Options & Sales Methods — synced to heroPeriod (today/week/month).
-  const diningAnim = useRef(new Animated.Value(1)).current;
-  const salesMethodAnim = useRef(new Animated.Value(1)).current;
+  // Start hidden so the first appearance is a smooth fade-in. On subsequent
+  // refreshes the values are already at 1, so swapping data won't blink the
+  // card out and back in (that was the quick "flash" on every load).
+  const diningAnim = useRef(new Animated.Value(0)).current;
+  const salesMethodAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (API_TARGET === "official" && authLoading) {
       return;
     }
     let cancelled = false;
     const run = async () => {
-      // Fade out both charts in parallel before swapping data.
-      Animated.parallel([
-        Animated.timing(diningAnim, {
-          toValue: 0,
-          duration: 160,
-          easing: Easing.out(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(salesMethodAnim, {
-          toValue: 0,
-          duration: 160,
-          easing: Easing.out(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]).start();
+      // NOTE: We intentionally do NOT fade the breakdown card out before the
+      // fetch. The previous implementation flashed opacity 1→0→1 on every
+      // refresh which read as a quick blink. `applyDining` /
+      // `applySalesMethods` below animate the value to 1 when fresh data
+      // arrives — that's a no-op when already visible, and a clean fade-in
+      // on first load.
 
       const applyDining = (next: DiningOption[]) => {
         if (cancelled) return;
@@ -1082,7 +1131,13 @@ export default function DashboardScreen() {
       { day: "W4", revenue: weekRevenue },
     ];
   })();
-  const displayMax = Math.max(...displayChart.map((p) => p.revenue), 1);
+  const localizedDisplayChart = localizeDetailChartPoints(
+    displayChart,
+    heroPeriod,
+    locale,
+    t
+  );
+  const displayMax = Math.max(...localizedDisplayChart.map((p) => p.revenue), 1);
   const currentTodayBucketLabel = (() => {
     // Recompute when nowTick changes so the indicator follows the clock.
     void nowTick;
@@ -1156,7 +1211,7 @@ export default function DashboardScreen() {
       const day = now.getDate();
       const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
       const bucket = Math.min(4, Math.floor(((day - 1) * 4) / daysInMonth) + 1);
-      return `W${bucket}`;
+      return formatWeekBucketLabel(bucket, t);
     }
     if (heroPeriod === "week") {
       return new Date().toLocaleDateString(locale, { weekday: "short" });
@@ -2140,7 +2195,7 @@ export default function DashboardScreen() {
                   {currentHero.label}
                 </Text>
                 <Pressable
-                  accessibilityLabel="Close"
+                  accessibilityLabel={t("dashboard_chart_close")}
                   onPress={() => {
                     haptic.selection();
                     closeChartModal();
@@ -2184,10 +2239,18 @@ export default function DashboardScreen() {
             <View style={styles.modalTabs}>
               {(["today", "week", "month"] as const).map((p) => {
                 const active = heroPeriod === p;
+                const periodLabel =
+                  p === "today"
+                    ? t("dashboard_period_today")
+                    : p === "week"
+                    ? t("dashboard_period_this_week")
+                    : t("dashboard_period_this_month");
                 return (
                   <Pressable
                     key={p}
-                    accessibilityLabel={`Show ${p} chart`}
+                    accessibilityLabel={t("dashboard_chart_show_period", {
+                      period: periodLabel,
+                    })}
                     onPress={() => {
                       haptic.selection();
                       setHeroPeriod(p);
@@ -2200,7 +2263,7 @@ export default function DashboardScreen() {
                         active && styles.modalTabTextActive,
                       ]}
                     >
-                      {p === "today" ? t("dashboard_period_today") : p === "week" ? t("dashboard_period_this_week") : t("dashboard_period_this_month")}
+                      {periodLabel}
                     </Text>
                   </Pressable>
                 );
@@ -2277,7 +2340,7 @@ export default function DashboardScreen() {
               const niceMax = Math.max(tickStep * 4, displayMax);
               const ticks = [4, 3, 2, 1, 0].map((m) => tickStep * m);
 
-              const inspected = selectedBar !== null ? displayChart[selectedBar] : null;
+              const inspected = selectedBar !== null ? localizedDisplayChart[selectedBar] : null;
               const inspectedShare =
                 inspected && total > 0 ? (inspected.revenue / total) * 100 : 0;
 
@@ -2296,10 +2359,12 @@ export default function DashboardScreen() {
                           })}
                         </Text>
                         <Text style={styles.inspectorMeta}>
-                          {inspectedShare.toFixed(1)}% of total
+                          {t("dashboard_chart_share_of_total", {
+                            percent: inspectedShare.toFixed(1),
+                          })}
                         </Text>
                         <Pressable
-                          accessibilityLabel="Clear selection"
+                          accessibilityLabel={t("dashboard_chart_clear_selection")}
                           hitSlop={8}
                           onPress={() => setSelectedBar(null)}
                           style={styles.inspectorClear}
@@ -2309,7 +2374,7 @@ export default function DashboardScreen() {
                       </>
                     ) : (
                       <Text style={styles.inspectorHint}>
-                        Tap a point to inspect
+                        {t("dashboard_chart_tap_to_inspect")}
                       </Text>
                     )}
                   </View>
@@ -2329,7 +2394,8 @@ export default function DashboardScreen() {
                   >
                     <View style={styles.todayChartWrap}>
                       <TodayLineChart
-                        data={displayChart}
+                        ref={todayChartRef}
+                        data={localizedDisplayChart}
                         niceMax={niceMax}
                         ticks={ticks}
                         avg={avg}
@@ -2351,20 +2417,20 @@ export default function DashboardScreen() {
                   <View style={styles.chartLegendRow}>
                     <View style={styles.legendItem}>
                       <View style={[styles.legendSwatch, { backgroundColor: GOLD }]} />
-                      <Text style={styles.legendText}>Revenue</Text>
+                      <Text style={styles.legendText}>{t("dashboard_chart_legend_revenue")}</Text>
                     </View>
                     <View style={styles.legendItem}>
                       <View style={styles.legendDashWrap}>
                         <DashedLine color={SUCCESS} dashWidth={4} dashGap={3} thickness={1.5} />
                       </View>
-                      <Text style={styles.legendText}>Average per period</Text>
+                      <Text style={styles.legendText}>{t("dashboard_chart_legend_avg_period")}</Text>
                     </View>
                   </View>
 
                   {/* Footer KPIs */}
                   <View style={styles.modalKpiRow}>
                     <View style={styles.modalKpi}>
-                      <Text style={styles.modalKpiLabel}>Total</Text>
+                      <Text style={styles.modalKpiLabel}>{t("dashboard_chart_total")}</Text>
                       <Text style={styles.modalKpiValue}>
                         ${total.toLocaleString(locale, {
                           minimumFractionDigits: 2,
@@ -2374,7 +2440,7 @@ export default function DashboardScreen() {
                     </View>
                     <View style={styles.modalKpiDivider} />
                     <View style={styles.modalKpi}>
-                      <Text style={styles.modalKpiLabel}>Avg / active</Text>
+                      <Text style={styles.modalKpiLabel}>{t("dashboard_chart_avg_active")}</Text>
                       <Text style={styles.modalKpiValue}>
                         ${avg.toLocaleString(locale, {
                           minimumFractionDigits: 2,
@@ -2387,11 +2453,11 @@ export default function DashboardScreen() {
                       style={styles.modalKpi}
                       onPress={() => {
                         haptic.selection();
-                        setSelectedBar(peakIdx);
+                        selectAndCenterBar(peakIdx);
                       }}
-                      accessibilityLabel="Highlight peak bucket"
+                      accessibilityLabel={t("dashboard_chart_highlight_peak")}
                     >
-                      <Text style={styles.modalKpiLabel}>Peak</Text>
+                      <Text style={styles.modalKpiLabel}>{t("dashboard_chart_peak")}</Text>
                       <Text style={[styles.modalKpiValue, { color: GOLD }]}>
                         ${peak.toLocaleString(locale, {
                           minimumFractionDigits: 2,
@@ -2402,35 +2468,35 @@ export default function DashboardScreen() {
                   </View>
 
                   {/* Best / slowest callouts */}
-                  {displayChart.length > 1 && (
+                  {localizedDisplayChart.length > 1 && (
                     <View style={styles.calloutRow}>
                       <Pressable
                         style={[styles.callout, styles.calloutBest]}
                         onPress={() => {
                           haptic.selection();
-                          setSelectedBar(peakIdx);
+                          selectAndCenterBar(peakIdx);
                         }}
-                        accessibilityLabel="Highlight best bucket"
+                        accessibilityLabel={t("dashboard_chart_highlight_best")}
                       >
                         <Ionicons name="trending-up" size={12} color={SUCCESS} />
-                        <Text style={styles.calloutLabel}>Best</Text>
+                        <Text style={styles.calloutLabel}>{t("dashboard_chart_best")}</Text>
                         <Text style={styles.calloutValue}>
-                          {displayChart[peakIdx]?.day} · {shortMoney(peak)}
+                          {localizedDisplayChart[peakIdx]?.day} · {shortMoney(peak)}
                         </Text>
                       </Pressable>
                       <Pressable
                         style={[styles.callout, styles.calloutWorst]}
                         onPress={() => {
                           haptic.selection();
-                          setSelectedBar(worstIdx);
+                          selectAndCenterBar(worstIdx);
                         }}
-                        accessibilityLabel="Highlight slowest bucket"
+                        accessibilityLabel={t("dashboard_chart_highlight_slowest")}
                       >
                         <Ionicons name="trending-down" size={12} color={DANGER} />
-                        <Text style={styles.calloutLabel}>Slowest</Text>
+                        <Text style={styles.calloutLabel}>{t("dashboard_chart_slowest")}</Text>
                         <Text style={styles.calloutValue}>
-                          {displayChart[worstIdx]?.day} ·{" "}
-                          {shortMoney(displayChart[worstIdx]?.revenue ?? 0)}
+                          {localizedDisplayChart[worstIdx]?.day} ·{" "}
+                          {shortMoney(localizedDisplayChart[worstIdx]?.revenue ?? 0)}
                         </Text>
                       </Pressable>
                     </View>

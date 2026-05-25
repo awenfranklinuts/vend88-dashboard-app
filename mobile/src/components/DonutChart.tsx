@@ -67,30 +67,102 @@ export const DonutChart: React.FC<DonutChartProps> = ({
   const visibleCount = segments.filter((s) => s.percentage > 0).length;
   const GAP = visibleCount > 1 ? Math.min(4, circumference * 0.012) : 0;
 
-  // Sweep replay when the data signature changes.
-  const sweep = useRef(new Animated.Value(0)).current;
+  // Pre-compute arc lengths and offsets, leaving a small gap between slices.
+  // `key` is the segment label — assumed unique per dataset (dining options /
+  // sales methods both use unique labels). This lets us match an arc across
+  // renders so we can morph its length/offset instead of blanking the ring.
+  const targetArcs = useMemo(() => {
+    let cumulative = 0;
+    return segments.map((segment) => {
+      const rawLen = (segment.percentage / 100) * circumference;
+      const drawLen = Math.max(0, rawLen - GAP);
+      const offset = cumulative;
+      cumulative += rawLen;
+      return {
+        key: segment.label,
+        label: segment.label,
+        color: segment.color,
+        percentage: segment.percentage,
+        drawLen,
+        offset,
+      };
+    });
+  }, [segments, circumference, GAP]);
+
+  // Morph transition: a single 0→1 driver interpolates every arc's length
+  // and offset from its previous on-screen value to the new target. New
+  // slices grow from 0, removed slices shrink to 0, and reordered slices
+  // slide to their new positions — no more "reset to zero and re-sweep"
+  // flash on every data refresh.
+  const morph = useRef(new Animated.Value(1)).current;
+  const previousArcsRef = useRef<typeof targetArcs>([]);
+  const sourceArcsRef = useRef<typeof targetArcs>([]);
+  const hasMountedRef = useRef(false);
+
   const signature = items
     .map((it) => `${it.label}:${it.value.toFixed(2)}`)
     .join("|");
 
+  // Snapshot the previous committed arcs as the morph source whenever the
+  // data signature changes. We capture this during render (not in the
+  // effect) so the JSX below can read consistent source values on the same
+  // render where the new targets appear.
+  const lastSignatureRef = useRef<string | null>(null);
+  if (lastSignatureRef.current !== signature) {
+    sourceArcsRef.current = previousArcsRef.current;
+    lastSignatureRef.current = signature;
+  }
+
   useEffect(() => {
-    sweep.setValue(0);
-    Animated.timing(sweep, {
+    morph.setValue(0);
+    Animated.timing(morph, {
       toValue: 1,
-      duration: 720,
+      // Slightly slower on the very first reveal so the initial grow-in
+      // still feels deliberate, faster on subsequent refreshes so morphs
+      // don't drag.
+      duration: hasMountedRef.current ? 520 : 720,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
-    }).start();
-  }, [signature, sweep]);
+    }).start(({ finished }) => {
+      if (finished) {
+        previousArcsRef.current = targetArcs;
+        hasMountedRef.current = true;
+      }
+    });
+  }, [signature, targetArcs, morph]);
 
-  // Pre-compute arc lengths and offsets, leaving a small gap between slices.
-  let cumulative = 0;
-  const arcs = segments.map((segment) => {
-    const rawLen = (segment.percentage / 100) * circumference;
-    const drawLen = Math.max(0, rawLen - GAP);
-    const offset = cumulative;
-    cumulative += rawLen;
-    return { ...segment, drawLen, offset };
+  // Build the union of (previous ∪ current) arcs so removed slices can
+  // animate down to zero before disappearing. Each render produces a stable
+  // list keyed by label.
+  const sourceByKey = new Map(sourceArcsRef.current.map((a) => [a.key, a]));
+  const targetByKey = new Map(targetArcs.map((a) => [a.key, a]));
+  const allKeys: string[] = [];
+  const seen = new Set<string>();
+  for (const a of targetArcs) {
+    if (!seen.has(a.key)) {
+      seen.add(a.key);
+      allKeys.push(a.key);
+    }
+  }
+  for (const a of sourceArcsRef.current) {
+    if (!seen.has(a.key)) {
+      seen.add(a.key);
+      allKeys.push(a.key);
+    }
+  }
+
+  const renderArcs = allKeys.map((key) => {
+    const src = sourceByKey.get(key);
+    const tgt = targetByKey.get(key);
+    // For new arcs, start from 0-length at the target offset so they grow
+    // out from where they will live. For removed arcs, target 0-length at
+    // their current offset so they shrink in place.
+    const fromLen = src ? src.drawLen : 0;
+    const toLen = tgt ? tgt.drawLen : 0;
+    const fromOffset = src ? src.offset : tgt ? tgt.offset : 0;
+    const toOffset = tgt ? tgt.offset : src ? src.offset : 0;
+    const color = (tgt ?? src)!.color;
+    return { key, fromLen, toLen, fromOffset, toOffset, color };
   });
 
   // Resolve the centre display. Defaults to leading segment label + its share.
@@ -113,18 +185,22 @@ export const DonutChart: React.FC<DonutChartProps> = ({
             stroke="rgba(255,255,255,0.05)"
             strokeWidth={strokeWidth}
           />
-          {arcs.map((arc, index) => {
-            const animatedLen = sweep.interpolate({
+          {renderArcs.map((arc) => {
+            const animatedLen = morph.interpolate({
               inputRange: [0, 1],
-              outputRange: [0, arc.drawLen],
+              outputRange: [arc.fromLen, arc.toLen],
             });
             const dashArray = animatedLen.interpolate({
               inputRange: [0, circumference],
               outputRange: [`0 ${circumference}`, `${circumference} 0`],
             });
+            const animatedOffset = morph.interpolate({
+              inputRange: [0, 1],
+              outputRange: [-arc.fromOffset, -arc.toOffset],
+            });
             return (
               <AnimatedCircle
-                key={`arc-${index}-${arc.label}`}
+                key={`arc-${arc.key}`}
                 cx={center}
                 cy={center}
                 r={radius}
@@ -132,7 +208,7 @@ export const DonutChart: React.FC<DonutChartProps> = ({
                 stroke={arc.color}
                 strokeWidth={strokeWidth}
                 strokeDasharray={dashArray as unknown as string}
-                strokeDashoffset={-arc.offset}
+                strokeDashoffset={animatedOffset as unknown as number}
                 strokeLinecap="round"
               />
             );
