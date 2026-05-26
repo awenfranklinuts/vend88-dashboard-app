@@ -1666,12 +1666,116 @@ async function resolveProductDetails(
   return details;
 }
 
+// ── product image batch lookup ────────────────────────────────────────────
+/**
+ * Fetches image URLs for a list of product IDs in a single
+ * POST /search/product_search request using a MongoDB $in query.
+ * Returns a Record<productId, firstImageUrl>.
+ */
+async function fetchProductImagesBatch(
+  productIds: string[],
+  token: string
+): Promise<Record<string, string>> {
+  if (productIds.length === 0) return {};
+  try {
+    const payload: Record<string, unknown> = {
+      query: { _id: { $in: productIds } },
+      detail: true,
+      page_size: productIds.length,
+      page_idx: 0,
+    };
+    if (token) payload.token = token;
+
+    const resp = await api.post<CatalogProductSearchResponse>(
+      "/search/product_search",
+      payload
+    );
+    const products = resp.data?.products ?? [];
+    const map: Record<string, string> = {};
+    for (const p of products) {
+      const id = p.product_id ?? (p as unknown as { _id?: string })._id;
+      if (!id) continue;
+      const url = Array.isArray(p.image_urls) ? p.image_urls[0] : undefined;
+      if (url) map[id] = url;
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+// ── productStatistics ──────────────────────────────────────────────────────
+// Response shape for POST /dashboard/productStatistics
+type ProductStatisticsResponse = {
+  status_code?: number;
+  product_id?: string;
+  product_name?: string;
+  sales_by_day?: Array<{ date: string; qty: number; revenue: number }>;
+  statistics?: {
+    actual_revenue: number;
+    appearing_in_orders: number;
+    options_revenue: number;
+    total_gross_revenue: number;
+    total_qty_sold: number;
+  };
+  time_range?: { start?: string; end?: string };
+};
+
+type ProductStatDetail = { name: string; revenue: number; qty: number };
+
+/**
+ * Fetches per-product statistics (name, revenue, qty sold) from
+ * POST /dashboard/productStatistics for each product ID in parallel.
+ * Uses allSettled so a single failing request does not cancel the others.
+ */
+async function fetchProductStatisticsBatch(
+  productIds: string[],
+  shopId: string,
+  token: string,
+  startDate: string,
+  endDate: string
+): Promise<Record<string, ProductStatDetail>> {
+  if (productIds.length === 0) return {};
+
+  const results = await Promise.allSettled(
+    productIds.map((productId) =>
+      api
+        .post<ProductStatisticsResponse>("/dashboard/productStatistics", {
+          shop_id: shopId,
+          product_id: productId,
+          start_date: startDate,
+          end_date: endDate,
+          token,
+        })
+        .then((resp) => {
+          const d = resp.data;
+          if (d?.status_code !== 200 || !d.product_name) return null;
+          return {
+            id: productId,
+            name: d.product_name,
+            revenue: d.statistics?.actual_revenue ?? 0,
+            qty: d.statistics?.total_qty_sold ?? 0,
+          };
+        })
+    )
+  );
+
+  const map: Record<string, ProductStatDetail> = {};
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) {
+      const { id, ...detail } = r.value;
+      map[id] = detail;
+    }
+  }
+  return map;
+}
+
 export async function fetchOfficialTopSellingItems(
   limit = 10,
   period: TopItemsPeriod = "month",
   auth?: AuthOverride
 ): Promise<DashboardTopItem[]> {
-  const { token, businessId, shopId } = await resolveOfficialShopContext(auth);
+  const { token, shopId } = await resolveOfficialShopContext(auth);
 
   const cacheKey = `${shopId}|${period}|${limit}`;
   const cached = topItemsCache.get(cacheKey);
@@ -1679,41 +1783,46 @@ export async function fetchOfficialTopSellingItems(
     return cached.data;
   }
 
-  const data = await fetchPosDashboardCached(shopId, token, period);
+  // Step 1 — get ranked product IDs from the aggregated POS dashboard.
+  const dashData = await fetchPosDashboardCached(shopId, token, period);
   console.log(
     "[top-items] pos/dashboard status:",
-    data?.status_code,
+    dashData?.status_code,
     "items:",
-    data?.sales_by_item ? Object.keys(data.sales_by_item).length : 0,
-    "keys:",
-    Object.keys(data ?? {})
+    dashData?.sales_by_item ? Object.keys(dashData.sales_by_item).length : 0
   );
-  if (data?.status_code !== 200 || !data.sales_by_item) {
+  if (dashData?.status_code !== 200 || !dashData.sales_by_item) {
     throw new Error("POS dashboard request failed.");
   }
 
-  const entries = Object.entries(data.sales_by_item)
-    .map(([id, amount]) => ({ id, revenue: toNumber(amount) }))
-    .filter((row) => row.revenue > 0)
-    .sort((a, b) => b.revenue - a.revenue)
+  const topIds = Object.entries(dashData.sales_by_item)
+    .map(([id, amount]) => ({ id, fallbackRevenue: toNumber(amount) }))
+    .filter((row) => row.fallbackRevenue > 0)
+    .sort((a, b) => b.fallbackRevenue - a.fallbackRevenue)
     .slice(0, limit);
 
-  const detailMap = await resolveProductDetails(
-    entries.map((row) => row.id),
-    shopId,
-    businessId,
-    token
-  );
+  // Step 2 — fetch detailed stats for each product from productStatistics.
+  // This gives us the accurate product name, qty sold, and actual revenue.
+  const { startDate, endDate } = getRangeForPeriod(period);
+  const [statsMap, imageMap] = await Promise.all([
+    fetchProductStatisticsBatch(
+      topIds.map((r) => r.id),
+      shopId,
+      token,
+      startDate,
+      endDate
+    ),
+    fetchProductImagesBatch(topIds.map((r) => r.id), token),
+  ]);
 
-  const result = entries.map((row) => {
-    const detail = detailMap[row.id];
-    const name = detail?.name ?? `Item ${row.id.slice(-6).toUpperCase()}`;
+  const result: DashboardTopItem[] = topIds.map(({ id, fallbackRevenue }) => {
+    const stats = statsMap[id];
     return {
-      id: row.id,
-      name,
-      units: Math.round(row.revenue),
-      revenue: row.revenue.toFixed(2),
-      image: detail?.image,
+      id,
+      name: stats?.name ?? `Item ${id.slice(-6).toUpperCase()}`,
+      units: stats?.qty ?? 0,
+      revenue: (stats?.revenue ?? fallbackRevenue).toFixed(2),
+      image: imageMap[id],
     };
   });
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -6,6 +6,7 @@ import {
   KeyboardAvoidingView,
   Linking,
   Modal,
+  NativeModules,
   Platform,
   Pressable,
   RefreshControl,
@@ -17,12 +18,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { NativeModulesProxy } from "expo-modules-core";
 import { useI18n } from "../../src/context/I18nContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { ScreenHeader } from "../../src/components/ScreenHeader";
 import { SectionLabel } from "../../src/components/SectionLabel";
 import { TopProgressBar } from "../../src/components/TopProgressBar";
 import { OfflineNotice } from "../../src/components/OfflineNotice";
+import { Skeleton } from "../../src/components/Skeleton";
 import { haptic } from "../../src/utils/haptics";
 import {
   fetchOfficialShopDetail,
@@ -47,7 +50,9 @@ import {
   TEXT,
   TEXT_DIM,
   TEXT_FAINT,
+  type ThemeTokens,
 } from "../../src/theme/tokens";
+import { useThemeTokens } from "../../src/context/ThemeContext";
 
 const DAYS: (keyof OfficialShopOpenHours)[] = [
   "monday",
@@ -152,13 +157,115 @@ function percentToInput(decimal: number): string {
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+function maskId(v: string): string {
+  if (!v) return "—";
+  if (v.length <= 4) return "••••";
+  return "•".repeat(Math.max(8, v.length - 4)) + v.slice(-4);
+}
+
+// Clipboard helper — tries ExpoClipboard first, falls back to React Native's
+// built-in Clipboard TurboModule which is always registered in any RN app.
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    // Prefer ExpoClipboard when available (i.e. dev client built with it).
+    const expoClip = (NativeModulesProxy as Record<string, unknown>)["ExpoClipboard"] as
+      | { setStringAsync: (s: string) => Promise<void> }
+      | undefined;
+    if (expoClip?.setStringAsync) {
+      await expoClip.setStringAsync(text);
+      return true;
+    }
+    // Fall back to React Native core Clipboard (always available).
+    const rnClip = NativeModules.Clipboard as
+      | { setString: (s: string) => void }
+      | undefined;
+    if (rnClip?.setString) {
+      rnClip.setString(text);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function DetailRow({
+  label,
+  value,
+  secret,
+}: {
+  label: string;
+  value: string;
+  secret?: boolean;
+}) {
+  const tokens = useThemeTokens();
+  const { t } = useI18n();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
+  const [revealed, setRevealed] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    },
+    []
+  );
+
+  const handleCopy = useCallback(async () => {
+    if (!value) return;
+    const ok = await copyToClipboard(value);
+    if (ok) {
+      haptic.success();
+      setCopied(true);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 1500);
+    } else {
+      haptic.error();
+    }
+  }, [value]);
+
+  const display = secret && !revealed ? maskId(value) : value;
   return (
     <View style={styles.detailRow}>
       <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue} numberOfLines={2}>
-        {value || "—"}
-      </Text>
+      {secret ? (
+        <Pressable
+          onLongPress={handleCopy}
+          delayLongPress={350}
+          style={styles.detailValueRow}
+          android_ripple={{ color: tokens.CARD_HOVER }}
+        >
+          <Text
+            style={[
+              styles.detailValue,
+              !revealed && !copied && styles.detailValueMasked,
+              copied && { color: tokens.SUCCESS },
+            ]}
+            numberOfLines={1}
+          >
+            {copied ? t("sales_export_copied") : display || "—"}
+          </Text>
+          <Pressable
+            hitSlop={8}
+            onPress={() => setRevealed((v) => !v)}
+            style={({ pressed }) => [
+              styles.revealBtn,
+              pressed && { opacity: 0.5 },
+            ]}
+          >
+            <Ionicons
+              name={revealed ? "eye-off-outline" : "eye-outline"}
+              size={14}
+              color={tokens.TEXT_DIM}
+            />
+          </Pressable>
+        </Pressable>
+      ) : (
+        <Text style={styles.detailValue} numberOfLines={2}>
+          {value || "—"}
+        </Text>
+      )}
     </View>
   );
 }
@@ -187,6 +294,8 @@ function SectionCard({
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
@@ -208,6 +317,8 @@ function HoursRow({
   label: string;
   slots: OpenHourSlot[];
 }) {
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
   const { t } = useI18n();
   const closed = slots.length === 0;
   return (
@@ -238,15 +349,18 @@ function HoursRow({
   );
 }
 
-function SurchargeRow({ item }: { item: OfficialNamedSurcharge }) {  return (
+function SurchargeRow({ item }: { item: OfficialNamedSurcharge }) {
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
+  return (
     <View style={styles.surchargeRow}>
       <View style={styles.surchargeLeft}>
         <View style={styles.surchargeTagRow}>
-          <Ionicons name="pricetag-outline" size={13} color={TEXT_DIM} />
+          <Ionicons name="pricetag-outline" size={13} color={tokens.TEXT_DIM} />
           <Text style={styles.surchargeName}>{item.name}</Text>
         </View>
         <View style={styles.surchargeDateRow}>
-          <Ionicons name="calendar-outline" size={12} color={TEXT_FAINT} />
+          <Ionicons name="calendar-outline" size={12} color={tokens.TEXT_FAINT} />
           <Text style={styles.surchargeDate}>
             {formatSurchargeDate(item.date)}
           </Text>
@@ -258,7 +372,7 @@ function SurchargeRow({ item }: { item: OfficialNamedSurcharge }) {  return (
             styles.surchargeToggle,
             {
               backgroundColor: item.enabled
-                ? SUCCESS_DIM
+                ? tokens.SUCCESS_DIM
                 : "rgba(255,255,255,0.06)",
             },
           ]}
@@ -267,7 +381,7 @@ function SurchargeRow({ item }: { item: OfficialNamedSurcharge }) {  return (
             style={[
               styles.surchargeDot,
               {
-                backgroundColor: item.enabled ? SUCCESS : TEXT_FAINT,
+                backgroundColor: item.enabled ? tokens.SUCCESS : tokens.TEXT_FAINT,
                 alignSelf: item.enabled ? "flex-end" : "flex-start",
               },
             ]}
@@ -278,7 +392,7 @@ function SurchargeRow({ item }: { item: OfficialNamedSurcharge }) {  return (
             styles.surchargePctPill,
             {
               backgroundColor: item.enabled
-                ? ACCENT_DIM
+                ? tokens.ACCENT_DIM
                 : "rgba(255,255,255,0.05)",
             },
           ]}
@@ -286,7 +400,7 @@ function SurchargeRow({ item }: { item: OfficialNamedSurcharge }) {  return (
           <Text
             style={[
               styles.surchargePctText,
-              { color: item.enabled ? ACCENT : TEXT_DIM },
+              { color: item.enabled ? tokens.ACCENT : tokens.TEXT_DIM },
             ]}
           >
             {formatPercent(item.percentage)}
@@ -312,6 +426,8 @@ function EditHoursModal({
   onCancel: () => void;
   onSave: (hours: OfficialShopOpenHours) => void;
 }) {
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
   const { t } = useI18n();
   const [draft, setDraft] = useState<OfficialShopOpenHours>(initial);
 
@@ -410,7 +526,7 @@ function EditHoursModal({
               hitSlop={10}
             >
               {saving ? (
-                <ActivityIndicator color={GOLD} />
+                <ActivityIndicator color={tokens.GOLD} />
               ) : (
                 <Text style={styles.modalSave}>{t("stores_modal_save")}</Text>
               )}
@@ -433,7 +549,7 @@ function EditHoursModal({
                     onPress={() => addSlot(day)}
                     hitSlop={6}
                   >
-                    <Ionicons name="add" size={13} color={ACCENT} />
+                    <Ionicons name="add" size={13} color={tokens.ACCENT} />
                     <Text style={styles.addSlotLabel}>{t("stores_modal_add_slot")}</Text>
                   </Pressable>
                 </View>
@@ -451,7 +567,7 @@ function EditHoursModal({
                             updateSlot(day, idx, "start_time", v)
                           }
                           placeholder="--:--"
-                          placeholderTextColor={TEXT_FAINT}
+                          placeholderTextColor={tokens.TEXT_FAINT}
                           keyboardType="number-pad"
                           maxLength={5}
                           style={styles.editInput}
@@ -463,7 +579,7 @@ function EditHoursModal({
                             updateSlot(day, idx, "end_time", v)
                           }
                           placeholder="--:--"
-                          placeholderTextColor={TEXT_FAINT}
+                          placeholderTextColor={tokens.TEXT_FAINT}
                           keyboardType="number-pad"
                           maxLength={5}
                           style={styles.editInput}
@@ -479,7 +595,7 @@ function EditHoursModal({
                           <Ionicons
                             name="close"
                             size={16}
-                            color={TEXT_FAINT}
+                            color={tokens.TEXT_FAINT}
                           />
                         </Pressable>
                       </View>
@@ -530,6 +646,8 @@ function EditSurchargesModal({
     specific: Record<string, number>
   ) => void;
 }) {
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
   const { t } = useI18n();
   const [specificDraft, setSpecificDraft] = useState<SpecificDraft[]>([]);
   const [namedDraft, setNamedDraft] = useState<NamedDraft[]>([]);
@@ -713,7 +831,7 @@ function EditSurchargesModal({
             <Text style={styles.modalTitle}>{t("stores_modal_edit_surcharges")}</Text>
             <Pressable onPress={handleSave} disabled={saving} hitSlop={10}>
               {saving ? (
-                <ActivityIndicator color={GOLD} />
+                <ActivityIndicator color={tokens.GOLD} />
               ) : (
                 <Text style={styles.modalSave}>{t("stores_modal_save")}</Text>
               )}
@@ -736,7 +854,7 @@ function EditSurchargesModal({
                   onPress={addSpecific}
                   hitSlop={6}
                 >
-                  <Ionicons name="add" size={13} color={ACCENT} />
+                  <Ionicons name="add" size={13} color={tokens.ACCENT} />
                   <Text style={styles.addSlotLabel}>{t("stores_modal_add")}</Text>
                 </Pressable>
               </View>
@@ -752,7 +870,7 @@ function EditSurchargesModal({
                         value={row.date}
                         onChangeText={(v) => updateSpecific(row.id, "date", v)}
                         placeholder="YYYY-MM-DD"
-                        placeholderTextColor={TEXT_FAINT}
+                        placeholderTextColor={tokens.TEXT_FAINT}
                         keyboardType="number-pad"
                         maxLength={10}
                         style={[styles.editInput, styles.dateInput]}
@@ -764,7 +882,7 @@ function EditSurchargesModal({
                             updateSpecific(row.id, "percentInput", v)
                           }
                           placeholder="0"
-                          placeholderTextColor={TEXT_FAINT}
+                          placeholderTextColor={tokens.TEXT_FAINT}
                           keyboardType="decimal-pad"
                           maxLength={6}
                           style={styles.percentInput}
@@ -779,7 +897,7 @@ function EditSurchargesModal({
                           pressed && { opacity: 0.5 },
                         ]}
                       >
-                        <Ionicons name="close" size={16} color={TEXT_FAINT} />
+                        <Ionicons name="close" size={16} color={tokens.TEXT_FAINT} />
                       </Pressable>
                     </View>
                   ))}
@@ -799,7 +917,7 @@ function EditSurchargesModal({
                   onPress={addNamed}
                   hitSlop={6}
                 >
-                  <Ionicons name="add" size={13} color={ACCENT} />
+                  <Ionicons name="add" size={13} color={tokens.ACCENT} />
                   <Text style={styles.addSlotLabel}>{t("stores_modal_add")}</Text>
                 </Pressable>
               </View>
@@ -818,7 +936,7 @@ function EditSurchargesModal({
                             updateNamed(row.id, { name: v })
                           }
                           placeholder={t("stores_modal_holiday_name_placeholder")}
-                          placeholderTextColor={TEXT_FAINT}
+                          placeholderTextColor={tokens.TEXT_FAINT}
                           style={[styles.editInput, styles.namedNameInput]}
                         />
                         <Pressable
@@ -830,7 +948,7 @@ function EditSurchargesModal({
                             styles.surchargeToggle,
                             {
                               backgroundColor: row.enabled
-                                ? SUCCESS_DIM
+                                ? tokens.SUCCESS_DIM
                                 : "rgba(255,255,255,0.06)",
                             },
                           ]}
@@ -840,8 +958,8 @@ function EditSurchargesModal({
                               styles.surchargeDot,
                               {
                                 backgroundColor: row.enabled
-                                  ? SUCCESS
-                                  : TEXT_FAINT,
+                                  ? tokens.SUCCESS
+                                  : tokens.TEXT_FAINT,
                                 alignSelf: row.enabled
                                   ? "flex-end"
                                   : "flex-start",
@@ -860,7 +978,7 @@ function EditSurchargesModal({
                           <Ionicons
                             name="close"
                             size={16}
-                            color={TEXT_FAINT}
+                            color={tokens.TEXT_FAINT}
                           />
                         </Pressable>
                       </View>
@@ -871,7 +989,7 @@ function EditSurchargesModal({
                             updateNamed(row.id, { date: v })
                           }
                           placeholder="YYYY-MM-DD"
-                          placeholderTextColor={TEXT_FAINT}
+                          placeholderTextColor={tokens.TEXT_FAINT}
                           keyboardType="number-pad"
                           maxLength={10}
                           style={[styles.editInput, styles.dateInput]}
@@ -883,7 +1001,7 @@ function EditSurchargesModal({
                               updateNamed(row.id, { percentInput: v })
                             }
                             placeholder="0"
-                            placeholderTextColor={TEXT_FAINT}
+                            placeholderTextColor={tokens.TEXT_FAINT}
                             keyboardType="decimal-pad"
                             maxLength={6}
                             style={styles.percentInput}
@@ -907,6 +1025,8 @@ function EditSurchargesModal({
 // ─── Screen ─────────────────────────────────────────────────────────────────
 
 export default function StoresScreen() {
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
   const { t } = useI18n();
   const { email, token, loading: authLoading } = useAuth();
   const [shop, setShop] = useState<OfficialShopDetail | null>(null);
@@ -921,6 +1041,15 @@ export default function StoresScreen() {
     uri: string;
     label: string;
   } | null>(null);
+  const [warehouseIdRevealed, setWarehouseIdRevealed] = useState(false);
+  const [warehouseIdCopied, setWarehouseIdCopied] = useState(false);
+  const warehouseIdCopiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (warehouseIdCopiedTimer.current) clearTimeout(warehouseIdCopiedTimer.current);
+    },
+    []
+  );
 
   const load = useCallback(
     async (mode: "initial" | "refresh") => {
@@ -1031,9 +1160,77 @@ export default function StoresScreen() {
   if (loading || authLoading) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.centerFill}>
-          <ActivityIndicator color={GOLD} />
-        </View>
+        <OfflineNotice />
+        <ScrollView
+          style={styles.container}
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header — eyebrow → title → subtitle, matches ScreenHeader rhythm */}
+          <View style={styles.bootHeader}>
+            <Skeleton width={70} height={10} radius={3} />
+            <Skeleton width={"58%" as any} height={26} radius={6} style={styles.bootHeaderTitle} />
+            <Skeleton width={"40%" as any} height={12} radius={3} style={styles.bootHeaderSubtitle} />
+          </View>
+
+          {/* Store Detail card — section label + 4 detail rows */}
+          <View style={styles.bootSectionLabel}>
+            <Skeleton width={100} height={10} radius={3} />
+          </View>
+          <View style={styles.bootCard}>
+            <Skeleton width={"45%" as any} height={13} radius={3} />
+            {[0, 1, 2, 3].map((i) => (
+              <View key={i} style={styles.bootDetailRow}>
+                <Skeleton width={`${28 + (i % 2) * 8}%` as any} height={11} radius={3} />
+                <Skeleton width={`${34 + (i % 3) * 10}%` as any} height={12} radius={3} />
+              </View>
+            ))}
+          </View>
+
+          {/* Store Logo card — square thumbnail + meta column */}
+          <View style={styles.bootSectionLabel}>
+            <Skeleton width={80} height={10} radius={3} />
+          </View>
+          <View style={styles.bootCard}>
+            <Skeleton width={"40%" as any} height={13} radius={3} />
+            <Skeleton width={"75%" as any} height={11} radius={3} style={{ marginTop: 2 }} />
+            <View style={styles.bootLogoRow}>
+              <Skeleton width={64} height={64} radius={12} />
+              <View style={styles.bootLogoMeta}>
+                <Skeleton width={"70%" as any} height={13} radius={3} />
+                <Skeleton width={"50%" as any} height={11} radius={3} />
+              </View>
+            </View>
+          </View>
+
+          {/* Store Banner card — wide 3:1 banner block */}
+          <View style={styles.bootSectionLabel}>
+            <Skeleton width={90} height={10} radius={3} />
+          </View>
+          <View style={styles.bootCard}>
+            <Skeleton width={"55%" as any} height={13} radius={3} />
+            <Skeleton width={"80%" as any} height={11} radius={3} style={{ marginTop: 2 }} />
+            <View style={styles.bootBannerWrap}>
+              <Skeleton width={"100%" as any} height={120} radius={12} />
+            </View>
+          </View>
+
+          {/* Online Store card — link box + small button */}
+          <View style={styles.bootSectionLabel}>
+            <Skeleton width={100} height={10} radius={3} />
+          </View>
+          <View style={styles.bootCard}>
+            <Skeleton width={"50%" as any} height={13} radius={3} />
+            <Skeleton width={"70%" as any} height={11} radius={3} style={{ marginTop: 2 }} />
+            <View style={styles.bootLinkRow}>
+              <View style={styles.bootLinkBox}>
+                <Skeleton width={70} height={10} radius={3} />
+                <Skeleton width={"95%" as any} height={12} radius={3} style={{ marginTop: 6 }} />
+              </View>
+              <Skeleton width={64} height={32} radius={16} />
+            </View>
+          </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -1042,7 +1239,7 @@ export default function StoresScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <View style={styles.centerFill}>
-          <Ionicons name="alert-circle-outline" size={28} color={DANGER} />
+          <Ionicons name="alert-circle-outline" size={28} color={tokens.DANGER} />
           <Text style={styles.errorTitle}>{t("stores_error_unable_to_load")}</Text>
           <Text style={styles.errorBody}>{error}</Text>
           <Pressable style={styles.retryBtn} onPress={() => load("initial")}>
@@ -1088,9 +1285,12 @@ export default function StoresScreen() {
         />
 
         {/* Store Detail */}
-        <SectionLabel label={t("stores_detail_section")} />
+        <SectionLabel
+          label={t("stores_detail_section")}
+          style={styles.firstSectionLabel}
+        />
         <SectionCard title={t("stores_identifiers")}>
-          <DetailRow label={t("stores_store_id")} value={shop._id} />
+          <DetailRow label={t("stores_store_id")} value={shop._id} secret />
           <DetailRow label={t("stores_store_name_identifier")} value={shop.name ?? ""} />
           <DetailRow
             label={t("stores_store_name_public")}
@@ -1130,7 +1330,7 @@ export default function StoresScreen() {
                   style={styles.logoImgInner}
                 />
               ) : (
-                <Ionicons name="image-outline" size={22} color={TEXT_FAINT} />
+                <Ionicons name="image-outline" size={22} color={tokens.TEXT_FAINT} />
               )}
             </Pressable>
             {shop.logo ? (
@@ -1139,7 +1339,7 @@ export default function StoresScreen() {
                   {shop.store_name || shop.name || t("stores_logo_fallback")}
                 </Text>
                 <View style={styles.tapHintRow}>
-                  <Ionicons name="expand-outline" size={12} color={TEXT_DIM} />
+                  <Ionicons name="expand-outline" size={12} color={tokens.TEXT_DIM} />
                   <Text style={styles.tapHint}>{t("stores_tap_to_preview")}</Text>
                 </View>
               </View>
@@ -1173,11 +1373,11 @@ export default function StoresScreen() {
                 resizeMode="cover"
               />
             ) : (
-              <Ionicons name="image-outline" size={28} color={TEXT_FAINT} />
+              <Ionicons name="image-outline" size={28} color={tokens.TEXT_FAINT} />
             )}
             {shop.banner ? (
               <View style={styles.bannerExpandBadge}>
-                <Ionicons name="expand-outline" size={13} color={TEXT} />
+                <Ionicons name="expand-outline" size={13} color={tokens.TEXT} />
               </View>
             ) : null}
           </Pressable>
@@ -1207,7 +1407,7 @@ export default function StoresScreen() {
                   Linking.openURL(storefrontUrl).catch(() => undefined);
                 }}
               >
-                <Ionicons name="open-outline" size={14} color={ACCENT} />
+                <Ionicons name="open-outline" size={14} color={tokens.ACCENT} />
                 <Text style={styles.visitBtnLabel}>{t("stores_visit_btn")}</Text>
               </Pressable>
             ) : null}
@@ -1222,14 +1422,14 @@ export default function StoresScreen() {
         >
           <View style={styles.warehouseRow}>
             <View style={styles.warehouseIcon}>
-              <Ionicons name="cube-outline" size={18} color={GOLD} />
+              <Ionicons name="cube-outline" size={18} color={tokens.GOLD} />
             </View>
             <View style={styles.warehouseBody}>
               <Text style={styles.warehouseTitle}>{t("stores_warehouse_title")}</Text>
               <Text
                 style={[
                   styles.warehouseStatus,
-                  { color: shop.warehouse_id ? SUCCESS : TEXT_DIM },
+                  { color: shop.warehouse_id ? tokens.SUCCESS : tokens.TEXT_DIM },
                 ]}
               >
                 {shop.warehouse_id ? t("stores_warehouse_connected") : t("stores_warehouse_not_connected")}
@@ -1237,12 +1437,58 @@ export default function StoresScreen() {
             </View>
           </View>
           {shop.warehouse_id ? (
-            <View style={styles.warehouseIdBox}>
+            <Pressable
+              onLongPress={async () => {
+                const ok = await copyToClipboard(shop.warehouse_id || "");
+                if (ok) {
+                  haptic.success();
+                  setWarehouseIdCopied(true);
+                  if (warehouseIdCopiedTimer.current)
+                    clearTimeout(warehouseIdCopiedTimer.current);
+                  warehouseIdCopiedTimer.current = setTimeout(
+                    () => setWarehouseIdCopied(false),
+                    1500
+                  );
+                } else {
+                  haptic.error();
+                }
+              }}
+              delayLongPress={350}
+              style={styles.warehouseIdBox}
+              android_ripple={{ color: tokens.CARD_HOVER }}
+            >
               <Text style={styles.warehouseIdLabel}>{t("stores_warehouse_id_label")}</Text>
-              <Text style={styles.warehouseIdValue} numberOfLines={1}>
-                {shop.warehouse_id}
-              </Text>
-            </View>
+              <View style={styles.warehouseIdRow}>
+                <Text
+                  style={[
+                    styles.warehouseIdValue,
+                    !warehouseIdRevealed && !warehouseIdCopied && styles.detailValueMasked,
+                    warehouseIdCopied && { color: tokens.SUCCESS },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {warehouseIdCopied
+                    ? t("sales_export_copied")
+                    : warehouseIdRevealed
+                    ? shop.warehouse_id
+                    : maskId(shop.warehouse_id)}
+                </Text>
+                <Pressable
+                  hitSlop={8}
+                  onPress={() => setWarehouseIdRevealed((v) => !v)}
+                  style={({ pressed }) => [
+                    styles.revealBtn,
+                    pressed && { opacity: 0.5 },
+                  ]}
+                >
+                  <Ionicons
+                    name={warehouseIdRevealed ? "eye-off-outline" : "eye-outline"}
+                    size={14}
+                    color={tokens.TEXT_DIM}
+                  />
+                </Pressable>
+              </View>
+            </Pressable>
           ) : null}
         </SectionCard>
 
@@ -1264,10 +1510,10 @@ export default function StoresScreen() {
               hitSlop={8}
             >
               <View style={styles.headerEditBtnIconWrap}>
-                <Ionicons name="pencil" size={10} color={ACCENT} />
+                <Ionicons name="pencil" size={10} color={tokens.ACCENT} />
               </View>
               <Text style={styles.headerEditBtnLabel}>{t("stores_edit_btn")}</Text>
-              <Ionicons name="chevron-forward" size={11} color={ACCENT} />
+              <Ionicons name="chevron-forward" size={11} color={tokens.ACCENT} />
             </Pressable>
           }
         >
@@ -1282,7 +1528,7 @@ export default function StoresScreen() {
             ))}
           </View>
           <View style={styles.preorderNote}>
-            <Ionicons name="calendar-outline" size={13} color={TEXT_DIM} />
+            <Ionicons name="calendar-outline" size={13} color={tokens.TEXT_DIM} />
             <Text style={styles.preorderNoteText}>
               <Text style={styles.preorderNoteLabel}>{t("stores_preorder_label")}</Text>
               {(shop.max_perorderday ?? 0) > 0
@@ -1310,10 +1556,10 @@ export default function StoresScreen() {
               hitSlop={8}
             >
               <View style={styles.headerEditBtnIconWrap}>
-                <Ionicons name="pencil" size={10} color={ACCENT} />
+                <Ionicons name="pencil" size={10} color={tokens.ACCENT} />
               </View>
               <Text style={styles.headerEditBtnLabel}>{t("stores_edit_btn")}</Text>
-              <Ionicons name="chevron-forward" size={11} color={ACCENT} />
+              <Ionicons name="chevron-forward" size={11} color={tokens.ACCENT} />
             </Pressable>
           }
         >
@@ -1328,16 +1574,16 @@ export default function StoresScreen() {
                   <Ionicons
                     name="calendar-outline"
                     size={13}
-                    color={TEXT_DIM}
+                    color={tokens.TEXT_DIM}
                   />
                   <Text style={styles.specificDate}>
                     {formatSurchargeDate(item.date)}
                   </Text>
                 </View>
                 <View
-                  style={[styles.surchargePctPill, { backgroundColor: ACCENT_DIM }]}
+                  style={[styles.surchargePctPill, { backgroundColor: tokens.ACCENT_DIM }]}
                 >
-                  <Text style={[styles.surchargePctText, { color: ACCENT }]}>
+                  <Text style={[styles.surchargePctText, { color: tokens.ACCENT }]}>
                     {formatPercent(item.percentage)}
                   </Text>
                 </View>
@@ -1398,7 +1644,7 @@ export default function StoresScreen() {
                 hitSlop={12}
                 style={styles.previewClose}
               >
-                <Ionicons name="close" size={20} color={TEXT} />
+                <Ionicons name="close" size={20} color={tokens.TEXT} />
               </Pressable>
             </View>
             {previewImage ? (
@@ -1417,8 +1663,8 @@ export default function StoresScreen() {
 
 // ─── Styles ─────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: BG },
+const makeStyles = (t: ThemeTokens) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: t.BG },
   container: { flex: 1 },
   content: {
     paddingHorizontal: SCREEN_PADDING,
@@ -1433,9 +1679,9 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: SCREEN_PADDING,
   },
-  errorTitle: { color: TEXT, fontSize: 16, fontWeight: "700" },
+  errorTitle: { color: t.TEXT, fontSize: 16, fontWeight: "700" },
   errorBody: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 13,
     textAlign: "center",
     lineHeight: 18,
@@ -1445,15 +1691,76 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 999,
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: GOLD,
+    borderColor: t.GOLD,
   },
-  retryLabel: { color: GOLD, fontWeight: "700", fontSize: 13 },
+  retryLabel: { color: t.GOLD, fontWeight: "700", fontSize: 13 },
+
+  firstSectionLabel: {
+    marginTop: 2,
+  },
+
+  // ─── Initial stores loading skeleton ─────────────────────────────────
+  // Mirrors the real ScreenHeader + section-card stack so the first paint
+  // previews the page shape (header, detail rows, logo, banner, link)
+  // instead of a single spinner.
+  bootHeader: {
+    gap: 6,
+    marginTop: 2,
+    marginBottom: 4,
+  },
+  bootHeaderTitle: { marginTop: 4 },
+  bootHeaderSubtitle: { marginTop: 4 },
+  bootSectionLabel: {
+    marginTop: 14,
+    marginBottom: 4,
+  },
+  bootCard: {
+    backgroundColor: t.CARD,
+    borderColor: t.CARD_BORDER,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 10,
+  },
+  bootDetailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: t.CARD_BORDER,
+    gap: 12,
+  },
+  bootLogoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingVertical: 4,
+    marginTop: 4,
+  },
+  bootLogoMeta: {
+    flex: 1,
+    gap: 8,
+  },
+  bootBannerWrap: {
+    marginTop: 4,
+  },
+  bootLinkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginTop: 4,
+  },
+  bootLinkBox: {
+    flex: 1,
+  },
 
   card: {
-    backgroundColor: CARD,
-    borderColor: CARD_BORDER,
+    backgroundColor: t.CARD,
+    borderColor: t.CARD_BORDER,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 16,
     paddingHorizontal: 16,
@@ -1466,8 +1773,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   cardHeaderAction: { marginLeft: 8 },
-  cardTitle: { color: TEXT, fontSize: 14, fontWeight: "700" },
-  cardHint: { color: TEXT_DIM, fontSize: 12, lineHeight: 17 },
+  cardTitle: { color: t.TEXT, fontSize: 14, fontWeight: "700" },
+  cardHint: { color: t.TEXT_DIM, fontSize: 12, lineHeight: 17 },
   cardBody: { gap: 4 },
 
   detailRow: {
@@ -1476,21 +1783,40 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
+    borderBottomColor: t.CARD_BORDER,
     gap: 12,
   },
   detailLabel: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     fontWeight: "500",
     flexShrink: 0,
   },
   detailValue: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "600",
     textAlign: "right",
     flexShrink: 1,
+  },
+  detailValueMasked: {
+    fontFamily: "Menlo",
+    letterSpacing: 1,
+    color: t.TEXT_DIM,
+  },
+  detailValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 1,
+  },
+  revealBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: t.CARD_HOVER,
   },
 
   logoRow: {
@@ -1509,10 +1835,10 @@ const styles = StyleSheet.create({
   logoImgInner: { width: "100%", height: "100%" },
   imgPlaceholder: { alignItems: "center", justifyContent: "center" },
   logoMeta: { flex: 1, gap: 4 },
-  metaTitle: { color: TEXT, fontSize: 13, fontWeight: "700" },
-  metaItem: { color: TEXT_DIM, fontSize: 11, lineHeight: 16 },
+  metaTitle: { color: t.TEXT, fontSize: 13, fontWeight: "700" },
+  metaItem: { color: t.TEXT_DIM, fontSize: 11, lineHeight: 16 },
   tapHintRow: { flexDirection: "row", alignItems: "center", gap: 5 },
-  tapHint: { color: TEXT_DIM, fontSize: 11, fontWeight: "500" },
+  tapHint: { color: t.TEXT_DIM, fontSize: 11, fontWeight: "500" },
 
   bannerHeaderRow: { flexDirection: "row", justifyContent: "flex-end" },
   recoPill: {
@@ -1521,10 +1847,10 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: "rgba(255,255,255,0.05)",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   recoPillText: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 10,
     fontWeight: "600",
     letterSpacing: 0.4,
@@ -1564,7 +1890,7 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   previewLabel: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 14,
     fontWeight: "700",
     letterSpacing: 0.3,
@@ -1591,16 +1917,16 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: "rgba(255,255,255,0.04)",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     gap: 2,
   },
   linkLabel: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 9,
     fontWeight: "700",
     letterSpacing: 1.2,
   },
-  linkValue: { color: TEXT, fontSize: 12, fontWeight: "500" },
+  linkValue: { color: t.TEXT, fontSize: 12, fontWeight: "500" },
   visitBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -1608,11 +1934,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 10,
-    backgroundColor: ACCENT_DIM,
+    backgroundColor: t.ACCENT_DIM,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ACCENT,
+    borderColor: t.ACCENT,
   },
-  visitBtnLabel: { color: ACCENT, fontSize: 12, fontWeight: "700" },
+  visitBtnLabel: { color: t.ACCENT, fontSize: 12, fontWeight: "700" },
 
   warehouseRow: {
     flexDirection: "row",
@@ -1624,29 +1950,36 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
     alignItems: "center",
     justifyContent: "center",
   },
   warehouseBody: { flex: 1, gap: 2 },
-  warehouseTitle: { color: TEXT, fontSize: 13, fontWeight: "700" },
+  warehouseTitle: { color: t.TEXT, fontSize: 13, fontWeight: "700" },
   warehouseStatus: { fontSize: 11, fontWeight: "600" },
   warehouseIdBox: {
     marginTop: 6,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
-    backgroundColor: "rgba(255,255,255,0.04)",
+    backgroundColor: t.CARD_HOVER,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
+  },
+  warehouseIdRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    marginTop: 2,
   },
   warehouseIdLabel: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 9,
     fontWeight: "700",
     letterSpacing: 1.2,
   },
-  warehouseIdValue: { color: TEXT, fontSize: 12, fontWeight: "500" },
+  warehouseIdValue: { color: t.TEXT, fontSize: 12, fontWeight: "500" },
 
   hoursList: { marginTop: 2 },
   hoursRow: {
@@ -1655,16 +1988,16 @@ const styles = StyleSheet.create({
     minHeight: 38,
     paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
+    borderBottomColor: t.CARD_BORDER,
     gap: 10,
   },
   hoursDayLabel: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "500",
     width: 88,
   },
-  hoursDayLabelDim: { color: TEXT_DIM, fontWeight: "400" },
+  hoursDayLabelDim: { color: t.TEXT_DIM, fontWeight: "400" },
   hoursSlots: {
     flex: 1,
     flexDirection: "row",
@@ -1674,20 +2007,20 @@ const styles = StyleSheet.create({
   },
   slotItem: { flexDirection: "row", alignItems: "center" },
   slotText: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "500",
     fontVariant: ["tabular-nums"],
   },
-  slotDash: { color: TEXT_FAINT, fontWeight: "400" },
+  slotDash: { color: t.TEXT_FAINT, fontWeight: "400" },
   slotDivider: {
     width: 1,
     height: 10,
     marginHorizontal: 10,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
   },
   closedLabel: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 12,
     fontWeight: "500",
     letterSpacing: 0.2,
@@ -1701,12 +2034,12 @@ const styles = StyleSheet.create({
   },
   preorderNoteText: {
     flex: 1,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     lineHeight: 16,
   },
   preorderNoteLabel: {
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "600",
   },
 
@@ -1715,14 +2048,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
+    borderBottomColor: t.CARD_BORDER,
     gap: 12,
   },
   surchargeLeft: { flex: 1, gap: 4 },
   surchargeTagRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  surchargeName: { color: TEXT, fontSize: 13, fontWeight: "700" },
+  surchargeName: { color: t.TEXT, fontSize: 13, fontWeight: "700" },
   surchargeDateRow: { flexDirection: "row", alignItems: "center", gap: 5 },
-  surchargeDate: { color: TEXT_FAINT, fontSize: 11, fontWeight: "500" },
+  surchargeDate: { color: t.TEXT_FAINT, fontSize: 11, fontWeight: "500" },
   surchargeRight: { flexDirection: "row", alignItems: "center", gap: 8 },
   surchargeToggle: {
     width: 34,
@@ -1740,14 +2073,14 @@ const styles = StyleSheet.create({
   surchargePctText: { fontSize: 11, fontWeight: "700" },
 
   emptyText: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     fontStyle: "italic",
     paddingVertical: 6,
   },
 
   subSectionLabel: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0.3,
@@ -1760,7 +2093,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: 9,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
+    borderBottomColor: t.CARD_BORDER,
     gap: 10,
   },
   specificDateRow: {
@@ -1769,7 +2102,7 @@ const styles = StyleSheet.create({
     gap: 6,
     flex: 1,
   },
-  specificDate: { color: TEXT, fontSize: 13, fontWeight: "600" },
+  specificDate: { color: t.TEXT, fontSize: 13, fontWeight: "600" },
 
   // Edit surcharge modal extras
   editGroupHeader: {
@@ -1779,7 +2112,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   editGroupTitle: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "700",
     letterSpacing: 0.3,
@@ -1790,7 +2123,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   percentSuffix: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 13,
     fontWeight: "500",
     marginLeft: 4,
@@ -1817,7 +2150,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   headerEditBtnLabel: {
-    color: ACCENT,
+    color: t.ACCENT,
     fontSize: 10.5,
     fontWeight: "700",
     letterSpacing: 1.1,
@@ -1825,7 +2158,7 @@ const styles = StyleSheet.create({
   },
 
   // Edit hours modal
-  modalSafe: { flex: 1, backgroundColor: BG },
+  modalSafe: { flex: 1, backgroundColor: t.BG },
   modalHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -1833,11 +2166,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: SCREEN_PADDING,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
+    borderBottomColor: t.CARD_BORDER,
   },
-  modalTitle: { color: TEXT, fontSize: 16, fontWeight: "700" },
-  modalCancel: { color: TEXT_DIM, fontSize: 14, fontWeight: "600" },
-  modalSave: { color: GOLD, fontSize: 14, fontWeight: "700" },
+  modalTitle: { color: t.TEXT, fontSize: 16, fontWeight: "700" },
+  modalCancel: { color: t.TEXT_DIM, fontSize: 14, fontWeight: "600" },
+  modalSave: { color: t.GOLD, fontSize: 14, fontWeight: "700" },
   modalContent: {
     paddingHorizontal: SCREEN_PADDING,
     paddingTop: 8,
@@ -1846,7 +2179,7 @@ const styles = StyleSheet.create({
   editDayGroup: {
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
+    borderBottomColor: t.CARD_BORDER,
     gap: 10,
   },
   editDayHeader: {
@@ -1855,7 +2188,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   editDayLabel: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 15,
     fontWeight: "600",
     letterSpacing: 0.2,
@@ -1867,9 +2200,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
-  addSlotLabel: { color: ACCENT, fontSize: 12, fontWeight: "600" },
+  addSlotLabel: { color: t.ACCENT, fontSize: 12, fontWeight: "600" },
   editClosedHint: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 12,
   },
   editSlotList: { gap: 8 },
@@ -1879,13 +2212,13 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   editArrow: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 16,
     fontWeight: "400",
   },
   editInput: {
     flex: 1,
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 15,
     fontWeight: "500",
     fontVariant: ["tabular-nums"],
@@ -1907,7 +2240,7 @@ const styles = StyleSheet.create({
   },
   percentInput: {
     flex: 1,
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 15,
     fontWeight: "500",
     fontVariant: ["tabular-nums"],

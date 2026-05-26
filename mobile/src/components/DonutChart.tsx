@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import Svg, { Circle, G } from "react-native-svg";
 import { Animated, Easing, StyleSheet, Text, View } from "react-native";
+import { useThemeTokens } from "../context/ThemeContext";
+import type { ThemeTokens } from "../theme/tokens";
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
@@ -46,6 +48,12 @@ export const DonutChart: React.FC<DonutChartProps> = ({
   centerValue,
   formatValue,
 }) => {
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
+  const trackStroke =
+    tokens.STATUS_BAR === "dark"
+      ? "rgba(17,19,28,0.08)"
+      : "rgba(255,255,255,0.05)";
   const total = useMemo(
     () => items.reduce((sum, item) => sum + item.value, 0),
     [items]
@@ -182,7 +190,7 @@ export const DonutChart: React.FC<DonutChartProps> = ({
             cy={center}
             r={radius}
             fill="none"
-            stroke="rgba(255,255,255,0.05)"
+            stroke={trackStroke}
             strokeWidth={strokeWidth}
           />
           {renderArcs.map((arc) => {
@@ -292,7 +300,7 @@ export const DonutChart: React.FC<DonutChartProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (t: ThemeTokens) => StyleSheet.create({
   rowContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -319,14 +327,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   centerLabel: {
-    color: "rgba(255,255,255,0.4)",
+    color: t.TEXT_FAINT,
     fontSize: 8,
     fontWeight: "700",
     letterSpacing: 1.3,
     textTransform: "uppercase",
   },
   centerValue: {
-    color: "rgba(255,255,255,0.95)",
+    color: t.TEXT,
     fontSize: 22,
     fontWeight: "800",
     marginTop: 2,
@@ -334,7 +342,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   centerMeta: {
-    color: "rgba(255,255,255,0.6)",
+    color: t.TEXT_DIM,
     fontSize: 10,
     fontWeight: "600",
     marginTop: 2,
@@ -360,24 +368,24 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   legendLabel: {
-    color: "rgba(255,255,255,0.78)",
+    color: t.TEXT_DIM,
     fontSize: 13,
     fontWeight: "600",
     letterSpacing: -0.1,
   },
   legendLabelLead: {
-    color: "rgba(255,255,255,0.95)",
+    color: t.TEXT,
     fontWeight: "700",
   },
   legendValue: {
-    color: "rgba(255,255,255,0.42)",
+    color: t.TEXT_FAINT,
     fontSize: 11,
     fontWeight: "600",
     letterSpacing: 0.1,
     marginTop: 1,
   },
   legendPct: {
-    color: "rgba(255,255,255,0.92)",
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "700",
     letterSpacing: -0.2,

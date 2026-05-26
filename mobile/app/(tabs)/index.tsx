@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -53,7 +53,9 @@ import {
   WARNING,
   WARNING_DIM,
   SCREEN_PADDING,
+  type ThemeTokens,
 } from "../../src/theme/tokens";
+import { useThemeTokens } from "../../src/context/ThemeContext";
 import { SectionLabel } from "../../src/components/SectionLabel";
 import { TodayLineChart, type TodayLineChartHandle } from "../../src/components/TodayLineChart";
 import { DonutChart } from "../../src/components/DonutChart";
@@ -349,6 +351,8 @@ function DashedLine({
 }
 
 export default function DashboardScreen() {
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
   const router = useRouter();
   const { t, locale } = useI18n();
   const { email, token, firstName, lastName, loading: authLoading } = useAuth();
@@ -414,11 +418,6 @@ export default function DashboardScreen() {
   // Ticks every 60s while the detail modal is open. Drives the "current hour"
   // indicator and triggers a quiet refresh of today's hourly data.
   const [nowTick, setNowTick] = useState(0);
-  // "See all top items" modal state.
-  const [topAllOpen, setTopAllOpen] = useState(false);
-  const [topAll, setTopAll] = useState<TopProduct[]>([]);
-  const [topAllLoading, setTopAllLoading] = useState(false);
-  const [topAllError, setTopAllError] = useState<string | null>(null);
   const [detailSale, setDetailSale] = useState<OrderDetailSale | null>(null);
   const [detailOrder, setDetailOrder] = useState<OfficialOrderDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -448,6 +447,8 @@ export default function DashboardScreen() {
   // Mapping of API dine option names to display labels and colors
   const dineOptionConfig: Record<string, { label: string; color: string }> = {
     DINEDIN: { label: "Dine-In", color: "#FF6B6B" },
+    DINEIN: { label: "Dine-In", color: "#FF6B6B" },
+    "DINE_IN": { label: "Dine-In", color: "#FF6B6B" },
     TAKEAWAY: { label: "Takeaway", color: "#4ECDC4" },
     UBEREATS: { label: "UberEats", color: "#45B7D1" },
     "IN_STORE": { label: "In-Store", color: "#FF6B6B" },
@@ -830,7 +831,7 @@ export default function DashboardScreen() {
             return {
               label: config?.label || key,
               value: value as number,
-              color: config?.color || "#999",
+              color: config?.color || "#94a3b8",
             };
           })
           .filter((item) => item.value > 0)
@@ -1326,7 +1327,7 @@ export default function DashboardScreen() {
               return (
                 <View style={styles.metaRow}>
                   <PulsingDot
-                    color={offline === 0 ? SUCCESS : WARNING}
+                    color={offline === 0 ? tokens.SUCCESS : tokens.WARNING}
                     size={6}
                     active
                   />
@@ -1438,10 +1439,10 @@ export default function DashboardScreen() {
                     >
                       <View style={styles.storeChipHeader}>
                         {store.is_aggregate ? (
-                          <Ionicons name="albums-outline" size={12} color={selected ? GOLD : TEXT_DIM} />
+                          <Ionicons name="albums-outline" size={12} color={selected ? tokens.GOLD : tokens.TEXT_DIM} />
                         ) : (
                           <PulsingDot
-                            color={online ? SUCCESS : "#6b7280"}
+                            color={online ? tokens.SUCCESS : "#6b7280"}
                             size={6}
                             active={online}
                           />
@@ -1506,7 +1507,7 @@ export default function DashboardScreen() {
                       {(() => {
                         const change = currentHero.change;
                         const isPositive = change >= 0;
-                        const color = isPositive ? SUCCESS : DANGER;
+                        const color = isPositive ? tokens.SUCCESS : tokens.DANGER;
                         return (
                           <View style={styles.heroBadge}>
                             <Ionicons
@@ -1590,7 +1591,7 @@ export default function DashboardScreen() {
             {/* KPI Row — flat, divided by hairlines. Values swap with heroPeriod. */}
             <View style={styles.kpiRow}>
               <View style={styles.kpiCell}>
-                <Ionicons name="cube-outline" size={16} color={GOLD} />
+                <Ionicons name="cube-outline" size={16} color={tokens.GOLD} />
                 <AnimatedNumber
                   value={periodItems}
                   style={styles.kpiValue}
@@ -1600,7 +1601,7 @@ export default function DashboardScreen() {
               </View>
               <View style={styles.kpiDivider} />
               <View style={styles.kpiCell}>
-                <Ionicons name="receipt-outline" size={16} color={WARNING} />
+                <Ionicons name="receipt-outline" size={16} color={tokens.WARNING} />
                 <AnimatedNumber
                   value={periodOrders}
                   style={styles.kpiValue}
@@ -1610,7 +1611,7 @@ export default function DashboardScreen() {
               </View>
               <View style={styles.kpiDivider} />
               <View style={styles.kpiCell}>
-                <Ionicons name="cart-outline" size={16} color="#818cf8" />
+                <Ionicons name="cart-outline" size={16} color={tokens.GOLD} />
                 <AnimatedNumber
                   value={avgOrder}
                   prefix="$"
@@ -1632,57 +1633,6 @@ export default function DashboardScreen() {
               <>
                 <SectionLabel
                   label={`${t("dashboard_top_products")} · ${periodLabel}`}
-                  right={
-                    <Pressable
-                      accessibilityLabel={`See all top items for ${periodLabel}`}
-                      onPress={() => {
-                        haptic.selection();
-                        setTopAllOpen(true);
-                        setTopAllError(null);
-                        setTopAllLoading(true);
-                        (async () => {
-                          try {
-                            if (API_TARGET === "official") {
-                              const all = await fetchOfficialTopSellingItems(
-                                50,
-                                heroPeriod,
-                                { email, token }
-                              );
-                              setTopAll(
-                                all.map((it) => ({
-                                  id: it.id,
-                                  name: it.name,
-                                  category: "",
-                                  units: it.units,
-                                  revenue: it.revenue,
-                                  image: it.image,
-                                }))
-                              );
-                            } else {
-                              const { data } = await api.get<TopProduct[]>(
-                                `/dashboard/top-products?period=${heroPeriod}&limit=50`
-                              );
-                              setTopAll(data);
-                            }
-                          } catch (err) {
-                            console.log("[top-items-all] fetch failed:", err);
-                            setTopAllError("Unable to load items.");
-                            setTopAll([]);
-                          } finally {
-                            setTopAllLoading(false);
-                          }
-                        })();
-                      }}
-                      style={({ pressed }) => [
-                        styles.seeAllChip,
-                        pressed && styles.seeAllChipPressed,
-                      ]}
-                      hitSlop={6}
-                    >
-                      <Text style={styles.seeAll}>{t("dashboard_see_all")}</Text>
-                      <Ionicons name="chevron-forward" size={13} color={TEXT_DIM} />
-                    </Pressable>
-                  }
                 />
                 <Animated.View
                   style={[
@@ -1707,7 +1657,7 @@ export default function DashboardScreen() {
                           <Ionicons
                             name="basket-outline"
                             size={22}
-                            color={TEXT_DIM}
+                            color={tokens.TEXT_DIM}
                           />
                           <Text style={styles.emptyText}>
                             {t("dashboard_no_recent_orders")}
@@ -1719,15 +1669,15 @@ export default function DashboardScreen() {
                     // Tiered gold tints — #1 brightest, descending so the
                     // ranking reads at a glance via the bar saturation alone.
                     const rankFill = [
-                      GOLD,
-                      GOLD + "cc",
-                      GOLD + "99",
+                      tokens.GOLD,
+                      tokens.GOLD + "cc",
+                      tokens.GOLD + "99",
                     ];
                     return topProducts.map((p, i) => {
                       const pct = Math.max(0.04, p.units / maxUnits);
                       const initial = (p.name?.trim()?.[0] ?? "?").toUpperCase();
                       const fillColor =
-                        i < rankFill.length ? rankFill[i] : GOLD + "66";
+                        i < rankFill.length ? rankFill[i] : tokens.GOLD + "66";
                       return (
                         <View
                           key={p.id}
@@ -1753,6 +1703,9 @@ export default function DashboardScreen() {
                               <Text style={styles.topName} numberOfLines={1}>
                                 {p.name}
                               </Text>
+                              {p.units > 0 && (
+                                <Text style={styles.topQty}>{p.units}</Text>
+                              )}
                               <Text style={styles.topUnits}>{formatCurrencyExact(parseMoney(p.revenue), locale)}</Text>
                             </View>
                             <View style={styles.topBarTrack}>
@@ -1844,7 +1797,7 @@ export default function DashboardScreen() {
                           <Ionicons
                             name="restaurant-outline"
                             size={14}
-                            color={activeTab === "dining" ? "#181e38" : TEXT_DIM}
+                            color={activeTab === "dining" ? "#181e38" : tokens.TEXT_DIM}
                           />
                           <Text
                             style={[
@@ -1867,7 +1820,7 @@ export default function DashboardScreen() {
                           <Ionicons
                             name="card-outline"
                             size={14}
-                            color={activeTab === "methods" ? "#181e38" : TEXT_DIM}
+                            color={activeTab === "methods" ? "#181e38" : tokens.TEXT_DIM}
                           />
                           <Text
                             style={[
@@ -1935,7 +1888,7 @@ export default function DashboardScreen() {
               leading={
                 orders.length > 0 ? (
                   <View style={styles.livePill}>
-                    <PulsingDot color={SUCCESS} size={5} active />
+                    <PulsingDot color={tokens.SUCCESS} size={5} active />
                     <Text style={styles.livePillText}>
                       {t("dashboard_live").toUpperCase()}
                     </Text>
@@ -1962,13 +1915,13 @@ export default function DashboardScreen() {
                   hitSlop={6}
                 >
                   <Text style={styles.seeAll}>{t("dashboard_see_all")}</Text>
-                  <Ionicons name="chevron-forward" size={13} color={TEXT_DIM} />
+                  <Ionicons name="chevron-forward" size={13} color={tokens.TEXT_DIM} />
                 </Pressable>
               }
             />
             {orders.length === 0 ? (
               <View style={styles.emptyBlock}>
-                <Ionicons name="receipt-outline" size={26} color={TEXT_DIM} />
+                <Ionicons name="receipt-outline" size={26} color={tokens.TEXT_DIM} />
                 <Text style={styles.emptyText}>{t("dashboard_no_recent_orders")}</Text>
               </View>
             ) : (
@@ -2038,117 +1991,6 @@ export default function DashboardScreen() {
         )}
       </ScrollView>
 
-      {/* All top selling items — opens from the section "See all" link */}
-      <Modal
-        visible={topAllOpen}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setTopAllOpen(false)}
-      >
-        <SafeAreaView style={styles.modalPage} edges={["top", "bottom"]}>
-          <View style={styles.modalStickyHead}>
-            <View style={styles.modalHead}>
-              <View style={styles.modalHeadTopRow}>
-                <Text style={styles.modalEyebrow} numberOfLines={1}>
-                  {t("dashboard_top_products")} · {periodLabel}
-                </Text>
-                <Pressable
-                  accessibilityLabel="Close"
-                  onPress={() => {
-                    haptic.selection();
-                    setTopAllOpen(false);
-                  }}
-                  style={({ pressed }) => [styles.modalClose, pressed && styles.pressed]}
-                  hitSlop={8}
-                >
-                  <Ionicons name="close" size={18} color={TEXT} />
-                </Pressable>
-              </View>
-              <Text style={styles.modalTitle} numberOfLines={1}>
-                {topAll.length > 0
-                  ? `${topAll.length} ${topAll.length === 1 ? "item" : "items"}`
-                  : topAllLoading
-                    ? "Loading…"
-                    : "No items"}
-              </Text>
-            </View>
-          </View>
-
-          {topAllLoading ? (
-            <View style={{ padding: SCREEN_PADDING, gap: 10 }}>
-              {[0, 1, 2, 3, 4, 5].map((i) => (
-                <Skeleton key={i} height={60} radius={12} />
-              ))}
-            </View>
-          ) : topAllError ? (
-            <View style={styles.emptyBlock}>
-              <Ionicons name="alert-circle-outline" size={26} color={DANGER} />
-              <Text style={styles.emptyText}>{topAllError}</Text>
-            </View>
-          ) : topAll.length === 0 ? (
-            <View style={styles.emptyBlock}>
-              <Ionicons name="cube-outline" size={26} color={TEXT_DIM} />
-              <Text style={styles.emptyText}>No items sold for this period.</Text>
-            </View>
-          ) : (
-            <ScrollView
-              style={{ flex: 1 }}
-              contentContainerStyle={styles.modalScrollContent}
-              showsVerticalScrollIndicator={false}
-            >
-              <View style={styles.topList}>
-                {(() => {
-                  const maxUnits = Math.max(...topAll.map((p) => p.units), 1);
-                  return topAll.map((p, i) => {
-                    const pct = Math.max(0.04, p.units / maxUnits);
-                    const initial = (p.name?.trim()?.[0] ?? "?").toUpperCase();
-                    return (
-                      <View
-                        key={`${p.id}-${i}`}
-                        accessibilityLabel={`${p.name}, ${formatCurrencyExact(parseMoney(p.revenue), locale)} in sales`}
-                        style={[
-                          styles.topRow,
-                          i !== topAll.length - 1 && styles.topRowDivider,
-                        ]}
-                      >
-                        <Text style={styles.topAllRank}>{i + 1}</Text>
-                        <View style={styles.topThumb}>
-                          {p.image ? (
-                            <Image
-                              source={{ uri: p.image }}
-                              style={styles.topThumbImage}
-                              resizeMode="cover"
-                            />
-                          ) : (
-                            <Text style={styles.topThumbText}>{initial}</Text>
-                          )}
-                        </View>
-                        <View style={styles.topBody}>
-                          <View style={styles.topBodyRow}>
-                            <Text style={styles.topName} numberOfLines={1}>
-                              {p.name}
-                            </Text>
-                            <Text style={styles.topUnits}>{formatCurrencyExact(parseMoney(p.revenue), locale)}</Text>
-                          </View>
-                          <View style={styles.topBarTrack}>
-                            <View
-                              style={[
-                                styles.topBarFill,
-                                { width: `${Math.round(pct * 100)}%` },
-                              ]}
-                            />
-                          </View>
-                        </View>
-                      </View>
-                    );
-                  });
-                })()}
-              </View>
-            </ScrollView>
-          )}
-        </SafeAreaView>
-      </Modal>
-
       {/* Detailed chart modal — opens from the hero sparkline */}
       <Modal
         visible={chartOpen}
@@ -2210,7 +2052,7 @@ export default function DashboardScreen() {
                   style={({ pressed }) => [styles.modalClose, pressed && styles.pressed]}
                   hitSlop={8}
                 >
-                  <Ionicons name="close" size={18} color={TEXT} />
+                  <Ionicons name="close" size={18} color={tokens.TEXT} />
                 </Pressable>
               </View>
               <Text style={styles.modalTitle} numberOfLines={1}>
@@ -2223,7 +2065,7 @@ export default function DashboardScreen() {
                 {(() => {
                   const change = currentHero.change;
                   const isPositive = change >= 0;
-                  const color = isPositive ? SUCCESS : DANGER;
+                  const color = isPositive ? tokens.SUCCESS : tokens.DANGER;
                   return (
                     <View style={styles.heroBadge}>
                       <Ionicons
@@ -2376,7 +2218,7 @@ export default function DashboardScreen() {
                           onPress={() => setSelectedBar(null)}
                           style={styles.inspectorClear}
                         >
-                          <Ionicons name="close" size={12} color={TEXT_DIM} />
+                          <Ionicons name="close" size={12} color={tokens.TEXT_DIM} />
                         </Pressable>
                       </>
                     ) : (
@@ -2423,12 +2265,12 @@ export default function DashboardScreen() {
                   {/* Chart legend */}
                   <View style={styles.chartLegendRow}>
                     <View style={styles.legendItem}>
-                      <View style={[styles.legendSwatch, { backgroundColor: GOLD }]} />
+                      <View style={[styles.legendSwatch, { backgroundColor: tokens.GOLD }]} />
                       <Text style={styles.legendText}>{t("dashboard_chart_legend_revenue")}</Text>
                     </View>
                     <View style={styles.legendItem}>
                       <View style={styles.legendDashWrap}>
-                        <DashedLine color={SUCCESS} dashWidth={4} dashGap={3} thickness={1.5} />
+                        <DashedLine color={tokens.SUCCESS} dashWidth={4} dashGap={3} thickness={1.5} />
                       </View>
                       <Text style={styles.legendText}>{t("dashboard_chart_legend_avg_period")}</Text>
                     </View>
@@ -2465,7 +2307,7 @@ export default function DashboardScreen() {
                       accessibilityLabel={t("dashboard_chart_highlight_peak")}
                     >
                       <Text style={styles.modalKpiLabel}>{t("dashboard_chart_peak")}</Text>
-                      <Text style={[styles.modalKpiValue, { color: GOLD }]}>
+                      <Text style={[styles.modalKpiValue, { color: tokens.GOLD }]}>
                         ${peak.toLocaleString(locale, {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
@@ -2485,7 +2327,7 @@ export default function DashboardScreen() {
                         }}
                         accessibilityLabel={t("dashboard_chart_highlight_best")}
                       >
-                        <Ionicons name="trending-up" size={12} color={SUCCESS} />
+                        <Ionicons name="trending-up" size={12} color={tokens.SUCCESS} />
                         <Text style={styles.calloutLabel}>{t("dashboard_chart_best")}</Text>
                         <Text style={styles.calloutValue}>
                           {localizedDisplayChart[peakIdx]?.day} · {formatCurrencyExact(peak, locale)}
@@ -2499,7 +2341,7 @@ export default function DashboardScreen() {
                         }}
                         accessibilityLabel={t("dashboard_chart_highlight_slowest")}
                       >
-                        <Ionicons name="trending-down" size={12} color={DANGER} />
+                        <Ionicons name="trending-down" size={12} color={tokens.DANGER} />
                         <Text style={styles.calloutLabel}>{t("dashboard_chart_slowest")}</Text>
                         <Text style={styles.calloutValue}>
                           {localizedDisplayChart[worstIdx]?.day} ·{" "}
@@ -2528,8 +2370,8 @@ export default function DashboardScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeContainer: { flex: 1, backgroundColor: BG },
+const makeStyles = (t: ThemeTokens) => StyleSheet.create({
+  safeContainer: { flex: 1, backgroundColor: t.BG },
   container: { flex: 1, backgroundColor: "transparent" },
   // Vertical rhythm — `gap` here is the spacing between adjacent top-level
   // sections. SectionLabel adds its own marginTop:16/marginBottom:8 so the
@@ -2548,7 +2390,7 @@ const styles = StyleSheet.create({
   headerText: { flex: 1, gap: 6 },
   headerTopRow: { flexDirection: "row", alignItems: "center" },
   eyebrow: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 10,
     fontWeight: "600",
     letterSpacing: 2,
@@ -2557,15 +2399,15 @@ const styles = StyleSheet.create({
     fontSize: 22,
     lineHeight: 26,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.2,
   },
   greetingDim: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontWeight: "500",
   },
   greetingName: {
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "700",
   },
   metaRow: {
@@ -2574,7 +2416,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   metaText: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     fontWeight: "500",
   },
@@ -2588,9 +2430,9 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2603,15 +2445,15 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: "#ef4444",
     borderWidth: 1.5,
-    borderColor: BG,
+    borderColor: t.BG,
   },
   badgeText: { color: "transparent", fontSize: 0 },
 
   avatar: {
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
     borderColor: "rgba(212,175,55,0.25)",
   },
-  avatarText: { color: GOLD, fontWeight: "700", fontSize: 11, letterSpacing: 0.3 },
+  avatarText: { color: t.GOLD, fontWeight: "700", fontSize: 11, letterSpacing: 0.3 },
 
   // Hero — number + inline sparkline
   hero: {
@@ -2638,7 +2480,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.15)",
   },
   heroDotActive: {
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
     width: 10,
   },
   heroHead: {
@@ -2653,27 +2495,27 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   heroLabel: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.5,
     textTransform: "uppercase",
   },
   heroRange: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 10,
     fontWeight: "600",
     letterSpacing: 0.2,
   },
   heroValue: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 38,
     fontWeight: "800",
     marginTop: 8,
     letterSpacing: -1.4,
   },
   heroError: {
-    color: DANGER,
+    color: t.DANGER,
     fontSize: 36,
     fontWeight: "800",
     marginTop: 8,
@@ -2684,9 +2526,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
   },
-  heroBadgeText: { color: SUCCESS, fontSize: 12, fontWeight: "600" },
-  heroHint: { color: TEXT_DIM, fontSize: 12, fontWeight: "500" },
-  heroHintError: { color: DANGER, fontSize: 12, fontWeight: "600", flexShrink: 1 },
+  heroBadgeText: { color: t.SUCCESS, fontSize: 12, fontWeight: "600" },
+  heroHint: { color: t.TEXT_DIM, fontSize: 12, fontWeight: "500" },
+  heroHintError: { color: t.DANGER, fontSize: 12, fontWeight: "600", flexShrink: 1 },
 
   // Sparkline inside hero — fixed footprint so heroLeft doesn't shift between periods (4/7/8 bars)
   spark: {
@@ -2706,20 +2548,20 @@ const styles = StyleSheet.create({
   },
   sparkBar: {
     width: 5,
-    backgroundColor: "rgba(212,175,55,0.25)",
+    backgroundColor: "rgba(212,175,55,0.5)",
     borderRadius: 2,
     minHeight: 6,
   },
   sparkBarActive: {
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
   sparkLabel: {
     fontSize: 9,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontWeight: "500",
   },
   sparkLabelActive: {
-    color: GOLD,
+    color: t.GOLD,
     fontWeight: "700",
   },
   sparkSkeleton: {
@@ -2735,16 +2577,16 @@ const styles = StyleSheet.create({
   // ─── Detailed chart full-page ─────────────────────────────────────────
   modalPage: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: t.BG,
   },
   modalStickyHead: {
     paddingHorizontal: SCREEN_PADDING,
     paddingTop: 16,
     paddingBottom: 12,
-    backgroundColor: BG,
+    backgroundColor: t.BG,
     gap: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
+    borderBottomColor: t.CARD_BORDER,
   },
   modalContent: {
     paddingHorizontal: SCREEN_PADDING,
@@ -2769,7 +2611,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   modalEyebrow: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.5,
@@ -2777,7 +2619,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   modalTitle: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 32,
     fontWeight: "800",
     letterSpacing: -1.2,
@@ -2790,7 +2632,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   modalSub: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     fontWeight: "500",
   },
@@ -2798,9 +2640,9 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2818,16 +2660,16 @@ const styles = StyleSheet.create({
     borderBottomColor: "transparent",
   },
   modalTabActive: {
-    borderBottomColor: GOLD,
+    borderBottomColor: t.GOLD,
   },
   modalTabText: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 13,
     fontWeight: "600",
     letterSpacing: 0.2,
   },
   modalTabTextActive: {
-    color: GOLD,
+    color: t.GOLD,
     fontWeight: "700",
   },
 
@@ -2858,14 +2700,14 @@ const styles = StyleSheet.create({
   gridLabel: {
     width: 38,
     textAlign: "right",
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 9,
     fontWeight: "600",
   },
   gridLine: {
     flex: 1,
     height: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
   },
   detailBars: {
     flex: 1,
@@ -2882,12 +2724,12 @@ const styles = StyleSheet.create({
   },
   detailValue: {
     fontSize: 9,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontWeight: "700",
     letterSpacing: 0.2,
   },
   detailValuePeak: {
-    color: GOLD,
+    color: t.GOLD,
   },
   detailBarTrack: {
     flex: 1,
@@ -2907,23 +2749,23 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(212,175,55,0.55)",
   },
   detailBarFillPeak: {
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
   detailLabel: {
     fontSize: 10,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontWeight: "600",
   },
   detailLabelActive: {
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "700",
   },
   detailLabelSelected: {
-    color: GOLD,
+    color: t.GOLD,
     fontWeight: "700",
   },
   detailValueSelected: {
-    color: GOLD,
+    color: t.GOLD,
     fontSize: 11,
   },
   detailColWeekend: {
@@ -2931,8 +2773,8 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   detailBarFillSelected: {
-    backgroundColor: GOLD,
-    shadowColor: GOLD,
+    backgroundColor: t.GOLD,
+    shadowColor: t.GOLD,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.6,
     shadowRadius: 6,
@@ -2956,30 +2798,30 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 10,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     minHeight: 36,
   },
   inspectorDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
   inspectorLabel: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 12,
     fontWeight: "700",
   },
   inspectorValue: {
-    color: GOLD,
+    color: t.GOLD,
     fontSize: 14,
     fontWeight: "800",
     letterSpacing: -0.3,
   },
   inspectorMeta: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "600",
     marginLeft: "auto",
@@ -2993,7 +2835,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.06)",
   },
   inspectorHint: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 11,
     fontWeight: "600",
     letterSpacing: 0.4,
@@ -3016,11 +2858,11 @@ const styles = StyleSheet.create({
     height: 0,
     borderTopWidth: 1.5,
     borderStyle: "dashed",
-    borderColor: SUCCESS,
+    borderColor: t.SUCCESS,
   },
   avgLineLabel: {
     color: "#0b1220",
-    backgroundColor: SUCCESS,
+    backgroundColor: t.SUCCESS,
     fontSize: 9,
     fontWeight: "800",
     letterSpacing: 0.6,
@@ -3043,7 +2885,7 @@ const styles = StyleSheet.create({
     height: 0,
     borderTopWidth: 1.5,
     borderStyle: "dashed",
-    borderColor: SUCCESS,
+    borderColor: t.SUCCESS,
   },
   legendDashWrap: {
     width: 18,
@@ -3072,10 +2914,10 @@ const styles = StyleSheet.create({
     height: 0,
     borderTopWidth: 1,
     borderStyle: "dashed",
-    borderColor: SUCCESS_DIM,
+    borderColor: t.SUCCESS_DIM,
   },
   legendText: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 10,
     fontWeight: "600",
     letterSpacing: 0.3,
@@ -3094,25 +2936,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 10,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   calloutBest: {
-    borderColor: SUCCESS_DIM,
+    borderColor: t.SUCCESS_DIM,
   },
   calloutWorst: {
     borderColor: "rgba(239,68,68,0.25)",
   },
   calloutLabel: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 0.6,
     textTransform: "uppercase",
   },
   calloutValue: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 12,
     fontWeight: "700",
     flexShrink: 1,
@@ -3125,7 +2967,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   modalKpi: {
     flex: 1,
@@ -3134,12 +2976,12 @@ const styles = StyleSheet.create({
   },
   modalKpiDivider: {
     width: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
     marginHorizontal: 4,
   },
   modalKpiLabel: {
     fontSize: 10,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontWeight: "600",
     letterSpacing: 0.6,
     textTransform: "uppercase",
@@ -3147,7 +2989,7 @@ const styles = StyleSheet.create({
   modalKpiValue: {
     fontSize: 16,
     fontWeight: "800",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.3,
   },
 
@@ -3158,7 +3000,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   kpiCell: {
     flex: 1,
@@ -3167,20 +3009,20 @@ const styles = StyleSheet.create({
   },
   kpiDivider: {
     width: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
     marginHorizontal: 4,
   },
   kpiValue: {
     fontSize: 20,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     marginTop: 4,
     letterSpacing: -0.4,
   },
-  kpiLabel: { fontSize: 11, color: TEXT_DIM, fontWeight: "500" },
+  kpiLabel: { fontSize: 11, color: t.TEXT_DIM, fontWeight: "500" },
   kpiPeriod: {
     fontSize: 9,
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontWeight: "600",
     letterSpacing: 0.8,
     textTransform: "uppercase",
@@ -3238,7 +3080,7 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
+    borderBottomColor: t.CARD_BORDER,
   },
   bootListRowText: {
     flex: 1,
@@ -3247,7 +3089,7 @@ const styles = StyleSheet.create({
 
   seeAll: {
     fontSize: 12,
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "500",
     letterSpacing: 0.1,
   },
@@ -3270,10 +3112,10 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     minWidth: 160,
   },
   moduleChipText: { flex: 1, gap: 2 },
@@ -3288,16 +3130,16 @@ const styles = StyleSheet.create({
   moduleName: {
     fontSize: 13,
     fontWeight: "600",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.1,
   },
   moduleFooter: { flexDirection: "row", alignItems: "center", gap: 5 },
-  moduleTxn: { fontSize: 10, color: TEXT_DIM, fontWeight: "500" },
+  moduleTxn: { fontSize: 10, color: t.TEXT_DIM, fontWeight: "500" },
 
   // Orders — transaction-feed rows
   orderList: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   orderRow: {
     flexDirection: "row",
@@ -3307,7 +3149,7 @@ const styles = StyleSheet.create({
   },
   orderRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   orderIcon: {
     width: 36,
@@ -3326,7 +3168,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontSize: 14,
     fontWeight: "600",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.1,
   },
   orderModTag: {
@@ -3343,14 +3185,14 @@ const styles = StyleSheet.create({
   },
   orderSub: {
     fontSize: 11,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontWeight: "500",
   },
   orderRight: { alignItems: "flex-end", gap: 4 },
   orderTotal: {
     fontSize: 15,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.3,
   },
   orderStatusRow: {
@@ -3374,7 +3216,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-  emptyText: { color: TEXT_DIM, fontSize: 13, fontWeight: "500" },
+  emptyText: { color: t.TEXT_DIM, fontSize: 13, fontWeight: "500" },
 
   // Store strip
   storeRow: { flexDirection: "row", gap: 8, paddingRight: SCREEN_PADDING },
@@ -3383,14 +3225,14 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 14,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     gap: 6,
   },
   storeChipActive: {
-    borderColor: GOLD,
-    backgroundColor: GOLD_DIM,
+    borderColor: t.GOLD,
+    backgroundColor: t.GOLD_DIM,
   },
   storeChipHeader: {
     flexDirection: "row",
@@ -3398,28 +3240,28 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   storeName: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "600",
     letterSpacing: 0.4,
     textTransform: "uppercase",
     flexShrink: 1,
   },
-  storeNameActive: { color: GOLD },
+  storeNameActive: { color: t.GOLD },
   storeRevenue: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 15,
     fontWeight: "700",
   },
-  storeRevenueActive: { color: TEXT },
+  storeRevenueActive: { color: t.TEXT },
 
   // Top Products
   // Top Selling Items
   topList: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     paddingHorizontal: 14,
   },
   topRow: {
@@ -3430,13 +3272,13 @@ const styles = StyleSheet.create({
   },
   topRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
+    borderBottomColor: t.CARD_BORDER,
   },
   topThumb: {
     width: 40,
     height: 40,
     borderRadius: 10,
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -3444,7 +3286,7 @@ const styles = StyleSheet.create({
   topAllRank: {
     width: 22,
     textAlign: "center",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "700",
     fontVariant: ["tabular-nums"],
@@ -3455,7 +3297,7 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   topThumbText: {
-    color: GOLD,
+    color: t.GOLD,
     fontSize: 15,
     fontWeight: "700",
   },
@@ -3467,13 +3309,13 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   topName: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 14,
     fontWeight: "600",
     flex: 1,
   },
   topUnits: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 14,
     fontWeight: "700",
     fontVariant: ["tabular-nums"],
@@ -3481,13 +3323,19 @@ const styles = StyleSheet.create({
   topBarTrack: {
     height: 4,
     borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: t.GOLD_DIM,
     overflow: "hidden",
   },
   topBarFill: {
     height: "100%",
     borderRadius: 2,
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
+  },
+  topQty: {
+    color: t.TEXT_DIM,
+    fontSize: 13,
+    fontWeight: "600",
+    fontVariant: ["tabular-nums"],
   },
   diningCard: {
     // Flat container — matches the dashboard's borderless, hairline-divided
@@ -3501,7 +3349,7 @@ const styles = StyleSheet.create({
   // for a premium, deliberate feel rather than a flat "tinted" look.
   donutTabRow: {
     flexDirection: "row",
-    backgroundColor: "rgba(255,255,255,0.04)",
+    backgroundColor: t.CARD_HOVER,
     borderRadius: 999,
     padding: 4,
     marginBottom: 10,
@@ -3514,12 +3362,7 @@ const styles = StyleSheet.create({
     bottom: 4,
     left: 4,
     borderRadius: 999,
-    backgroundColor: GOLD,
-    shadowColor: GOLD,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 3,
+    backgroundColor: t.GOLD_DIM,
   },
   donutTab: {
     flex: 1,
@@ -3532,13 +3375,13 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   donutTabText: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     fontWeight: "600",
     letterSpacing: 0.3,
   },
   donutTabTextActive: {
-    color: "#181e38",
+    color: t.GOLD,
     fontWeight: "800",
     letterSpacing: 0.2,
   },
@@ -3550,12 +3393,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
     borderRadius: 8,
-    backgroundColor: SUCCESS + "1a",
+    backgroundColor: t.SUCCESS + "1a",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: SUCCESS + "33",
+    borderColor: t.SUCCESS + "33",
   },
   livePillText: {
-    color: SUCCESS,
+    color: t.SUCCESS,
     fontSize: 9,
     fontWeight: "800",
     letterSpacing: 1.1,
@@ -3572,9 +3415,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: BG,
+    borderColor: t.BG,
   },
-  topRankBadgeGold: { backgroundColor: GOLD },
+  topRankBadgeGold: { backgroundColor: t.GOLD },
   topRankBadgeSilver: { backgroundColor: "#c0c4cc" },
   topRankBadgeBronze: { backgroundColor: "#cd7f32" },
   topRankBadgeText: {
@@ -3593,7 +3436,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   diningEmptyText: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 13,
     fontWeight: "600",
   },

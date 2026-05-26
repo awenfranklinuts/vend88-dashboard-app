@@ -23,30 +23,31 @@ import {
   type OfficialCloseHistoryItem,
 } from "../../src/services/officialDashboard";
 import {
-  ACCENT,
-  ACCENT_DIM,
-  BG,
-  CARD,
-  CARD_BORDER,
-  DANGER,
-  GOLD,
-  GOLD_DIM,
   SCREEN_PADDING,
-  SUCCESS,
-  TEXT,
-  TEXT_DIM,
-  TEXT_FAINT,
+  type ThemeTokens,
 } from "../../src/theme/tokens";
+import { useThemeTokens } from "../../src/context/ThemeContext";
+
+function useStyles() {
+  const tokens = useThemeTokens();
+  return useMemo(
+    () => ({ tokens, styles: makeStyles(tokens) }),
+    [tokens]
+  );
+}
 
 // ─── Type tabs ──────────────────────────────────────────────────────────────
 
 type TypeTab = "SHIFT" | "EOD" | "KIOSK";
 
-const TYPE_BADGE: Record<TypeTab, { tint: string; bg: string }> = {
-  SHIFT: { tint: ACCENT, bg: ACCENT_DIM },
-  EOD: { tint: "#a78bfa", bg: "rgba(167,139,250,0.15)" },
-  KIOSK: { tint: GOLD, bg: GOLD_DIM },
-};
+function typeBadgeFor(
+  key: TypeTab,
+  t: ThemeTokens
+): { tint: string; bg: string } {
+  if (key === "SHIFT") return { tint: t.ACCENT, bg: t.ACCENT_DIM };
+  if (key === "EOD") return { tint: "#a78bfa", bg: "rgba(167,139,250,0.15)" };
+  return { tint: t.GOLD, bg: t.GOLD_DIM };
+}
 
 function typeKeyFor(rawType: string): TypeTab | null {
   const upper = (rawType ?? "").toUpperCase();
@@ -99,6 +100,7 @@ function StatementRow({
   negative?: boolean;
   indent?: boolean;
 }) {
+  const { tokens, styles } = useStyles();
   return (
     <View style={[styles.row, indent && { paddingLeft: 18 }]}>
       <View style={styles.rowLabelWrap}>
@@ -119,7 +121,7 @@ function StatementRow({
           styles.rowValue,
           emphasis && styles.rowValueEmphasis,
           total && styles.rowValueTotal,
-          negative && { color: DANGER },
+          negative && { color: tokens.DANGER },
         ]}
       >
         {value}
@@ -129,6 +131,7 @@ function StatementRow({
 }
 
 function Divider() {
+  const { styles } = useStyles();
   return <View style={styles.divider} />;
 }
 
@@ -143,6 +146,7 @@ function StatChip({
   value: string;
   tint: string;
 }) {
+  const { styles } = useStyles();
   return (
     <View style={styles.chip}>
       <View style={[styles.chipIcon, { backgroundColor: `${tint}22` }]}>
@@ -157,8 +161,11 @@ function StatChip({
 }
 
 function TypeBadge({ rawType, label }: { rawType: string; label: string }) {
+  const { tokens, styles } = useStyles();
   const typeKey = typeKeyFor(rawType);
-  const meta = typeKey ? TYPE_BADGE[typeKey] : { tint: TEXT_DIM, bg: "rgba(255,255,255,0.06)" };
+  const meta = typeKey
+    ? typeBadgeFor(typeKey, tokens)
+    : { tint: tokens.TEXT_DIM, bg: "rgba(255,255,255,0.06)" };
   return (
     <View style={[styles.typeBadge, { backgroundColor: meta.bg }]}>
       <Text style={[styles.typeBadgeText, { color: meta.tint }]}>{label}</Text>
@@ -169,6 +176,7 @@ function TypeBadge({ rawType, label }: { rawType: string; label: string }) {
 // ─── Screen ─────────────────────────────────────────────────────────────────
 
 export default function HandoverScreen() {
+  const { tokens, styles } = useStyles();
   const { email, token, loading: authLoading } = useAuth();
   const { t } = useI18n();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -324,12 +332,12 @@ export default function HandoverScreen() {
           style={({ pressed }) => [styles.rangeRow, pressed && styles.pressed]}
         >
           <View style={styles.rangePill} pointerEvents="none">
-            <Ionicons name="calendar-outline" size={14} color={TEXT_DIM} />
+            <Ionicons name="calendar-outline" size={14} color={tokens.TEXT_DIM} />
             <Text style={styles.rangeText}>{formatRangeShort(rangeStart)}</Text>
           </View>
-          <Ionicons name="arrow-forward" size={14} color={TEXT_FAINT} />
+          <Ionicons name="arrow-forward" size={14} color={tokens.TEXT_FAINT} />
           <View style={styles.rangePill} pointerEvents="none">
-            <Ionicons name="calendar-outline" size={14} color={TEXT_DIM} />
+            <Ionicons name="calendar-outline" size={14} color={tokens.TEXT_DIM} />
             <Text style={styles.rangeText}>{formatRangeShort(rangeEnd)}</Text>
           </View>
         </Pressable>
@@ -339,7 +347,7 @@ export default function HandoverScreen() {
           <View style={styles.summaryHeader}>
             <View style={styles.summaryHeaderLeft}>
               <View style={styles.summaryIcon}>
-                <Ionicons name="stats-chart-outline" size={14} color={GOLD} />
+                <Ionicons name="stats-chart-outline" size={14} color={tokens.GOLD} />
               </View>
               <Text style={styles.summaryEyebrow}>{t("handover_range_summary")}</Text>
             </View>
@@ -422,18 +430,18 @@ export default function HandoverScreen() {
         {/* Reports list */}
         {loading && items.length === 0 ? (
           <View style={[styles.card, styles.historyEmpty]}>
-            <ActivityIndicator color={TEXT_DIM} />
+            <ActivityIndicator color={tokens.TEXT_DIM} />
             <Text style={styles.historyBody}>{t("handover_loading_reports")}</Text>
           </View>
         ) : error ? (
           <View style={[styles.card, styles.historyEmpty]}>
-            <Ionicons name="alert-circle-outline" size={28} color={DANGER} />
+            <Ionicons name="alert-circle-outline" size={28} color={tokens.DANGER} />
             <Text style={styles.historyTitle}>{t("handover_load_reports_title")}</Text>
             <Text style={styles.historyBody}>{error}</Text>
           </View>
         ) : filtered.length === 0 ? (
           <View style={[styles.card, styles.historyEmpty]}>
-            <Ionicons name="time-outline" size={28} color={TEXT_FAINT} />
+            <Ionicons name="time-outline" size={28} color={tokens.TEXT_FAINT} />
             <Text style={styles.historyTitle}>{t("handover_empty_title")}</Text>
             <Text style={styles.historyBody}>
               {typeTab === "KIOSK"
@@ -465,7 +473,7 @@ export default function HandoverScreen() {
                   <View style={styles.reportTop}>
                     <TypeBadge rawType={r.type} label={labelForType(r.type)} />
                     <View style={styles.reportTimeRow}>
-                      <Ionicons name="time-outline" size={11} color={TEXT_FAINT} />
+                      <Ionicons name="time-outline" size={11} color={tokens.TEXT_FAINT} />
                       <Text style={styles.reportTimeText} numberOfLines={1}>
                         {formatRowDateTime(r.start_time)}
                       </Text>
@@ -514,7 +522,7 @@ export default function HandoverScreen() {
                     <Ionicons
                       name="chevron-forward"
                       size={14}
-                      color={ACCENT}
+                      color={tokens.ACCENT}
                     />
                   </View>
                 </Pressable>
@@ -552,9 +560,12 @@ function DetailView({
   email: string | null;
   onBack: () => void;
 }) {
+  const { tokens, styles } = useStyles();
   const { t } = useI18n();
   const typeKey = typeKeyFor(report.type);
-  const meta = typeKey ? TYPE_BADGE[typeKey] : { tint: TEXT_DIM, bg: "rgba(255,255,255,0.06)" };
+  const meta = typeKey
+    ? typeBadgeFor(typeKey, tokens)
+    : { tint: tokens.TEXT_DIM, bg: "rgba(255,255,255,0.06)" };
   const fin = report.financial_summary ?? ({} as OfficialCloseHistoryItem["financial_summary"]);
   const op = report.operational_summary ?? ({} as OfficialCloseHistoryItem["operational_summary"]);
   const bd = report.breakdowns ?? {};
@@ -603,7 +614,7 @@ function DetailView({
               onPress={onBack}
               style={({ pressed }) => [styles.headerBtn, pressed && styles.pressed]}
             >
-              <Ionicons name="arrow-back" size={14} color={ACCENT} />
+              <Ionicons name="arrow-back" size={14} color={tokens.ACCENT} />
               <Text style={styles.headerBtnText}>{t("handover_back")}</Text>
             </Pressable>
           }
@@ -655,13 +666,13 @@ function DetailView({
               icon="receipt-outline"
               label={t("sales_orders")}
               value={`${op.total_orders ?? 0}`}
-              tint={ACCENT}
+              tint={tokens.ACCENT}
             />
             <StatChip
               icon="trending-up-outline"
               label={t("sales_avg_order")}
               value={formatMoney(fin.average_order_value ?? 0)}
-              tint={GOLD}
+              tint={tokens.GOLD}
             />
           </View>
         </View>
@@ -834,9 +845,9 @@ function DetailView({
                     <Text style={styles.productName} numberOfLines={1}>
                       {p.name?.trim() || "—"}
                     </Text>
-                    <Text style={styles.productQty}>{t("handover_qty", { count: p.qty })}</Text>
+                    <Text style={styles.productQty}>{t("handover_qty", { count: p.qty ?? 0 })}</Text>
                   </View>
-                  <Text style={styles.productTotal}>{formatMoney(p.total)}</Text>
+                  <Text style={styles.productTotal}>{formatMoney(p.total ?? 0)}</Text>
                 </View>
               </React.Fragment>
             ))}
@@ -857,7 +868,7 @@ function DetailView({
         )}
 
         <Text style={styles.footnote}>
-          <Ionicons name="information-circle-outline" size={12} color={TEXT_DIM} />
+          <Ionicons name="information-circle-outline" size={12} color={tokens.TEXT_DIM} />
           {"  "}
           {t("handover_snapshot_note")}
         </Text>
@@ -867,11 +878,8 @@ function DetailView({
 }
 
 // ─── Styles ─────────────────────────────────────────────────────────────────
-// Reserved for future status surfaces.
-void SUCCESS;
-
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: BG },
+const makeStyles = (t: ThemeTokens) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: t.BG },
   content: {
     padding: SCREEN_PADDING,
     paddingTop: 8,
@@ -888,12 +896,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: ACCENT_DIM,
+    backgroundColor: t.ACCENT_DIM,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(64,100,220,0.3)",
   },
   headerBtnText: {
-    color: ACCENT,
+    color: t.ACCENT,
     fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0.3,
@@ -913,12 +921,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 12,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   rangeText: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "600",
   },
@@ -926,11 +934,11 @@ const styles = StyleSheet.create({
   // Type tabs
   tabsRow: {
     flexDirection: "row",
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 12,
     padding: 4,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     gap: 4,
   },
   tab: {
@@ -945,16 +953,16 @@ const styles = StyleSheet.create({
   tabActive: {
     backgroundColor: "rgba(255,255,255,0.06)",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   tabText: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0.2,
   },
   tabTextActive: {
-    color: TEXT,
+    color: t.TEXT,
   },
   tabCount: {
     minWidth: 18,
@@ -966,32 +974,32 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   tabCountActive: {
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
   },
   tabCountText: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 0.3,
   },
   tabCountTextActive: {
-    color: GOLD,
+    color: t.GOLD,
   },
 
   card: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     padding: 16,
   },
 
   // Summary banner
   summaryCard: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     padding: 16,
     gap: 4,
   },
@@ -1009,31 +1017,31 @@ const styles = StyleSheet.create({
     width: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
     alignItems: "center",
     justifyContent: "center",
   },
   summaryEyebrow: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 1.2,
   },
   summaryHint: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 0.3,
   },
   summaryHero: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 28,
     fontWeight: "800",
     letterSpacing: -0.5,
     marginTop: 8,
   },
   summarySub: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 0.4,
@@ -1042,7 +1050,7 @@ const styles = StyleSheet.create({
   },
   summaryDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
     marginVertical: 14,
   },
   summaryStats: {
@@ -1054,17 +1062,17 @@ const styles = StyleSheet.create({
   },
   summaryStatSep: {
     width: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
     marginHorizontal: 6,
   },
   summaryStatLabel: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 0.6,
   },
   summaryStatValue: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 14,
     fontWeight: "700",
     marginTop: 4,
@@ -1075,10 +1083,10 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   reportCard: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     padding: 14,
     gap: 6,
   },
@@ -1094,19 +1102,19 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   reportTimeText: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "600",
   },
   reportStaff: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 15,
     fontWeight: "800",
     letterSpacing: -0.2,
     marginTop: 4,
   },
   reportShop: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "600",
     marginTop: 1,
@@ -1117,30 +1125,30 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: CARD_BORDER,
+    borderTopColor: t.CARD_BORDER,
   },
   reportStat: {
     flex: 1,
   },
   reportStatSep: {
     width: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
     marginHorizontal: 4,
   },
   reportStatLabel: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 9,
     fontWeight: "800",
     letterSpacing: 0.5,
   },
   reportStatValue: {
-    color: SUCCESS,
+    color: t.SUCCESS,
     fontSize: 13,
     fontWeight: "800",
     marginTop: 3,
   },
   reportStatValueDim: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "700",
     marginTop: 3,
@@ -1153,7 +1161,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   reportFooterText: {
-    color: ACCENT,
+    color: t.ACCENT,
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 0.3,
@@ -1172,10 +1180,10 @@ const styles = StyleSheet.create({
 
   // Detail hero
   heroCard: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     padding: 16,
   },
   heroTopRow: {
@@ -1185,28 +1193,28 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   heroEyebrow: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 1.2,
     marginTop: 4,
   },
   heroAmount: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 32,
     fontWeight: "800",
     letterSpacing: -0.6,
     marginTop: 4,
   },
   heroSub: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     fontWeight: "600",
     marginTop: 2,
   },
   heroDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
     marginVertical: 14,
   },
 
@@ -1221,26 +1229,26 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(212,175,55,0.4)",
   },
   avatarText: {
-    color: GOLD,
+    color: t.GOLD,
     fontSize: 16,
     fontWeight: "800",
     letterSpacing: 0.3,
   },
   profileName: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 16,
     fontWeight: "700",
     letterSpacing: -0.2,
   },
   profileEmail: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     marginTop: 2,
   },
@@ -1250,10 +1258,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
-    backgroundColor: ACCENT_DIM,
+    backgroundColor: t.ACCENT_DIM,
   },
   roleBadgeText: {
-    color: ACCENT,
+    color: t.ACCENT,
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 1,
@@ -1273,7 +1281,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: "rgba(255,255,255,0.025)",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   chipIcon: {
     width: 28,
@@ -1283,14 +1291,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   chipLabel: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 0.5,
     textTransform: "uppercase",
   },
   chipValue: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 15,
     fontWeight: "800",
     marginTop: 1,
@@ -1310,24 +1318,24 @@ const styles = StyleSheet.create({
     gap: 6,
     flexShrink: 1,
   },
-  rowGlyph: { color: TEXT_FAINT, fontSize: 12 },
+  rowGlyph: { color: t.TEXT_FAINT, fontSize: 12 },
   rowLabel: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 13,
     fontWeight: "500",
     flexShrink: 1,
   },
-  rowLabelEmphasis: { color: TEXT, fontWeight: "700" },
-  rowLabelTotal: { color: TEXT, fontWeight: "800" },
-  rowValue: { color: TEXT, fontSize: 13, fontWeight: "600" },
-  rowValueEmphasis: { color: TEXT, fontWeight: "700" },
-  rowValueTotal: { color: GOLD, fontSize: 15, fontWeight: "800" },
+  rowLabelEmphasis: { color: t.TEXT, fontWeight: "700" },
+  rowLabelTotal: { color: t.TEXT, fontWeight: "800" },
+  rowValue: { color: t.TEXT, fontSize: 13, fontWeight: "600" },
+  rowValueEmphasis: { color: t.TEXT, fontWeight: "700" },
+  rowValueTotal: { color: t.GOLD, fontSize: 15, fontWeight: "800" },
   divider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
   },
   hint: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 0.4,
@@ -1341,23 +1349,23 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   productName: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "700",
   },
   productQty: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     marginTop: 2,
   },
   productTotal: {
-    color: GOLD,
+    color: t.GOLD,
     fontSize: 13,
     fontWeight: "800",
   },
 
   footnote: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     lineHeight: 16,
     paddingHorizontal: 4,
@@ -1370,13 +1378,13 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   historyTitle: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 14,
     fontWeight: "700",
     marginTop: 4,
   },
   historyBody: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     textAlign: "center",
     paddingHorizontal: 12,

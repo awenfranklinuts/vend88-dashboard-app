@@ -55,7 +55,8 @@ import {
   ACCENT_DIM,
   BG,
   BG_ELEVATED,
-  CARD,  CARD_BORDER,
+  CARD,
+  CARD_BORDER,
   DANGER,
   GOLD,
   GOLD_DIM,
@@ -65,7 +66,22 @@ import {
   TEXT_DIM,
   TEXT_FAINT,
   WARNING,
+  type ThemeTokens,
 } from "../../src/theme/tokens";
+import { useThemeTokens } from "../../src/context/ThemeContext";
+
+function useSalesStyles() {
+  const tokens = useThemeTokens();
+  return useMemo(
+    () => ({
+      tokens,
+      styles: makeStyles(tokens),
+      skelStyles: makeSkelStyles(tokens),
+      detailStyles: makeDetailStyles(tokens),
+    }),
+    [tokens]
+  );
+}
 
 type SharingModule = typeof import("expo-sharing");
 type PrintModule = typeof import("expo-print");
@@ -641,6 +657,7 @@ function StatementRow({
   total?: boolean;
   negative?: boolean;
 }) {
+  const { styles } = useSalesStyles();
   return (
     <View style={styles.statementRow}>
       <Text
@@ -676,6 +693,7 @@ function StatementSubRow({
   value: string;
   negative?: boolean;
 }) {
+  const { styles } = useSalesStyles();
   return (
     <View style={[styles.statementRow, styles.statementSubRow]}>
       <View style={styles.statementSubLabelWrap}>
@@ -697,6 +715,7 @@ function StatementSubRow({
 }
 
 function StatementDivider() {
+  const { styles } = useSalesStyles();
   return <View style={styles.statementDivider} />;
 }
 
@@ -712,11 +731,12 @@ function EmptyBreakdownCard({
   title: string;
   message: string;
 }) {
+  const { tokens, styles } = useSalesStyles();
   return (
     <View style={styles.breakdownGroup}>
       <View style={styles.emptyBreakdownInner}>
         <View style={styles.emptyBreakdownIconWrap}>
-          <Ionicons name={icon} size={18} color={TEXT_DIM} />
+          <Ionicons name={icon} size={18} color={tokens.TEXT_DIM} />
         </View>
         <View style={styles.emptyBreakdownTextWrap}>
           <Text style={styles.emptyBreakdownTitle}>{title}</Text>
@@ -768,6 +788,7 @@ function DateRangePickerModal({
   onClose: () => void;
   onApply: (start: Date, end: Date) => void;
 }) {
+  const { tokens, styles } = useSalesStyles();
   const { t } = useI18n();
   const [viewMonth, setViewMonth] = useState<Date>(() =>
     monthStart(initialStart ?? maxDate)
@@ -843,7 +864,7 @@ function DateRangePickerModal({
               hitSlop={8}
               style={({ pressed }) => [styles.pickerCloseBtn, pressed && styles.pressed]}
             >
-              <Ionicons name="close" size={18} color={TEXT} />
+              <Ionicons name="close" size={18} color={tokens.TEXT} />
             </Pressable>
           </View>
 
@@ -863,7 +884,7 @@ function DateRangePickerModal({
               style={({ pressed }) => [styles.pagerArrow, pressed && styles.pressed]}
               hitSlop={6}
             >
-              <Ionicons name="chevron-back" size={18} color={TEXT} />
+              <Ionicons name="chevron-back" size={18} color={tokens.TEXT} />
             </Pressable>
             <Text style={styles.pickerMonthLabel}>{monthLabel}</Text>
             <Pressable
@@ -891,7 +912,7 @@ function DateRangePickerModal({
               <Ionicons
                 name="chevron-forward"
                 size={18}
-                color={canGoNextMonth ? TEXT : TEXT_FAINT}
+                color={canGoNextMonth ? tokens.TEXT : tokens.TEXT_FAINT}
               />
             </Pressable>
           </View>
@@ -1002,6 +1023,7 @@ function TransactionsLoadingSkeleton({
   count: number;
   totalLabel: string;
 }) {
+  const { skelStyles } = useSalesStyles();
   // Pulse for the small "live" dot in the status pill.
   const pulse = useRef(new Animated.Value(0.4)).current;
   useEffect(() => {
@@ -1087,7 +1109,7 @@ function TransactionsLoadingSkeleton({
   );
 }
 
-const skelStyles = StyleSheet.create({
+const makeSkelStyles = (t: ThemeTokens) => StyleSheet.create({
   container: { paddingTop: 6 },
   statusPill: {
     alignSelf: "center",
@@ -1097,21 +1119,21 @@ const skelStyles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     marginBottom: 18,
   },
   statusDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
   statusText: {
     fontSize: 11,
     fontWeight: "600",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     letterSpacing: 0.2,
   },
   section: { marginBottom: 18 },
@@ -1129,7 +1151,7 @@ const skelStyles = StyleSheet.create({
   },
   rowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   iconWrap: {
     width: 36,
@@ -1268,30 +1290,31 @@ function formatOrderTime(value: unknown): string {
 }
 
 function StatusPill({ status }: { status?: string }) {
+  const { tokens, detailStyles } = useSalesStyles();
   const { t } = useI18n();
   const s = (status ?? "").toLowerCase();
-  let bg = TEXT_DIM + "22";
-  let fg = TEXT_DIM;
+  let bg = tokens.TEXT_DIM + "22";
+  let fg = tokens.TEXT_DIM;
   let label = status ?? "—";
   if (/unpaid/.test(s)) {
-    bg = WARNING + "22";
-    fg = WARNING;
+    bg = tokens.WARNING + "22";
+    fg = tokens.WARNING;
     label = "Unpaid";
   } else if (/\bpaid\b|complete|done/.test(s)) {
-    bg = SUCCESS + "22";
-    fg = SUCCESS;
+    bg = tokens.SUCCESS + "22";
+    fg = tokens.SUCCESS;
     label = t("sales_status_paid");
   } else if (/refund/.test(s)) {
-    bg = DANGER + "22";
-    fg = DANGER;
+    bg = tokens.DANGER + "22";
+    fg = tokens.DANGER;
     label = t("sales_status_refunded");
   } else if (/cancel|void/.test(s)) {
-    bg = DANGER + "22";
-    fg = DANGER;
+    bg = tokens.DANGER + "22";
+    fg = tokens.DANGER;
     label = status ?? t("sales_status_cancelled");
   } else if (/active|open|pending/.test(s)) {
-    bg = WARNING + "22";
-    fg = WARNING;
+    bg = tokens.WARNING + "22";
+    fg = tokens.WARNING;
     label = t("sales_active");
   }
   return (
@@ -1314,6 +1337,7 @@ function DetailRow({
   mono?: boolean;
   emphasis?: boolean;
 }) {
+  const { detailStyles } = useSalesStyles();
   return (
     <View style={detailStyles.row}>
       <Text style={detailStyles.rowLabel}>{label}</Text>
@@ -1339,6 +1363,7 @@ function SectionCard({
   title: string;
   children: React.ReactNode;
 }) {
+  const { detailStyles } = useSalesStyles();
   return (
     <View style={detailStyles.card}>
       <Text style={detailStyles.cardTitle}>{title}</Text>
@@ -1360,6 +1385,7 @@ function OrderDetailModal({
   error: string | null;
   onClose: () => void;
 }) {
+  const { tokens, styles, detailStyles } = useSalesStyles();
   const { t } = useI18n();
   const visible = sale != null;
 
@@ -1460,7 +1486,7 @@ function OrderDetailModal({
               pressed && { opacity: 0.6 },
             ]}
           >
-            <Ionicons name="close" size={20} color={TEXT} />
+            <Ionicons name="close" size={20} color={tokens.TEXT} />
           </Pressable>
         </View>
 
@@ -1483,7 +1509,7 @@ function OrderDetailModal({
           </View>
         ) : error ? (
           <View style={detailStyles.errorBox}>
-            <Ionicons name="alert-circle-outline" size={32} color={DANGER} />
+            <Ionicons name="alert-circle-outline" size={32} color={tokens.DANGER} />
             <Text style={detailStyles.errorTitle}>{t("sales_detail_error_title")}</Text>
             <Text style={detailStyles.errorBody}>{error}</Text>
           </View>
@@ -1503,7 +1529,7 @@ function OrderDetailModal({
                 <StatusPill status={summary.status} />
                 {summary.method && summary.method !== "—" ? (
                   <View style={detailStyles.heroChip}>
-                    <Ionicons name="bag-outline" size={12} color={TEXT_DIM} />
+                    <Ionicons name="bag-outline" size={12} color={tokens.TEXT_DIM} />
                     <Text style={detailStyles.heroChipText}>
                       {summary.method}
                     </Text>
@@ -1511,7 +1537,7 @@ function OrderDetailModal({
                 ) : null}
                 {summary.source && summary.source !== "—" ? (
                   <View style={detailStyles.heroChip}>
-                    <Ionicons name="terminal-outline" size={12} color={TEXT_DIM} />
+                    <Ionicons name="terminal-outline" size={12} color={tokens.TEXT_DIM} />
                     <Text style={detailStyles.heroChipText}>
                       {summary.source.toUpperCase()}
                     </Text>
@@ -1575,7 +1601,7 @@ function OrderDetailModal({
                       <Ionicons
                         name="cube-outline"
                         size={20}
-                        color={TEXT_DIM}
+                        color={tokens.TEXT_DIM}
                       />
                     </View>
                     <View style={detailStyles.productMid}>
@@ -1645,7 +1671,7 @@ function OrderDetailModal({
                           <Ionicons
                             name="cube-outline"
                             size={20}
-                            color={TEXT_DIM}
+                            color={tokens.TEXT_DIM}
                           />
                         )}
                       </View>
@@ -1709,7 +1735,7 @@ function OrderDetailModal({
                           style={[
                             detailStyles.txnDetailDot,
                             {
-                              backgroundColor: isRefund ? DANGER : SUCCESS,
+                              backgroundColor: isRefund ? tokens.DANGER : tokens.SUCCESS,
                             },
                           ]}
                         />
@@ -1735,7 +1761,7 @@ function OrderDetailModal({
                         <Text
                           style={[
                             detailStyles.txnDetailAmount,
-                            isRefund && { color: DANGER },
+                            isRefund && { color: tokens.DANGER },
                           ]}
                         >
                           {isRefund ? "−" : ""}
@@ -1761,8 +1787,8 @@ function OrderDetailModal({
   );
 }
 
-const detailStyles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: BG },
+const makeDetailStyles = (t: ThemeTokens) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: t.BG },
   header: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -1771,31 +1797,31 @@ const detailStyles = StyleSheet.create({
     paddingTop: 24,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   eyebrow: {
     fontSize: 10,
     letterSpacing: 2,
     fontWeight: "700",
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
   },
   title: {
     fontSize: 22,
     fontWeight: "800",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.4,
     marginTop: 2,
   },
-  subtitle: { fontSize: 12, color: TEXT_DIM, marginTop: 2 },
+  subtitle: { fontSize: 12, color: t.TEXT_DIM, marginTop: 2 },
   closeBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   content: {
     paddingHorizontal: SCREEN_PADDING,
@@ -1804,10 +1830,10 @@ const detailStyles = StyleSheet.create({
     gap: 14,
   },
   hero: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     padding: 18,
     gap: 8,
   },
@@ -1815,12 +1841,12 @@ const detailStyles = StyleSheet.create({
     fontSize: 10,
     letterSpacing: 2,
     fontWeight: "700",
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
   },
   heroAmount: {
     fontSize: 32,
     fontWeight: "800",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.8,
   },
   heroMeta: {
@@ -1836,14 +1862,14 @@ const detailStyles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
-    backgroundColor: BG,
+    backgroundColor: t.BG,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   heroChipText: {
     fontSize: 11,
     fontWeight: "700",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     letterSpacing: 0.3,
   },
   pill: {
@@ -1854,17 +1880,17 @@ const detailStyles = StyleSheet.create({
   },
   pillText: { fontSize: 10, fontWeight: "800", letterSpacing: 1 },
   card: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     overflow: "hidden",
   },
   cardTitle: {
     fontSize: 11,
     letterSpacing: 2,
     fontWeight: "700",
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 8,
@@ -1878,17 +1904,17 @@ const detailStyles = StyleSheet.create({
     paddingVertical: 10,
     gap: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER + "55",
+    borderColor: t.CARD_BORDER + "55",
   },
-  rowLabel: { fontSize: 12, color: TEXT_DIM, fontWeight: "500" },
+  rowLabel: { fontSize: 12, color: t.TEXT_DIM, fontWeight: "500" },
   rowValue: {
     fontSize: 13,
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "600",
     flexShrink: 1,
     textAlign: "right",
   },
-  rowValueMono: { fontFamily: "Menlo", fontSize: 11, color: TEXT_DIM },
+  rowValueMono: { fontFamily: "Menlo", fontSize: 11, color: t.TEXT_DIM },
   rowValueEmphasis: { fontSize: 14, fontWeight: "800", letterSpacing: -0.2 },
 
   productRow: {
@@ -1899,15 +1925,15 @@ const detailStyles = StyleSheet.create({
   },
   productRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER + "55",
+    borderColor: t.CARD_BORDER + "55",
   },
   productThumb: {
     width: 44,
     height: 44,
     borderRadius: 10,
-    backgroundColor: BG,
+    backgroundColor: t.BG,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -1916,7 +1942,7 @@ const detailStyles = StyleSheet.create({
   productThumbInitial: {
     fontSize: 18,
     fontWeight: "800",
-    color: GOLD,
+    color: t.GOLD,
     letterSpacing: -0.4,
   },
   productMid: { flex: 1, gap: 4 },
@@ -1928,7 +1954,7 @@ const detailStyles = StyleSheet.create({
   },
   productName: {
     fontSize: 13,
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "700",
     flexShrink: 1,
   },
@@ -1936,45 +1962,45 @@ const detailStyles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
-    backgroundColor: DANGER + "22",
+    backgroundColor: t.DANGER + "22",
   },
   refundBadgeText: {
     fontSize: 9,
     fontWeight: "800",
-    color: DANGER,
+    color: t.DANGER,
     letterSpacing: 0.5,
   },
-  productSku: { fontSize: 11, color: TEXT_DIM, fontWeight: "500" },
+  productSku: { fontSize: 11, color: t.TEXT_DIM, fontWeight: "500" },
   productRight: { alignItems: "flex-end", gap: 2 },
   productPrice: {
     fontSize: 14,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.2,
   },
-  productQty: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
+  productQty: { fontSize: 11, color: t.TEXT_DIM, fontWeight: "600" },
 
   txnDetailRow: { paddingVertical: 12, gap: 6 },
   txnDetailRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER + "55",
+    borderColor: t.CARD_BORDER + "55",
   },
   txnDetailHead: { flexDirection: "row", alignItems: "center", gap: 8 },
   txnDetailDot: { width: 6, height: 6, borderRadius: 3 },
   txnDetailType: {
     fontSize: 11,
     fontWeight: "800",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: 1,
   },
   txnDetailPlatform: {
     fontSize: 11,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontWeight: "600",
   },
   txnDetailId: {
     fontSize: 11,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontFamily: "Menlo",
   },
   txnDetailAmounts: {
@@ -1987,10 +2013,10 @@ const detailStyles = StyleSheet.create({
   txnDetailAmount: {
     fontSize: 15,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.3,
   },
-  txnDetailSurcharge: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
+  txnDetailSurcharge: { fontSize: 11, color: t.TEXT_DIM, fontWeight: "600" },
 
   loading: {
     flex: 1,
@@ -1998,10 +2024,10 @@ const detailStyles = StyleSheet.create({
     paddingTop: 16,
   },
   loadingCard: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     padding: 18,
   },
   loadingRow: {
@@ -2013,10 +2039,10 @@ const detailStyles = StyleSheet.create({
 
   errorBox: {
     margin: SCREEN_PADDING,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     padding: 24,
     alignItems: "center",
     gap: 8,
@@ -2024,12 +2050,12 @@ const detailStyles = StyleSheet.create({
   errorTitle: {
     fontSize: 15,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     marginTop: 4,
   },
   errorBody: {
     fontSize: 12,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     textAlign: "center",
     lineHeight: 18,
   },
@@ -2038,6 +2064,7 @@ const detailStyles = StyleSheet.create({
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function SalesScreen() {
+  const { tokens, styles, skelStyles, detailStyles } = useSalesStyles();
   const { email, token, loading: authLoading } = useAuth();
   const { t } = useI18n();
   const { online } = useNetwork();
@@ -2053,6 +2080,7 @@ export default function SalesScreen() {
   const [officialStats, setOfficialStats] = useState<OfficialStoreStatisticsRange | null>(null);
   const [officialItemsSold, setOfficialItemsSold] = useState<number | null>(null);
   const [topItems, setTopItems] = useState<DashboardTopItem[] | null>(null);
+  const [topItemsExpanded, setTopItemsExpanded] = useState(false);
   const [topProductDetailImages, setTopProductDetailImages] = useState<
     Record<string, string>
   >({});
@@ -2820,7 +2848,6 @@ export default function SalesScreen() {
       return (fromStats ?? [])
         .slice()
         .sort((a, b) => b.total - a.total)
-        .slice(0, 5)
         .map((p, i) => {
           const normalized = normalizeTopItemName(p.name);
           const normalizedImage =
@@ -2881,7 +2908,7 @@ export default function SalesScreen() {
       ? revenueChangePct ?? fallbackRevenueChange
       : fallbackRevenueChange;
   const revenueChangeUp = revenueChange >= 0;
-  const revenueChangeTone = revenueChange > 0 ? SUCCESS : revenueChange < 0 ? DANGER : TEXT_DIM;
+  const revenueChangeTone = revenueChange > 0 ? tokens.SUCCESS : revenueChange < 0 ? tokens.DANGER : tokens.TEXT_DIM;
 
   // Filter + group transactions
   const {
@@ -3981,7 +4008,7 @@ export default function SalesScreen() {
                 }}
                 style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
               >
-                <Ionicons name="download-outline" size={18} color={TEXT} />
+                <Ionicons name="download-outline" size={18} color={tokens.TEXT} />
               </Pressable>
             </View>
 
@@ -4046,7 +4073,7 @@ export default function SalesScreen() {
                       ]}
                       hitSlop={6}
                     >
-                      <Ionicons name="calendar-outline" size={16} color={TEXT} />
+                      <Ionicons name="calendar-outline" size={16} color={tokens.TEXT} />
                     </Pressable>
 
                     <View style={styles.pagerDivider} />
@@ -4084,7 +4111,7 @@ export default function SalesScreen() {
                       ]}
                       hitSlop={6}
                     >
-                      <Ionicons name="create-outline" size={16} color={TEXT} />
+                      <Ionicons name="create-outline" size={16} color={tokens.TEXT} />
                     </Pressable>
                   </View>
                 );
@@ -4167,7 +4194,7 @@ export default function SalesScreen() {
                     ]}
                     hitSlop={6}
                   >
-                    <Ionicons name="chevron-back" size={18} color={TEXT} />
+                    <Ionicons name="chevron-back" size={18} color={tokens.TEXT} />
                   </Pressable>
 
                   <View style={styles.pagerDivider} />
@@ -4223,7 +4250,7 @@ export default function SalesScreen() {
                     <Ionicons
                       name="chevron-forward"
                       size={18}
-                      color={canGoNext ? TEXT : TEXT_FAINT}
+                      color={canGoNext ? tokens.TEXT : tokens.TEXT_FAINT}
                     />
                   </Pressable>
                 </View>
@@ -4244,7 +4271,7 @@ export default function SalesScreen() {
                       : "stats-chart-outline"
                   }
                   size={32}
-                  color={loadError ? (online ? DANGER : GOLD) : TEXT_DIM}
+                  color={loadError ? (online ? tokens.DANGER : tokens.GOLD) : tokens.TEXT_DIM}
                 />
                 <Text style={styles.emptyTitle}>
                   {loadError
@@ -4355,13 +4382,13 @@ export default function SalesScreen() {
                 {/* KPI Row — flat, divided by hairlines */}
                 <View style={styles.kpiRow}>
                   <View style={styles.kpiCell}>
-                    <Ionicons name="cube-outline" size={16} color={GOLD} />
+                    <Ionicons name="cube-outline" size={16} color={tokens.GOLD} />
                     <AnimatedNumber value={itemsSoldKpi} style={styles.kpiValue} />
                     <Text style={styles.kpiLabel}>{t("sales_kpi_items_sold")}</Text>
                   </View>
                   <View style={styles.kpiDivider} />
                   <View style={styles.kpiCell}>
-                    <Ionicons name="receipt-outline" size={16} color={WARNING} />
+                    <Ionicons name="receipt-outline" size={16} color={tokens.WARNING} />
                     <AnimatedNumber value={stat?.orders ?? 0} style={styles.kpiValue} />
                     <Text style={styles.kpiLabel}>{t("sales_kpi_orders")}</Text>
                   </View>
@@ -4728,20 +4755,45 @@ export default function SalesScreen() {
                       label={t("sales_top_items")}
                       style={styles.breakdownSectionLabel}
                       right={
-                        <Text style={styles.sectionHint}>
-                          {displayTopItems.length}
-                        </Text>
+                        displayTopItems.length > 5 ? (
+                          <Pressable
+                            accessibilityLabel={topItemsExpanded ? "Show less top items" : `See all ${displayTopItems.length} top items`}
+                            onPress={() => {
+                              haptic.selection();
+                              setTopItemsExpanded((v) => !v);
+                            }}
+                            style={({ pressed }) => [
+                              styles.topItemsChip,
+                              pressed && styles.topItemsChipPressed,
+                            ]}
+                            hitSlop={6}
+                          >
+                            <Text style={styles.topItemsChipText}>
+                              {topItemsExpanded ? t("sales_top_items_collapse") : t("sales_top_items_see_all")}
+                            </Text>
+                            <Ionicons
+                              name={topItemsExpanded ? "chevron-up" : "chevron-forward"}
+                              size={13}
+                              color={tokens.TEXT_DIM}
+                            />
+                          </Pressable>
+                        ) : (
+                          <Text style={styles.sectionHint}>
+                            {displayTopItems.length}
+                          </Text>
+                        )
                       }
                     />
                     <View style={styles.moduleList}>
-                      {displayTopItems.map((item, i) => {
+                      {(topItemsExpanded ? displayTopItems : displayTopItems.slice(0, 5)).map((item, i) => {
+                        const visibleItems = topItemsExpanded ? displayTopItems : displayTopItems.slice(0, 5);
                         const initial = (item.name?.[0] ?? "?").toUpperCase();
                         return (
                           <View
                             key={item.id}
                             style={[
                               styles.topItemRow,
-                              i !== displayTopItems.length - 1 && styles.moduleRowDivider,
+                              i !== visibleItems.length - 1 && styles.moduleRowDivider,
                             ]}
                           >
                             <View style={styles.topItemThumb}>
@@ -4923,7 +4975,7 @@ export default function SalesScreen() {
               <View style={styles.txnHeroAccent} />
               <View style={styles.txnHeroInner}>
                 <View style={styles.txnHeroIcon}>
-                  <Ionicons name="receipt-outline" size={20} color={GOLD} />
+                  <Ionicons name="receipt-outline" size={20} color={tokens.GOLD} />
                 </View>
 
                 <View style={styles.txnHeroBody}>
@@ -4951,7 +5003,7 @@ export default function SalesScreen() {
             </Pressable>
           ) : (
             <View style={styles.emptyCard}>
-              <Ionicons name="receipt-outline" size={32} color={TEXT_DIM} />
+              <Ionicons name="receipt-outline" size={32} color={tokens.TEXT_DIM} />
               <Text style={styles.emptyTitle}>{t("sales_no_transactions")}</Text>
               <Text style={styles.emptyBody}>
                 {search
@@ -5015,7 +5067,7 @@ export default function SalesScreen() {
                 pressed && styles.pressed,
               ]}
             >
-              <Ionicons name="close" size={20} color={TEXT} />
+              <Ionicons name="close" size={20} color={tokens.TEXT} />
             </Pressable>
           </View>
 
@@ -5029,12 +5081,12 @@ export default function SalesScreen() {
               <Ionicons
                 name="search"
                 size={15}
-                color={searchFocused ? GOLD : TEXT_DIM}
+                color={searchFocused ? tokens.GOLD : tokens.TEXT_DIM}
               />
               <TextInput
                 accessibilityLabel={t("sales_search_transactions")}
                 placeholder={t("sales_search_placeholder")}
-                placeholderTextColor={TEXT_FAINT}
+                placeholderTextColor={tokens.TEXT_FAINT}
                 value={search}
                 onChangeText={setSearch}
                 onFocus={() => setSearchFocused(true)}
@@ -5053,7 +5105,7 @@ export default function SalesScreen() {
                   }}
                   hitSlop={8}
                 >
-                  <Ionicons name="close-circle" size={18} color={TEXT_DIM} />
+                  <Ionicons name="close-circle" size={18} color={tokens.TEXT_DIM} />
                 </Pressable>
               ) : null}
             </View>
@@ -5142,7 +5194,7 @@ export default function SalesScreen() {
                 />
               ) : (
                 <View style={styles.emptyCard}>
-                  <Ionicons name="receipt-outline" size={32} color={TEXT_DIM} />
+                  <Ionicons name="receipt-outline" size={32} color={tokens.TEXT_DIM} />
                   <Text style={styles.emptyTitle}>{t("sales_no_transactions")}</Text>
                   <Text style={styles.emptyBody}>{t("sales_try_different_time_range")}</Text>
                 </View>
@@ -5187,7 +5239,7 @@ export default function SalesScreen() {
                   pressed && { opacity: 0.6 },
                 ]}
               >
-                <Ionicons name="close" size={18} color={TEXT_DIM} />
+                <Ionicons name="close" size={18} color={tokens.TEXT_DIM} />
               </Pressable>
             </View>
 
@@ -5216,22 +5268,22 @@ export default function SalesScreen() {
                         {
                           backgroundColor: selected
                             ? isPdf
-                              ? GOLD_DIM
-                              : ACCENT_DIM
-                            : CARD_BORDER,
+                              ? tokens.GOLD_DIM
+                              : tokens.ACCENT_DIM
+                            : tokens.CARD_BORDER,
                         },
                       ]}
                     >
                       <Ionicons
                         name={isPdf ? "document-outline" : "document-text-outline"}
                         size={18}
-                        color={selected ? (isPdf ? GOLD : ACCENT) : TEXT_DIM}
+                        color={selected ? (isPdf ? tokens.GOLD : tokens.ACCENT) : tokens.TEXT_DIM}
                       />
                     </View>
                     <Text
                       style={[
                         styles.exportFormatTitle,
-                        selected && { color: TEXT },
+                        selected && { color: tokens.TEXT },
                       ]}
                     >
                       {isPdf ? t("sales_export_pdf") : t("sales_export_csv")}
@@ -5352,8 +5404,8 @@ export default function SalesScreen() {
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  safeContainer: { flex: 1, backgroundColor: BG },
+const makeStyles = (t: ThemeTokens) => StyleSheet.create({
+  safeContainer: { flex: 1, backgroundColor: t.BG },
   container: { flex: 1, backgroundColor: "transparent" },
   content: { padding: SCREEN_PADDING, paddingTop: 8, paddingBottom: 140, gap: 22 },
   pressed: { opacity: 0.7 },
@@ -5366,7 +5418,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   eyebrow: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 10,
     letterSpacing: 2,
     fontWeight: "700",
@@ -5374,12 +5426,12 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 26,
     fontWeight: "800",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.4,
     lineHeight: 30,
   },
   dateSubtitle: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     fontWeight: "500",
   },
@@ -5387,9 +5439,9 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     alignItems: "center",
     justifyContent: "center",
     marginTop: 14,
@@ -5400,7 +5452,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 24,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   periodTab: {
     paddingVertical: 10,
@@ -5409,12 +5461,12 @@ const styles = StyleSheet.create({
   periodTabText: {
     fontSize: 13,
     fontWeight: "600",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     letterSpacing: 0.2,
     marginBottom: 6,
   },
   periodTabTextActive: {
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "700",
   },
   periodTabTextDisabled: {
@@ -5427,7 +5479,7 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   periodTabUnderlineActive: {
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
 
   // Date pager — unified pill navigator
@@ -5439,8 +5491,8 @@ const styles = StyleSheet.create({
     marginBottom: 2,
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
-    backgroundColor: CARD,
+    borderColor: t.CARD_BORDER,
+    backgroundColor: t.CARD,
     overflow: "hidden",
   },
   pagerArrow: {
@@ -5458,7 +5510,7 @@ const styles = StyleSheet.create({
     width: StyleSheet.hairlineWidth,
     alignSelf: "center",
     height: 24,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
   },
   pagerCenter: {
     flex: 1,
@@ -5475,27 +5527,27 @@ const styles = StyleSheet.create({
   pagerLabel: {
     fontSize: 14,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.2,
   },
   pagerCurrentDot: {
     width: 5,
     height: 5,
     borderRadius: 2.5,
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
     marginLeft: 2,
   },
   pagerCurrentTag: {
     fontSize: 9,
     fontWeight: "700",
-    color: GOLD,
+    color: t.GOLD,
     letterSpacing: 1.4,
     textTransform: "uppercase",
   },
   pagerJump: {
     fontSize: 10,
     fontWeight: "600",
-    color: GOLD,
+    color: t.GOLD,
     letterSpacing: 0.4,
     textTransform: "uppercase",
   },
@@ -5525,18 +5577,18 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.15)",
   },
   heroDotActive: {
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
     width: 10,
   },
   heroLabel: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.5,
     textTransform: "uppercase",
   },
   heroValue: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 38,
     fontWeight: "800",
     marginTop: 8,
@@ -5554,7 +5606,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   heroBadgeText: { fontSize: 12, fontWeight: "600" },
-  heroHint: { color: TEXT_DIM, fontSize: 12, fontWeight: "500" },
+  heroHint: { color: t.TEXT_DIM, fontSize: 12, fontWeight: "500" },
 
   // KPI row — flat with hairline dividers
   kpiRow: {
@@ -5563,7 +5615,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   kpiCell: {
     flex: 1,
@@ -5572,17 +5624,17 @@ const styles = StyleSheet.create({
   },
   kpiDivider: {
     width: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
     marginHorizontal: 4,
   },
   kpiValue: {
     fontSize: 20,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     marginTop: 4,
     letterSpacing: -0.4,
   },
-  kpiLabel: { fontSize: 11, color: TEXT_DIM, fontWeight: "500" },
+  kpiLabel: { fontSize: 11, color: t.TEXT_DIM, fontWeight: "500" },
 
   // Generic flat block (replaces card)
   block: {
@@ -5599,9 +5651,9 @@ const styles = StyleSheet.create({
   // "where did the money come from?" chapter instead of two floating blocks.
   breakdownGroup: {
     marginTop: 12,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     borderRadius: 16,
     paddingHorizontal: 16,
     paddingTop: 4,
@@ -5616,7 +5668,7 @@ const styles = StyleSheet.create({
   },
   breakdownDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
     marginTop: 14,
     marginBottom: 2,
   },
@@ -5631,13 +5683,28 @@ const styles = StyleSheet.create({
     marginTop: 18,
     marginBottom: 2,
   },
-  sectionHint: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
+  sectionHint: { fontSize: 11, color: t.TEXT_DIM, fontWeight: "600" },
+
+  // Top items section — "See all" / collapse chip in SectionLabel right slot
+  topItemsChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+  },
+  topItemsChipPressed: { opacity: 0.5 },
+  topItemsChipText: {
+    fontSize: 12,
+    color: t.TEXT_DIM,
+    fontWeight: "600",
+  },
 
   // Statement card — itemised storeStatistics breakdown
   statementCard: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     borderRadius: 16,
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -5654,25 +5721,25 @@ const styles = StyleSheet.create({
   },
   statementDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
+    backgroundColor: t.CARD_BORDER,
   },
   statementLabel: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 13,
     fontWeight: "500",
     flexShrink: 1,
   },
   statementLabelEmphasis: {
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "600",
   },
   statementLabelTotal: {
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "700",
     fontSize: 14,
   },
   statementValue: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "600",
     fontVariant: ["tabular-nums"],
@@ -5686,7 +5753,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.3,
   },
   statementValueNegative: {
-    color: DANGER,
+    color: t.DANGER,
   },
   statementSubLabelWrap: {
     flexDirection: "row",
@@ -5695,18 +5762,18 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   statementSubGlyph: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 12,
     fontWeight: "500",
   },
   statementSubLabel: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     fontWeight: "500",
     flexShrink: 1,
   },
   statementSubValue: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 12,
     fontWeight: "600",
     fontVariant: ["tabular-nums"],
@@ -5717,7 +5784,7 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
   statementSectionHeaderText: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 2,
@@ -5745,17 +5812,17 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   abnormalLabel: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "600",
   },
   abnormalCount: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "500",
   },
   abnormalAmount: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "700",
     fontVariant: ["tabular-nums"],
@@ -5772,13 +5839,13 @@ const styles = StyleSheet.create({
   legend: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 4 },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendName: { fontSize: 11, color: TEXT, fontWeight: "600" },
-  legendPct: { fontSize: 11, color: TEXT_DIM, fontWeight: "500" },
+  legendName: { fontSize: 11, color: t.TEXT, fontWeight: "600" },
+  legendPct: { fontSize: 11, color: t.TEXT_DIM, fontWeight: "500" },
 
   // Module list
   moduleList: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   moduleRow: {
     flexDirection: "row",
@@ -5788,11 +5855,11 @@ const styles = StyleSheet.create({
   },
   moduleRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   moduleLeft: { flexDirection: "row", alignItems: "center", gap: 6, width: 84 },
   moduleDot: { width: 8, height: 8, borderRadius: 4 },
-  moduleName: { fontSize: 12, color: TEXT, fontWeight: "600" },
+  moduleName: { fontSize: 12, color: t.TEXT, fontWeight: "600" },
   barWrap: {
     flex: 1,
     height: 6,
@@ -5806,7 +5873,7 @@ const styles = StyleSheet.create({
     textAlign: "right",
     fontSize: 12,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.2,
   },
   // Unified payment-methods row: name (flexes) · amount · % — sits on the
@@ -5820,7 +5887,7 @@ const styles = StyleSheet.create({
   paymentAmount: {
     fontSize: 12,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.2,
     marginLeft: "auto",
   },
@@ -5829,7 +5896,7 @@ const styles = StyleSheet.create({
     textAlign: "right",
     fontSize: 12,
     fontWeight: "600",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
   },
 
   // Top items rows — image thumbnail (with medal badge for top 3) + name +
@@ -5844,7 +5911,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 9,
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -5854,7 +5921,7 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   topItemThumbText: {
-    color: GOLD,
+    color: t.GOLD,
     fontSize: 14,
     fontWeight: "700",
   },
@@ -5869,9 +5936,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: BG,
+    borderColor: t.BG,
   },
-  topItemRankBadgeGold: { backgroundColor: GOLD },
+  topItemRankBadgeGold: { backgroundColor: t.GOLD },
   topItemRankBadgeSilver: { backgroundColor: "#c0c4cc" },
   topItemRankBadgeBronze: { backgroundColor: "#cd7f32" },
   topItemRankBadgeText: {
@@ -5884,12 +5951,12 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     fontWeight: "600",
-    color: TEXT,
+    color: t.TEXT,
   },
   topItemUnits: {
     fontSize: 11,
     fontWeight: "600",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     width: 40,
     textAlign: "right",
   },
@@ -5913,12 +5980,12 @@ const styles = StyleSheet.create({
   emptyBreakdownTitle: {
     fontSize: 13,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     marginBottom: 2,
   },
   emptyBreakdownMessage: {
     fontSize: 11,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     lineHeight: 15,
   },
 
@@ -5927,21 +5994,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
     marginTop: 30,
   },
   searchRowFocused: {
-    borderColor: CARD_BORDER,
-    backgroundColor: CARD,
+    borderColor: t.CARD_BORDER,
+    backgroundColor: t.CARD,
   },
   searchInput: {
     flex: 1,
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 14,
     fontWeight: "500",
     padding: 0,
@@ -5951,7 +6018,7 @@ const styles = StyleSheet.create({
   // Status filter — underline text tabs (matches period tabs)
   statusTabsScroll: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   statusTabs: {
     flexDirection: "row",
@@ -5972,11 +6039,11 @@ const styles = StyleSheet.create({
   statusTabText: {
     fontSize: 13,
     fontWeight: "600",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     letterSpacing: 0.2,
   },
   statusTabTextActive: {
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "700",
   },
   statusTabCount: {
@@ -5989,16 +6056,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   statusTabCountActive: {
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
   },
   statusTabCountText: {
     fontSize: 10,
     fontWeight: "700",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     letterSpacing: 0.1,
   },
   statusTabCountTextActive: {
-    color: GOLD,
+    color: t.GOLD,
   },
   statusTabUnderline: {
     height: 2,
@@ -6007,7 +6074,7 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   statusTabUnderlineActive: {
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
 
   // Section header (sticky day grouping)
@@ -6017,18 +6084,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingTop: 12,
     paddingBottom: 8,
-    backgroundColor: BG,
+    backgroundColor: t.BG,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   sectionHeaderText: {
     fontSize: 11,
     fontWeight: "700",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     letterSpacing: 1.5,
     textTransform: "uppercase",
   },
-  sectionHeaderTotal: { fontSize: 12, fontWeight: "700", color: GOLD, letterSpacing: -0.2 },
+  sectionHeaderTotal: { fontSize: 12, fontWeight: "700", color: t.GOLD, letterSpacing: -0.2 },
 
   // Transactions — flat rows like dashboard order list
   txnRow: {
@@ -6039,7 +6106,7 @@ const styles = StyleSheet.create({
   },
   txnRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   txnIcon: {
     width: 36,
@@ -6050,13 +6117,13 @@ const styles = StyleSheet.create({
   },
   txnMid: { flex: 1, gap: 3 },
   txnTopRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  txnId: { fontSize: 13, fontWeight: "700", color: TEXT, flexShrink: 1, letterSpacing: -0.1 },
+  txnId: { fontSize: 13, fontWeight: "700", color: t.TEXT, flexShrink: 1, letterSpacing: -0.1 },
   modTag: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   modTagText: { fontSize: 10, fontWeight: "700" },
-  txnSub: { fontSize: 11, color: TEXT_DIM, fontWeight: "500" },
+  txnSub: { fontSize: 11, color: t.TEXT_DIM, fontWeight: "500" },
 
   txnRight: { alignItems: "flex-end", gap: 4 },
-  txnTotal: { fontSize: 15, fontWeight: "700", color: TEXT, letterSpacing: -0.3 },
+  txnTotal: { fontSize: 15, fontWeight: "700", color: t.TEXT, letterSpacing: -0.3 },
   statusRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   statusDot: { width: 5, height: 5, borderRadius: 2.5 },
   statusText: { fontSize: 10, fontWeight: "600", letterSpacing: 0.2 },
@@ -6068,9 +6135,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     borderRadius: 18,
     overflow: "hidden",
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   txnHeroCardPressed: {
     opacity: 0.9,
@@ -6079,7 +6146,7 @@ const styles = StyleSheet.create({
   txnHeroAccent: {
     width: 3,
     alignSelf: "stretch",
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
   txnHeroInner: {
     flex: 1,
@@ -6095,16 +6162,16 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: GOLD + "14",
+    backgroundColor: t.GOLD + "14",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: GOLD + "33",
+    borderColor: t.GOLD + "33",
   },
   txnHeroBody: { flex: 1, gap: 4 },
   txnHeroEyebrow: {
     fontSize: 10,
     letterSpacing: 1.5,
     fontWeight: "700",
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     textTransform: "uppercase",
   },
   txnHeroCountRow: {
@@ -6115,18 +6182,18 @@ const styles = StyleSheet.create({
   txnHeroCount: {
     fontSize: 28,
     fontWeight: "800",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.8,
   },
   txnHeroCountLabel: {
     fontSize: 13,
     fontWeight: "600",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
   },
   txnHeroHint: {
     fontSize: 11,
     fontWeight: "500",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     letterSpacing: 0.1,
   },
   txnHeroCtaPill: {
@@ -6135,7 +6202,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
 
   // See-all transactions hero CTA — replaces the inline preview list.
@@ -6143,14 +6210,14 @@ const styles = StyleSheet.create({
     marginTop: 4,
     borderRadius: 18,
     overflow: "hidden",
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   seeAllCardPressed: { opacity: 0.85 },
   seeAllAccent: {
     height: 3,
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
     opacity: 0.9,
   },
   seeAllInner: {
@@ -6166,16 +6233,16 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: GOLD + "1f",
+    backgroundColor: t.GOLD + "1f",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: GOLD + "33",
+    borderColor: t.GOLD + "33",
   },
   seeAllBody: { flex: 1, gap: 2 },
   seeAllEyebrow: {
     fontSize: 10,
     letterSpacing: 1.6,
     fontWeight: "700",
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
   },
   seeAllCountRow: {
     flexDirection: "row",
@@ -6185,18 +6252,18 @@ const styles = StyleSheet.create({
   seeAllCount: {
     fontSize: 22,
     fontWeight: "800",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.6,
   },
   seeAllCountLabel: {
     fontSize: 12,
     fontWeight: "600",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
   },
   seeAllHint: {
     fontSize: 11,
     fontWeight: "500",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
   },
   seeAllChevron: {
     width: 32,
@@ -6204,11 +6271,11 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: GOLD + "1f",
+    backgroundColor: t.GOLD + "1f",
   },
 
   // All-transactions modal
-  allTxnContainer: { flex: 1, backgroundColor: BG },
+  allTxnContainer: { flex: 1, backgroundColor: t.BG },
   allTxnHeader: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -6217,25 +6284,25 @@ const styles = StyleSheet.create({
     paddingTop: 24,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   allTxnHeaderText: { flex: 1, gap: 2 },
   allTxnEyebrow: {
     fontSize: 10,
     letterSpacing: 2,
     fontWeight: "700",
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
   },
   allTxnTitle: {
     fontSize: 20,
     fontWeight: "800",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.4,
   },
   allTxnSubtitle: {
     fontSize: 12,
     fontWeight: "500",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
   },
   allTxnCloseBtn: {
     width: 36,
@@ -6243,9 +6310,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   allTxnList: { flex: 1, backgroundColor: "transparent" },
   allTxnContent: {
@@ -6266,14 +6333,14 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   allTxnLoadingTitle: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 15,
     fontWeight: "700",
     letterSpacing: -0.2,
     marginTop: 4,
   },
   allTxnLoadingHint: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     textAlign: "center",
     lineHeight: 18,
@@ -6283,7 +6350,7 @@ const styles = StyleSheet.create({
   emptyCard: {
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     borderStyle: "dashed",
     paddingVertical: 32,
     paddingHorizontal: 20,
@@ -6291,14 +6358,14 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 4,
   },
-  emptyTitle: { color: TEXT, fontSize: 14, fontWeight: "700", marginTop: 4 },
-  emptyBody: { color: TEXT_DIM, fontSize: 12, fontWeight: "500", textAlign: "center" },
+  emptyTitle: { color: t.TEXT, fontSize: 14, fontWeight: "700", marginTop: 4 },
+  emptyBody: { color: t.TEXT_DIM, fontSize: 12, fontWeight: "500", textAlign: "center" },
   emptyBtn: {
     marginTop: 10,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
   emptyBtnText: { color: "#181e38", fontWeight: "700", fontSize: 12 },
 
@@ -6313,11 +6380,11 @@ const styles = StyleSheet.create({
   pickerCard: {
     width: "100%",
     maxWidth: 380,
-    backgroundColor: BG,
+    backgroundColor: t.BG,
     borderRadius: 20,
     padding: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     gap: 12,
   },
   pickerHeader: {
@@ -6326,7 +6393,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   pickerTitle: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 16,
     fontWeight: "700",
     letterSpacing: -0.2,
@@ -6337,12 +6404,12 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   pickerSummary: {
-    color: GOLD,
+    color: t.GOLD,
     fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0.3,
@@ -6355,7 +6422,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   pickerMonthLabel: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 15,
     fontWeight: "700",
   },
@@ -6365,7 +6432,7 @@ const styles = StyleSheet.create({
   pickerWeekday: {
     flex: 1,
     textAlign: "center",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     fontWeight: "600",
     letterSpacing: 0.4,
@@ -6389,7 +6456,7 @@ const styles = StyleSheet.create({
     bottom: 4,
     left: 0,
     right: 0,
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
     opacity: 0.25,
   },
   pickerCellRangeBgLeft: {
@@ -6398,7 +6465,7 @@ const styles = StyleSheet.create({
     bottom: 4,
     left: 0,
     right: "50%",
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
     opacity: 0.25,
   },
   pickerCellRangeBgRight: {
@@ -6407,7 +6474,7 @@ const styles = StyleSheet.create({
     bottom: 4,
     left: "50%",
     right: 0,
-    backgroundColor: GOLD_DIM,
+    backgroundColor: t.GOLD_DIM,
     opacity: 0.25,
   },
   pickerDay: {
@@ -6418,16 +6485,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   pickerDayPressed: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
   },
   pickerDayActive: {
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
   pickerDayDisabled: {
     opacity: 0.3,
   },
   pickerDayText: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "600",
   },
@@ -6436,7 +6503,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   pickerDayTextDisabled: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
   },
   pickerActions: {
     flexDirection: "row",
@@ -6449,12 +6516,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   pickerSecondaryBtnText: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "700",
   },
@@ -6464,7 +6531,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
   pickerPrimaryBtnDisabled: {
     opacity: 0.4,
@@ -6482,7 +6549,7 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   exportSheet: {
-    backgroundColor: BG_ELEVATED,
+    backgroundColor: t.BG_ELEVATED,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     paddingHorizontal: 22,
@@ -6491,7 +6558,7 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderLeftWidth: StyleSheet.hairlineWidth,
     borderRightWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     shadowColor: "#000",
     shadowOpacity: 0.5,
     shadowRadius: 32,
@@ -6510,23 +6577,23 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: BG,
+    backgroundColor: t.BG,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   exportTitle: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 18,
     fontWeight: "800",
     letterSpacing: 0.2,
   },
   exportSubtitle: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 12,
     marginTop: 2,
   },
   exportSectionLabel: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 1.6,
@@ -6544,12 +6611,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: CARD_BORDER,
-    backgroundColor: BG,
+    borderColor: t.CARD_BORDER,
+    backgroundColor: t.BG,
     gap: 8,
   },
   exportFormatTileOn: {
-    borderColor: GOLD,
+    borderColor: t.GOLD,
     backgroundColor: "rgba(212,175,55,0.06)",
   },
   exportFormatIcon: {
@@ -6560,12 +6627,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   exportFormatTitle: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 14,
     fontWeight: "700",
   },
   exportFormatDesc: {
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     fontSize: 11,
     lineHeight: 15,
   },
@@ -6576,9 +6643,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 14,
     borderRadius: 14,
-    backgroundColor: BG,
+    backgroundColor: t.BG,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     marginBottom: 16,
   },
   exportRow: {
@@ -6589,8 +6656,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
-    backgroundColor: BG,
+    borderColor: t.CARD_BORDER,
+    backgroundColor: t.BG,
   },
   exportRowActive: {
     opacity: 0.6,
@@ -6607,21 +6674,21 @@ const styles = StyleSheet.create({
     height: 22,
     borderRadius: 6,
     borderWidth: 1.5,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     alignItems: "center",
     justifyContent: "center",
   },
   exportCheckboxOn: {
-    backgroundColor: GOLD,
-    borderColor: GOLD,
+    backgroundColor: t.GOLD,
+    borderColor: t.GOLD,
   },
   exportRowTitle: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 14,
     fontWeight: "700",
   },
   exportRowDesc: {
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11,
     marginTop: 2,
   },
@@ -6632,7 +6699,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 14,
     borderRadius: 14,
-    backgroundColor: GOLD,
+    backgroundColor: t.GOLD,
   },
   exportCtaDisabled: {
     opacity: 0.5,
@@ -6666,10 +6733,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     alignItems: "center",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   exportToastText: {
-    color: TEXT,
+    color: t.TEXT,
     fontSize: 13,
     fontWeight: "600",
   },

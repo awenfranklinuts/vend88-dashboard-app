@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, {
@@ -12,8 +12,9 @@ import Animated, {
 
 import { useNetwork } from "../context/NetworkContext";
 import { useI18n } from "../context/I18nContext";
+import { useThemeTokens } from "../context/ThemeContext";
+import { ThemeTokens } from "../theme/tokens";
 import { haptic } from "../utils/haptics";
-import { GOLD, TEXT } from "../theme/tokens";
 
 /**
  * Inline, non-blocking strip shown when the device is offline but the session
@@ -24,6 +25,8 @@ import { GOLD, TEXT } from "../theme/tokens";
 export function OfflineNotice() {
   const { online, hasBeenOnline, checking, recheck } = useNetwork();
   const { t } = useI18n();
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
 
   const visible = !online && hasBeenOnline;
 
@@ -60,7 +63,7 @@ export function OfflineNotice() {
     >
       <View style={styles.row}>
         <Animated.View style={[styles.dot, dotStyle]} />
-        <Ionicons name="cloud-offline-outline" size={13} color={GOLD} />
+        <Ionicons name="cloud-offline-outline" size={13} color={tokens.GOLD} />
         <Text style={styles.text} numberOfLines={1}>
           {checking ? t("offline_checking") : t("offline_notice_label")}
         </Text>
@@ -69,34 +72,35 @@ export function OfflineNotice() {
   );
 }
 
-const styles = StyleSheet.create({
-  strip: {
-    width: "100%",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    backgroundColor: "rgba(212,175,55,0.08)",
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(212,175,55,0.28)",
-  },
-  stripPressed: {
-    opacity: 0.85,
-  },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: GOLD,
-  },
-  text: {
-    color: TEXT,
-    fontSize: 11.5,
-    fontWeight: "700",
-    letterSpacing: 0.2,
-  },
-});
+const makeStyles = (t: ThemeTokens) =>
+  StyleSheet.create({
+    strip: {
+      width: "100%",
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      backgroundColor: t.GOLD_DIM,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: t.GOLD_DIM,
+    },
+    stripPressed: {
+      opacity: 0.85,
+    },
+    row: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+    },
+    dot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: t.GOLD,
+    },
+    text: {
+      color: t.TEXT,
+      fontSize: 11.5,
+      fontWeight: "700",
+      letterSpacing: 0.2,
+    },
+  });

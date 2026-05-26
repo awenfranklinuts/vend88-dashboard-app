@@ -8,6 +8,7 @@ import {
   SPACE_SM,
   SPACE_LG,
 } from "../theme/tokens";
+import { useThemeTokens } from "../context/ThemeContext";
 
 interface ScreenHeaderProps {
   /** Uppercase eyebrow text shown above the title (e.g. "CATALOG"). */
@@ -30,16 +31,21 @@ export function ScreenHeader({
   subtitle,
   right,
 }: ScreenHeaderProps) {
+  const tokens = useThemeTokens();
   return (
     <View style={styles.wrap}>
-      {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
+      {eyebrow ? (
+        <Text style={[styles.eyebrow, { color: tokens.TEXT_DIM }]}>{eyebrow}</Text>
+      ) : null}
       <View style={styles.titleRow}>
-        <Text style={styles.title} numberOfLines={1}>
+        <Text style={[styles.title, { color: tokens.TEXT }]} numberOfLines={1}>
           {title}
         </Text>
         {right ? <View style={styles.right}>{right}</View> : null}
       </View>
-      {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+      {subtitle ? (
+        <Text style={[styles.subtitle, { color: tokens.TEXT_DIM }]}>{subtitle}</Text>
+      ) : null}
     </View>
   );
 }

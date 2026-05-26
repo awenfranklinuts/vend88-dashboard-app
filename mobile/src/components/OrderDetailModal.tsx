@@ -12,24 +12,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
 import { useI18n } from "../context/I18nContext";
+import { useThemeTokens } from "../context/ThemeContext";
 import {
   fetchOfficialProductDetails,
   OfficialOrderDetail,
 } from "../services/officialDashboard";
 import { ShimmerSkeleton } from "./ShimmerSkeleton";
-import {
-  BG,
-  CARD,
-  CARD_BORDER,
-  DANGER,
-  GOLD,
-  SCREEN_PADDING,
-  SUCCESS,
-  TEXT,
-  TEXT_DIM,
-  TEXT_FAINT,
-  WARNING,
-} from "../theme/tokens";
+import { SCREEN_PADDING, ThemeTokens } from "../theme/tokens";
 
 type OrderProduct = {
   name: string;
@@ -171,31 +160,39 @@ function formatOrderTime(value: unknown): string {
   });
 }
 
-function StatusPill({ status }: { status?: string }) {
+function StatusPill({
+  status,
+  styles,
+  t: tok,
+}: {
+  status?: string;
+  styles: ReturnType<typeof makeStyles>;
+  t: ThemeTokens;
+}) {
   const { t } = useI18n();
   const s = (status ?? "").toLowerCase();
-  let bg = TEXT_DIM + "22";
-  let fg = TEXT_DIM;
+  let bg = tok.TEXT_DIM + "22";
+  let fg = tok.TEXT_DIM;
   let label = status ?? "-";
   if (/unpaid/.test(s)) {
-    bg = WARNING + "22";
-    fg = WARNING;
+    bg = tok.WARNING + "22";
+    fg = tok.WARNING;
     label = "Unpaid";
   } else if (/\bpaid\b|complete|done/.test(s)) {
-    bg = SUCCESS + "22";
-    fg = SUCCESS;
+    bg = tok.SUCCESS + "22";
+    fg = tok.SUCCESS;
     label = t("sales_status_paid");
   } else if (/refund/.test(s)) {
-    bg = DANGER + "22";
-    fg = DANGER;
+    bg = tok.DANGER + "22";
+    fg = tok.DANGER;
     label = t("sales_status_refunded");
   } else if (/cancel|void/.test(s)) {
-    bg = DANGER + "22";
-    fg = DANGER;
+    bg = tok.DANGER + "22";
+    fg = tok.DANGER;
     label = status ?? t("sales_status_cancelled");
   } else if (/active|open|pending/.test(s)) {
-    bg = WARNING + "22";
-    fg = WARNING;
+    bg = tok.WARNING + "22";
+    fg = tok.WARNING;
     label = t("sales_active");
   }
   return (
@@ -210,11 +207,13 @@ function DetailRow({
   value,
   mono,
   emphasis,
+  styles,
 }: {
   label: string;
   value: string;
   mono?: boolean;
   emphasis?: boolean;
+  styles: ReturnType<typeof makeStyles>;
 }) {
   return (
     <View style={styles.row}>
@@ -234,7 +233,15 @@ function DetailRow({
   );
 }
 
-function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
+function SectionCard({
+  title,
+  children,
+  styles,
+}: {
+  title: string;
+  children: React.ReactNode;
+  styles: ReturnType<typeof makeStyles>;
+}) {
   return (
     <View style={styles.card}>
       <Text style={styles.cardTitle}>{title}</Text>
@@ -257,6 +264,8 @@ export function OrderDetailModal({
   onClose: () => void;
 }) {
   const { t } = useI18n();
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
   const visible = sale != null;
 
   const summary = useMemo(() => {
@@ -340,7 +349,7 @@ export function OrderDetailModal({
             onPress={onClose}
             style={({ pressed }) => [styles.closeBtn, pressed && { opacity: 0.6 }]}
           >
-            <Ionicons name="close" size={20} color={TEXT} />
+            <Ionicons name="close" size={20} color={tokens.TEXT} />
           </Pressable>
         </View>
 
@@ -369,7 +378,7 @@ export function OrderDetailModal({
               showsVerticalScrollIndicator={false}
             >
               <View style={styles.previewNotice}>
-                <Ionicons name="cloud-offline-outline" size={14} color={GOLD} />
+                <Ionicons name="cloud-offline-outline" size={14} color={tokens.GOLD} />
                 <Text style={styles.previewNoticeText} numberOfLines={2}>
                   {t("sales_detail_offline_preview")}
                 </Text>
@@ -406,21 +415,21 @@ export function OrderDetailModal({
                   </View>
                 ) : null}
               </View>
-              <SectionCard title={t("sales_detail_order_details")}>
+              <SectionCard title={t("sales_detail_order_details")} styles={styles}>
                 {sale.preview.items ? (
-                  <DetailRow label={t("sales_detail_items")} value={sale.preview.items} />
+                  <DetailRow label={t("sales_detail_items")} value={sale.preview.items} styles={styles} />
                 ) : null}
                 {sale.preview.payment ? (
-                  <DetailRow label={t("sales_detail_method")} value={sale.preview.payment} />
+                  <DetailRow label={t("sales_detail_method")} value={sale.preview.payment} styles={styles} />
                 ) : null}
                 {sale.preview.time ? (
-                  <DetailRow label={t("sales_detail_time")} value={sale.preview.time} />
+                  <DetailRow label={t("sales_detail_time")} value={sale.preview.time} styles={styles} />
                 ) : null}
               </SectionCard>
             </ScrollView>
           ) : (
             <View style={styles.errorBox}>
-              <Ionicons name="alert-circle-outline" size={32} color={DANGER} />
+              <Ionicons name="alert-circle-outline" size={32} color={tokens.DANGER} />
               <Text style={styles.errorTitle}>{t("sales_detail_error_title")}</Text>
               <Text style={styles.errorBody}>{error}</Text>
             </View>
@@ -435,51 +444,52 @@ export function OrderDetailModal({
               <Text style={styles.heroEyebrow}>{t("sales_detail_total")}</Text>
               <Text style={styles.heroAmount}>{formatCurrency(summary.cost, 2)}</Text>
               <View style={styles.heroMeta}>
-                <StatusPill status={summary.status} />
+                <StatusPill status={summary.status} styles={styles} t={tokens} />
                 {summary.method && summary.method !== "-" ? (
                   <View style={styles.heroChip}>
-                    <Ionicons name="bag-outline" size={12} color={TEXT_DIM} />
+                    <Ionicons name="bag-outline" size={12} color={tokens.TEXT_DIM} />
                     <Text style={styles.heroChipText}>{summary.method}</Text>
                   </View>
                 ) : null}
                 {summary.source && summary.source !== "-" ? (
                   <View style={styles.heroChip}>
-                    <Ionicons name="terminal-outline" size={12} color={TEXT_DIM} />
+                    <Ionicons name="terminal-outline" size={12} color={tokens.TEXT_DIM} />
                     <Text style={styles.heroChipText}>{summary.source.toUpperCase()}</Text>
                   </View>
                 ) : null}
               </View>
             </View>
 
-            <SectionCard title={t("sales_detail_section_summary")}>
-              <DetailRow label={t("sales_detail_order_id")} value={summary.orderId} mono />
+            <SectionCard title={t("sales_detail_section_summary")} styles={styles}>
+              <DetailRow label={t("sales_detail_order_id")} value={summary.orderId} mono styles={styles} />
               {summary.orderNum != null ? (
                 <DetailRow
                   label={t("sales_detail_order_number")}
                   value={`#${summary.orderNum}`}
+                  styles={styles}
                 />
               ) : null}
-              <DetailRow label={t("sales_detail_cost")} value={formatCurrency(summary.cost, 2)} emphasis />
-              <DetailRow label={t("sales_detail_status")} value={summary.status} />
-              <DetailRow label={t("sales_detail_method")} value={summary.method} />
-              <DetailRow label={t("sales_detail_source")} value={summary.source} />
-              <DetailRow label={t("sales_detail_discount")} value={formatCurrency(summary.discount, 2)} />
-              <DetailRow label={t("sales_detail_rounding")} value={formatCurrency(summary.rounding, 2)} />
-              <DetailRow label={t("sales_detail_holiday_surcharge")} value={`${summary.holidaySurcharge}%`} />
-              <DetailRow label={t("sales_detail_tax")} value={formatCurrency(summary.tax, 2)} />
-              <DetailRow label={t("sales_detail_guest_count")} value={String(summary.guestCount)} />
-              <DetailRow label={t("sales_detail_date_of_purchase")} value={formatOrderTime(summary.time)} />
+              <DetailRow label={t("sales_detail_cost")} value={formatCurrency(summary.cost, 2)} emphasis styles={styles} />
+              <DetailRow label={t("sales_detail_status")} value={summary.status} styles={styles} />
+              <DetailRow label={t("sales_detail_method")} value={summary.method} styles={styles} />
+              <DetailRow label={t("sales_detail_source")} value={summary.source} styles={styles} />
+              <DetailRow label={t("sales_detail_discount")} value={formatCurrency(summary.discount, 2)} styles={styles} />
+              <DetailRow label={t("sales_detail_rounding")} value={formatCurrency(summary.rounding, 2)} styles={styles} />
+              <DetailRow label={t("sales_detail_holiday_surcharge")} value={`${summary.holidaySurcharge}%`} styles={styles} />
+              <DetailRow label={t("sales_detail_tax")} value={formatCurrency(summary.tax, 2)} styles={styles} />
+              <DetailRow label={t("sales_detail_guest_count")} value={String(summary.guestCount)} styles={styles} />
+              <DetailRow label={t("sales_detail_date_of_purchase")} value={formatOrderTime(summary.time)} styles={styles} />
             </SectionCard>
 
             {products.length > 0 ? (
-              <SectionCard title={t("sales_detail_products", { count: products.length })}>
+              <SectionCard title={t("sales_detail_products", { count: products.length })} styles={styles}>
                 {products.map((p, i) => (
                   <View
                     key={i}
                     style={[styles.productRow, i !== products.length - 1 && styles.productRowDivider]}
                   >
                     <View style={styles.productThumb}>
-                      <Ionicons name="cube-outline" size={20} color={TEXT_DIM} />
+                      <Ionicons name="cube-outline" size={20} color={tokens.TEXT_DIM} />
                     </View>
                     <View style={styles.productMid}>
                       <View style={styles.productNameRow}>
@@ -502,7 +512,7 @@ export function OrderDetailModal({
                 ))}
               </SectionCard>
             ) : productRefs.length > 0 ? (
-              <SectionCard title={t("sales_detail_products", { count: productRefs.length })}>
+              <SectionCard title={t("sales_detail_products", { count: productRefs.length })} styles={styles}>
                 {productRefs.map((ref, i) => {
                   const detail = productNameMap[ref.id];
                   const name = detail?.name ?? `Item ${ref.id.slice(-6).toUpperCase()}`;
@@ -523,7 +533,7 @@ export function OrderDetailModal({
                         ) : resolved ? (
                           <Text style={styles.productThumbInitial}>{initial}</Text>
                         ) : (
-                          <Ionicons name="cube-outline" size={20} color={TEXT_DIM} />
+                          <Ionicons name="cube-outline" size={20} color={tokens.TEXT_DIM} />
                         )}
                       </View>
                       <View style={styles.productMid}>
@@ -557,7 +567,7 @@ export function OrderDetailModal({
             ) : null}
 
             {transactions.length > 0 ? (
-              <SectionCard title={t("sales_detail_transactions")}>
+              <SectionCard title={t("sales_detail_transactions")} styles={styles}>
                 {transactions.map((tx, i) => {
                   const isRefund = /refund/i.test(tx.type ?? "");
                   return (
@@ -569,7 +579,7 @@ export function OrderDetailModal({
                         <View
                           style={[
                             styles.txnDetailDot,
-                            { backgroundColor: isRefund ? DANGER : SUCCESS },
+                            { backgroundColor: isRefund ? tokens.DANGER : tokens.SUCCESS },
                           ]}
                         />
                         <Text style={styles.txnDetailType}>
@@ -585,7 +595,7 @@ export function OrderDetailModal({
                         </Text>
                       ) : null}
                       <View style={styles.txnDetailAmounts}>
-                        <Text style={[styles.txnDetailAmount, isRefund && { color: DANGER }]}> 
+                        <Text style={[styles.txnDetailAmount, isRefund && { color: tokens.DANGER }]}> 
                           {isRefund ? "-" : ""}
                           {formatCurrency(tx.amount ?? 0, 2)}
                         </Text>
@@ -611,8 +621,8 @@ export function OrderDetailModal({
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: BG },
+const makeStyles = (t: ThemeTokens) => StyleSheet.create({
+  safe: { flex: 1, backgroundColor: t.BG },
   header: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -621,31 +631,31 @@ const styles = StyleSheet.create({
     paddingTop: 24,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   eyebrow: {
     fontSize: 10,
     letterSpacing: 2,
     fontWeight: "700",
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
   },
   title: {
     fontSize: 22,
     fontWeight: "800",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.4,
     marginTop: 2,
   },
-  subtitle: { fontSize: 12, color: TEXT_DIM, marginTop: 2 },
+  subtitle: { fontSize: 12, color: t.TEXT_DIM, marginTop: 2 },
   closeBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   content: {
     paddingHorizontal: SCREEN_PADDING,
@@ -654,10 +664,10 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   hero: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     padding: 18,
     gap: 8,
   },
@@ -665,12 +675,12 @@ const styles = StyleSheet.create({
     fontSize: 10,
     letterSpacing: 2,
     fontWeight: "700",
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
   },
   heroAmount: {
     fontSize: 32,
     fontWeight: "800",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.8,
   },
   heroMeta: {
@@ -686,14 +696,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
-    backgroundColor: BG,
+    backgroundColor: t.BG,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
   },
   heroChipText: {
     fontSize: 11,
     fontWeight: "700",
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     letterSpacing: 0.3,
   },
   pill: {
@@ -704,17 +714,17 @@ const styles = StyleSheet.create({
   },
   pillText: { fontSize: 10, fontWeight: "800", letterSpacing: 1 },
   card: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     overflow: "hidden",
   },
   cardTitle: {
     fontSize: 11,
     letterSpacing: 2,
     fontWeight: "700",
-    color: TEXT_FAINT,
+    color: t.TEXT_FAINT,
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 8,
@@ -728,17 +738,17 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     gap: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER + "55",
+    borderColor: t.CARD_BORDER,
   },
-  rowLabel: { fontSize: 12, color: TEXT_DIM, fontWeight: "500" },
+  rowLabel: { fontSize: 12, color: t.TEXT_DIM, fontWeight: "500" },
   rowValue: {
     fontSize: 13,
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "600",
     flexShrink: 1,
     textAlign: "right",
   },
-  rowValueMono: { fontFamily: "Menlo", fontSize: 11, color: TEXT_DIM },
+  rowValueMono: { fontFamily: "Menlo", fontSize: 11, color: t.TEXT_DIM },
   rowValueEmphasis: { fontSize: 14, fontWeight: "800", letterSpacing: -0.2 },
   productRow: {
     flexDirection: "row",
@@ -748,15 +758,15 @@ const styles = StyleSheet.create({
   },
   productRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER + "55",
+    borderColor: t.CARD_BORDER,
   },
   productThumb: {
     width: 44,
     height: 44,
     borderRadius: 10,
-    backgroundColor: BG,
+    backgroundColor: t.BG,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -765,7 +775,7 @@ const styles = StyleSheet.create({
   productThumbInitial: {
     fontSize: 18,
     fontWeight: "800",
-    color: GOLD,
+    color: t.GOLD,
     letterSpacing: -0.4,
   },
   productMid: { flex: 1, gap: 4 },
@@ -777,7 +787,7 @@ const styles = StyleSheet.create({
   },
   productName: {
     fontSize: 13,
-    color: TEXT,
+    color: t.TEXT,
     fontWeight: "700",
     flexShrink: 1,
   },
@@ -785,44 +795,44 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
-    backgroundColor: DANGER + "22",
+    backgroundColor: t.DANGER_DIM,
   },
   refundBadgeText: {
     fontSize: 9,
     fontWeight: "800",
-    color: DANGER,
+    color: t.DANGER,
     letterSpacing: 0.5,
   },
-  productSku: { fontSize: 11, color: TEXT_DIM, fontWeight: "500" },
+  productSku: { fontSize: 11, color: t.TEXT_DIM, fontWeight: "500" },
   productRight: { alignItems: "flex-end", gap: 2 },
   productPrice: {
     fontSize: 14,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.2,
   },
-  productQty: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
+  productQty: { fontSize: 11, color: t.TEXT_DIM, fontWeight: "600" },
   txnDetailRow: { paddingVertical: 12, gap: 6 },
   txnDetailRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER + "55",
+    borderColor: t.CARD_BORDER,
   },
   txnDetailHead: { flexDirection: "row", alignItems: "center", gap: 8 },
   txnDetailDot: { width: 6, height: 6, borderRadius: 3 },
   txnDetailType: {
     fontSize: 11,
     fontWeight: "800",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: 1,
   },
   txnDetailPlatform: {
     fontSize: 11,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontWeight: "600",
   },
   txnDetailId: {
     fontSize: 11,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontFamily: "Menlo",
   },
   txnDetailAmounts: {
@@ -835,20 +845,20 @@ const styles = StyleSheet.create({
   txnDetailAmount: {
     fontSize: 15,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     letterSpacing: -0.3,
   },
-  txnDetailSurcharge: { fontSize: 11, color: TEXT_DIM, fontWeight: "600" },
+  txnDetailSurcharge: { fontSize: 11, color: t.TEXT_DIM, fontWeight: "600" },
   loading: {
     flex: 1,
     paddingHorizontal: SCREEN_PADDING,
     paddingTop: 16,
   },
   loadingCard: {
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     padding: 18,
   },
   loadingRow: {
@@ -859,10 +869,10 @@ const styles = StyleSheet.create({
   },
   errorBox: {
     margin: SCREEN_PADDING,
-    backgroundColor: CARD,
+    backgroundColor: t.CARD,
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
+    borderColor: t.CARD_BORDER,
     padding: 24,
     alignItems: "center",
     gap: 8,
@@ -870,12 +880,12 @@ const styles = StyleSheet.create({
   errorTitle: {
     fontSize: 15,
     fontWeight: "700",
-    color: TEXT,
+    color: t.TEXT,
     marginTop: 4,
   },
   errorBody: {
     fontSize: 12,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     textAlign: "center",
     lineHeight: 18,
   },
@@ -889,13 +899,13 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 12,
-    backgroundColor: "rgba(212,175,55,0.08)",
+    backgroundColor: t.GOLD_DIM,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(212,175,55,0.28)",
+    borderColor: t.GOLD_DIM,
   },
   previewNoticeText: {
     flex: 1,
-    color: TEXT_DIM,
+    color: t.TEXT_DIM,
     fontSize: 11.5,
     fontWeight: "600",
     letterSpacing: 0.1,
@@ -905,14 +915,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
-    backgroundColor: CARD,
+    borderColor: t.CARD_BORDER,
+    backgroundColor: t.CARD,
   },
   previewPillText: {
     fontSize: 11,
     fontWeight: "800",
     letterSpacing: 0.4,
-    color: TEXT,
+    color: t.TEXT,
     textTransform: "uppercase",
   },
 });

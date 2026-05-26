@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -13,15 +13,9 @@ import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { CommonActions } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useI18n } from "../context/I18nContext";
+import { useThemeTokens } from "../context/ThemeContext";
+import { ThemeTokens } from "../theme/tokens";
 import { haptic } from "../utils/haptics";
-import {
-  ACCENT,
-  CARD_BORDER,
-  GOLD,
-  TEXT,
-  TEXT_DIM,
-  TEXT_FAINT,
-} from "../theme/tokens";
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -41,9 +35,9 @@ const ICON_MAP: Record<string, { on: IconName; off: IconName }> = {
 const PRIMARY_ROUTES = ["index", "sales", "stores", "handover"];
 
 // Routes surfaced inside the expandable panel (label + helper text).
-const MORE_META: Record<string, { tint: string; icon: IconName }> = {
+// Tint is resolved from theme tokens at render time.
+const MORE_META: Record<string, { icon: IconName }> = {
   settings: {
-    tint: GOLD,
     icon: "settings",
   },
 };
@@ -55,6 +49,8 @@ function TabItem({
   iconOff,
   onPress,
   onLongPress,
+  styles,
+  tokens,
 }: {
   focused: boolean;
   label: string;
@@ -62,6 +58,8 @@ function TabItem({
   iconOff: IconName;
   onPress: () => void;
   onLongPress: () => void;
+  styles: ReturnType<typeof makeStyles>;
+  tokens: ThemeTokens;
 }) {
   const anim = useRef(new Animated.Value(focused ? 1 : 0)).current;
 
@@ -92,7 +90,7 @@ function TabItem({
         <Ionicons
           name={focused ? iconOn : iconOff}
           size={22}
-          color={focused ? GOLD : TEXT_FAINT}
+          color={focused ? tokens.GOLD : tokens.TEXT_FAINT}
         />
       </Animated.View>
       <Animated.View
@@ -108,6 +106,8 @@ function TabItem({
 export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
   const [expanded, setExpanded] = useState(false);
   const expandAnim = useRef(new Animated.Value(0)).current;
 
@@ -197,6 +197,8 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
         iconOff={icons.off}
         onPress={onPress}
         onLongPress={onLongPress}
+        styles={styles}
+        tokens={tokens}
       />
     );
   };
@@ -265,16 +267,16 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
                   style={[
                     styles.panelIcon,
                     {
-                      backgroundColor: `${meta.tint}22`,
-                      borderColor: `${meta.tint}55`,
+                      backgroundColor: tokens.GOLD_DIM,
+                      borderColor: tokens.GOLD_DIM,
                     },
                   ]}
                 >
-                  <Ionicons name={meta.icon} size={18} color={meta.tint} />
+                  <Ionicons name={meta.icon} size={18} color={tokens.GOLD} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text
-                    style={[styles.panelItemLabel, focused && { color: GOLD }]}
+                    style={[styles.panelItemLabel, focused && { color: tokens.GOLD }]}
                     numberOfLines={1}
                   >
                     {labels.label}
@@ -285,7 +287,7 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
                     </Text>
                   ) : null}
                 </View>
-                <Ionicons name="chevron-forward" size={16} color={TEXT_DIM} />
+                <Ionicons name="chevron-forward" size={16} color={tokens.TEXT_DIM} />
               </Pressable>
             );
           })
@@ -312,7 +314,7 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
               <Ionicons
                 name="chevron-up"
                 size={14}
-                color={expanded || focusedIsMore ? GOLD : TEXT_DIM}
+                color={expanded || focusedIsMore ? tokens.GOLD : tokens.TEXT_DIM}
               />
             </Animated.View>
           </Pressable>
@@ -322,148 +324,148 @@ export function IslandTabBar({ state, descriptors, navigation }: BottomTabBarPro
   );
 }
 
-const styles = StyleSheet.create({
-  wrap: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 6,
-    backgroundColor: "transparent",
-  },
-  scrim: {
-    position: "absolute",
-    top: -1000,
-    left: -1000,
-    right: -1000,
-    bottom: -1000,
-    backgroundColor: "rgba(0,0,0,0.35)",
-  },
-  panel: {
-    width: "100%",
-    maxWidth: 420,
-    marginBottom: 10,
-    backgroundColor: "rgba(22,27,51,0.97)",
-    borderRadius: 18,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255,255,255,0.08)",
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOpacity: 0.4,
-        shadowRadius: 22,
-        shadowOffset: { width: 0, height: 12 },
-      },
-      android: { elevation: 16 },
-    }),
-  },
-  panelTitle: {
-    color: TEXT_DIM,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1.5,
-    textTransform: "uppercase",
-    paddingHorizontal: 12,
-    paddingTop: 6,
-    paddingBottom: 4,
-  },
-  panelEmpty: {
-    color: TEXT_DIM,
-    fontSize: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-  },
-  panelItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 12,
-    borderRadius: 12,
-  },
-  panelItemDivider: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: CARD_BORDER,
-    borderRadius: 0,
-  },
-  panelIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  panelItemLabel: {
-    color: TEXT,
-    fontSize: 13,
-    fontWeight: "700",
-    letterSpacing: -0.1,
-  },
-  panelItemHint: {
-    color: TEXT_DIM,
-    fontSize: 11,
-    marginTop: 2,
-  },
+const makeStyles = (t: ThemeTokens) =>
+  StyleSheet.create({
+    wrap: {
+      position: "absolute",
+      left: 0,
+      right: 0,
+      bottom: 0,
+      alignItems: "center",
+      paddingHorizontal: 16,
+      paddingTop: 6,
+      backgroundColor: "transparent",
+    },
+    scrim: {
+      position: "absolute",
+      top: -1000,
+      left: -1000,
+      right: -1000,
+      bottom: -1000,
+      backgroundColor: "rgba(0,0,0,0.35)",
+    },
+    panel: {
+      width: "100%",
+      maxWidth: 420,
+      marginBottom: 10,
+      backgroundColor: t.BG_ELEVATED,
+      borderRadius: 18,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: t.CARD_BORDER,
+      paddingVertical: 8,
+      paddingHorizontal: 6,
+      ...Platform.select({
+        ios: {
+          shadowColor: "#000",
+          shadowOpacity: 0.4,
+          shadowRadius: 22,
+          shadowOffset: { width: 0, height: 12 },
+        },
+        android: { elevation: 16 },
+      }),
+    },
+    panelTitle: {
+      color: t.TEXT_DIM,
+      fontSize: 10,
+      fontWeight: "700",
+      letterSpacing: 1.5,
+      textTransform: "uppercase",
+      paddingHorizontal: 12,
+      paddingTop: 6,
+      paddingBottom: 4,
+    },
+    panelEmpty: {
+      color: t.TEXT_DIM,
+      fontSize: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 14,
+    },
+    panelItem: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      paddingHorizontal: 10,
+      paddingVertical: 12,
+      borderRadius: 12,
+    },
+    panelItemDivider: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: t.CARD_BORDER,
+      borderRadius: 0,
+    },
+    panelIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 12,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: StyleSheet.hairlineWidth,
+    },
+    panelItemLabel: {
+      color: t.TEXT,
+      fontSize: 13,
+      fontWeight: "700",
+      letterSpacing: -0.1,
+    },
+    panelItemHint: {
+      color: t.TEXT_DIM,
+      fontSize: 11,
+      marginTop: 2,
+    },
 
-  island: {
-    flexDirection: "column",
-    alignItems: "stretch",
-    backgroundColor: "rgba(22,27,51,0.92)",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255,255,255,0.08)",
-    borderRadius: 28,
-    paddingHorizontal: 10,
-    paddingTop: 8,
-    paddingBottom: 4,
-    width: "100%",
-    maxWidth: 420,
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOpacity: 0.35,
-        shadowRadius: 18,
-        shadowOffset: { width: 0, height: 10 },
-      },
-      android: {
-        elevation: 14,
-      },
-    }),
-  },
-  islandRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  chevronHandle: {
-    alignSelf: "center",
-    marginTop: 2,
-    paddingVertical: 4,
-    paddingHorizontal: 22,
-    borderRadius: 8,
-  },
-  item: {
-    flex: 1,
-    height: 48,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4,
-  },
-  pressed: {
-    opacity: 0.6,
-  },
-  dot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: GOLD,
-    marginTop: 2,
-  },
-  // unused — retained to silence type-check aware lint configs; harmless.
-  label: { color: TEXT },
-  accent: { color: ACCENT },
-});
+    island: {
+      flexDirection: "column",
+      alignItems: "stretch",
+      backgroundColor: t.BG_ELEVATED,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: t.CARD_BORDER,
+      borderRadius: 28,
+      paddingHorizontal: 10,
+      paddingTop: 8,
+      paddingBottom: 4,
+      width: "100%",
+      maxWidth: 420,
+      ...Platform.select({
+        ios: {
+          shadowColor: "#000",
+          shadowOpacity: 0.35,
+          shadowRadius: 18,
+          shadowOffset: { width: 0, height: 10 },
+        },
+        android: {
+          elevation: 14,
+        },
+      }),
+    },
+    islandRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    chevronHandle: {
+      alignSelf: "center",
+      marginTop: 2,
+      paddingVertical: 4,
+      paddingHorizontal: 22,
+      borderRadius: 8,
+    },
+    item: {
+      flex: 1,
+      height: 48,
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 4,
+    },
+    pressed: {
+      opacity: 0.6,
+    },
+    dot: {
+      width: 4,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: t.GOLD,
+      marginTop: 2,
+    },
+    label: { color: t.TEXT },
+    accent: { color: t.ACCENT },
+  });

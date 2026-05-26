@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { StyleSheet, View } from "react-native";
 import Animated, {
   useSharedValue,
@@ -10,7 +10,8 @@ import Animated, {
   interpolate,
   cancelAnimation,
 } from "react-native-reanimated";
-import { GOLD } from "../theme/tokens";
+import { useThemeTokens } from "../context/ThemeContext";
+import { ThemeTokens } from "../theme/tokens";
 
 type Props = {
   visible: boolean;
@@ -24,6 +25,8 @@ type Props = {
 export function TopProgressBar({ visible }: Props) {
   const progress = useSharedValue(0);
   const opacity = useSharedValue(0);
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
 
   useEffect(() => {
     if (visible) {
@@ -65,26 +68,27 @@ export function TopProgressBar({ visible }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  track: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 2,
-    backgroundColor: "rgba(255, 215, 0, 0.08)",
-    overflow: "hidden",
-    zIndex: 1000,
-  },
-  bar: {
-    position: "absolute",
-    top: 0,
-    bottom: 0,
-    width: "30%",
-    backgroundColor: GOLD,
-    shadowColor: GOLD,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 4,
-  },
-});
+const makeStyles = (t: ThemeTokens) =>
+  StyleSheet.create({
+    track: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      height: 2,
+      backgroundColor: t.GOLD_DIM,
+      overflow: "hidden",
+      zIndex: 1000,
+    },
+    bar: {
+      position: "absolute",
+      top: 0,
+      bottom: 0,
+      width: "30%",
+      backgroundColor: t.GOLD,
+      shadowColor: t.GOLD,
+      shadowOffset: { width: 0, height: 0 },
+      shadowOpacity: 0.6,
+      shadowRadius: 4,
+    },
+  });

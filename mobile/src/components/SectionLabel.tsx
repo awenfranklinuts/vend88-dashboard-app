@@ -1,6 +1,7 @@
 import React from "react";
 import { View, Text, StyleSheet, StyleProp, ViewStyle } from "react-native";
 import { SECTION_LABEL, SPACE_SM, SPACE_MD } from "../theme/tokens";
+import { useThemeTokens } from "../context/ThemeContext";
 
 interface SectionLabelProps {
   label: string;
@@ -21,11 +22,12 @@ export function SectionLabel({
   leading,
   style,
 }: SectionLabelProps) {
+  const tokens = useThemeTokens();
   return (
     <View style={[styles.wrap, style]}>
       <View style={styles.left}>
         {leading ? <View style={styles.leading}>{leading}</View> : null}
-        <Text style={styles.label}>{label}</Text>
+        <Text style={[styles.label, { color: tokens.TEXT_DIM }]}>{label}</Text>
       </View>
       {right ? <View>{right}</View> : null}
     </View>

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { StyleSheet, View, ViewStyle } from "react-native";
 import Animated, {
   useSharedValue,
@@ -8,7 +8,8 @@ import Animated, {
   Easing,
   interpolate,
 } from "react-native-reanimated";
-import { CARD_BORDER } from "../theme/tokens";
+import { useThemeTokens } from "../context/ThemeContext";
+import { ThemeTokens } from "../theme/tokens";
 
 type Props = {
   width?: number | `${number}%`;
@@ -19,6 +20,8 @@ type Props = {
 
 export function Skeleton({ width = "100%", height = 16, radius = 8, style }: Props) {
   const progress = useSharedValue(0);
+  const tokens = useThemeTokens();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
 
   useEffect(() => {
     progress.value = withRepeat(
@@ -49,14 +52,15 @@ export function SkeletonCard({ height = 80, style }: { height?: number; style?: 
 }
 
 export function SkeletonRow({ gap = 8, children }: { gap?: number; children?: React.ReactNode }) {
-  return <View style={[styles.row, { gap }]}>{children}</View>;
+  return <View style={[{ flexDirection: "row" }, { gap }]}>{children}</View>;
 }
 
-const styles = StyleSheet.create({
-  base: {
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
-  },
-  row: { flexDirection: "row" },
-});
+const makeStyles = (t: ThemeTokens) =>
+  StyleSheet.create({
+    base: {
+      backgroundColor: t.CARD_HOVER,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: t.CARD_BORDER,
+    },
+    row: { flexDirection: "row" },
+  });

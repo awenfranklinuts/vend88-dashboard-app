@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { StyleSheet, View, ViewStyle } from "react-native";
 import Animated, {
   useSharedValue,
@@ -9,7 +9,13 @@ import Animated, {
   interpolate,
 } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
-import { CARD_BORDER, CARD } from "../theme/tokens";
+import { useThemeTokens } from "../context/ThemeContext";
+import { ThemeTokens } from "../theme/tokens";
+
+function useShimmerStyles() {
+  const tokens = useThemeTokens();
+  return useMemo(() => ({ tokens, styles: makeStyles(tokens) }), [tokens]);
+}
 
 type Props = {
   width?: number | `${number}%`;
@@ -28,6 +34,7 @@ export function ShimmerSkeleton({
   radius = 8,
   style,
 }: Props) {
+  const { tokens, styles } = useShimmerStyles();
   const shimmerProgress = useSharedValue(0);
 
   useEffect(() => {
@@ -57,7 +64,7 @@ export function ShimmerSkeleton({
       <View style={[styles.base, { borderRadius: radius }]} />
       <Animated.View style={[animatedStyle, { position: "absolute" }]}>
         <LinearGradient
-          colors={["transparent", "rgba(255,255,255,0.1)", "transparent"]}
+          colors={["transparent", tokens.SHIMMER, "transparent"]}
           start={{ x: 0, y: 0.5 }}
           end={{ x: 1, y: 0.5 }}
           style={{ width: 300, height: height }}
@@ -86,6 +93,7 @@ export function ShimmerSkeletonCard({
  * a tall value bar, then a small badge + hint meta row. No card chrome.
  */
 export function LoadingHero() {
+  const { styles } = useShimmerStyles();
   return (
     <View style={styles.heroContainer}>
       <View style={styles.heroHeadRow}>
@@ -111,6 +119,7 @@ export function LoadingHero() {
  * real KPI row layout: small icon, large value, small caption per cell.
  */
 export function LoadingKpiRow() {
+  const { styles } = useShimmerStyles();
   return (
     <View style={styles.kpiRowContainer}>
       <View style={styles.kpiCell}>
@@ -148,6 +157,7 @@ export function LoadingStatement() {
     { l: "42%", r: "26%" },
     { l: "50%", r: "28%" },
   ];
+  const { styles } = useShimmerStyles();
   return (
     <View style={styles.statementContainer}>
       <View style={styles.statementHeadRow}>
@@ -169,6 +179,7 @@ export function LoadingStatement() {
  * value. Hairline divider between rows; no card background.
  */
 export function LoadingModuleBreakdown() {
+  const { styles } = useShimmerStyles();
   return (
     <View style={styles.moduleBreakdownContainer}>
       <View style={styles.statementHeadRow}>
@@ -200,6 +211,7 @@ export function LoadingModuleBreakdown() {
  * transaction items (avatar + id/sub + amount).
  */
 export function LoadingTransactionList() {
+  const { styles } = useShimmerStyles();
   return (
     <View style={styles.transactionListContainer}>
       {[0, 1, 2, 3].map((i) => (
@@ -216,116 +228,112 @@ export function LoadingTransactionList() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    backgroundColor: CARD,
-    position: "relative",
-  },
-  base: {
-    backgroundColor: CARD,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
-    width: "100%",
-    height: "100%",
-  },
-  // ── Flat hero (matches dashboard bootHero) ──────────────────────────
-  heroContainer: {
-    paddingVertical: 4,
-    gap: 14,
-  },
-  heroHeadRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  heroDots: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  heroValue: {
-    marginTop: 2,
-  },
-  heroMetaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  // ── Flat KPI row (hairline dividers between cells) ──────────────────
-  kpiRowContainer: {
-    flexDirection: "row",
-    alignItems: "stretch",
-    marginTop: 8,
-    paddingVertical: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: CARD_BORDER,
-  },
-  kpiCell: {
-    flex: 1,
-    gap: 6,
-    paddingHorizontal: 4,
-    alignItems: "flex-start",
-  },
-  kpiDivider: {
-    width: StyleSheet.hairlineWidth,
-    backgroundColor: CARD_BORDER,
-    marginVertical: 4,
-  },
-  kpiValue: {
-    marginTop: 2,
-  },
-  // ── Flat statement (no card) ───────────────────────────────────────
-  statementContainer: {
-    marginTop: 24,
-    gap: 0,
-  },
-  statementHeadRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 8,
-  },
-  statementRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
-  },
-  // ── Flat module breakdown rows ─────────────────────────────────────
-  moduleBreakdownContainer: {
-    marginTop: 24,
-  },
-  moduleBreakdownRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
-  },
-  moduleBreakdownLabel: {
-    flexShrink: 0,
-  },
-  moduleBreakdownBar: {
-    flex: 1,
-  },
-  // ── Flat transaction list rows ─────────────────────────────────────
-  transactionListContainer: {
-    paddingTop: 4,
-  },
-  transactionItemLoader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: CARD_BORDER,
-  },
-  transactionLoaderLeft: {
-    flex: 1,
-    gap: 6,
-  },
-});
+const makeStyles = (t: ThemeTokens) =>
+  StyleSheet.create({
+    container: {
+      backgroundColor: t.CARD,
+      position: "relative",
+    },
+    base: {
+      backgroundColor: t.CARD,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: t.CARD_BORDER,
+      width: "100%",
+      height: "100%",
+    },
+    heroContainer: {
+      paddingVertical: 4,
+      gap: 14,
+    },
+    heroHeadRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    heroDots: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+    },
+    heroValue: {
+      marginTop: 2,
+    },
+    heroMetaRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+    },
+    kpiRowContainer: {
+      flexDirection: "row",
+      alignItems: "stretch",
+      marginTop: 8,
+      paddingVertical: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderColor: t.CARD_BORDER,
+    },
+    kpiCell: {
+      flex: 1,
+      gap: 6,
+      paddingHorizontal: 4,
+      alignItems: "flex-start",
+    },
+    kpiDivider: {
+      width: StyleSheet.hairlineWidth,
+      backgroundColor: t.CARD_BORDER,
+      marginVertical: 4,
+    },
+    kpiValue: {
+      marginTop: 2,
+    },
+    statementContainer: {
+      marginTop: 24,
+      gap: 0,
+    },
+    statementHeadRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 8,
+    },
+    statementRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: t.CARD_BORDER,
+    },
+    moduleBreakdownContainer: {
+      marginTop: 24,
+    },
+    moduleBreakdownRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: t.CARD_BORDER,
+    },
+    moduleBreakdownLabel: {
+      flexShrink: 0,
+    },
+    moduleBreakdownBar: {
+      flex: 1,
+    },
+    transactionListContainer: {
+      paddingTop: 4,
+    },
+    transactionItemLoader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: t.CARD_BORDER,
+    },
+    transactionLoaderLeft: {
+      flex: 1,
+      gap: 6,
+    },
+  });

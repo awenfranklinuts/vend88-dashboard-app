@@ -19,6 +19,8 @@
     "node_modules",
     "dist",
     "build",
-    ".expo"
+    ".expo",
+    "node_modules/expo-splash-screen",
+    "node_modules/expo-modules-core"
   ]
 }

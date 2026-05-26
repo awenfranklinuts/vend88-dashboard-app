@@ -7,19 +7,20 @@ import { AppLockProvider, useAppLock } from "../../src/context/AppLockContext";
 import { Skeleton } from "../../src/components/Skeleton";
 import { IslandTabBar } from "../../src/components/IslandTabBar";
 import { LockScreen } from "../../src/components/LockScreen";
-import { BG } from "../../src/theme/tokens";
+import { useThemeTokens } from "../../src/context/ThemeContext";
 
 function TabsWithLock() {
   const { t } = useI18n();
   const { locked } = useAppLock();
+  const tokens = useThemeTokens();
 
   return (
-    <View style={{ flex: 1, backgroundColor: BG }}>
+    <View style={{ flex: 1, backgroundColor: tokens.BG }}>
       <Tabs
         tabBar={(props) => <IslandTabBar {...props} />}
         screenOptions={{
           headerShown: false,
-          sceneStyle: { backgroundColor: BG },
+          sceneStyle: { backgroundColor: tokens.BG },
         }}
       >
         <Tabs.Screen name="index" options={{ title: t("tab_dashboard") }} />
@@ -39,10 +40,11 @@ function TabsWithLock() {
 
 export default function TabLayout() {
   const { token, loading } = useAuth();
+  const tokens = useThemeTokens();
 
   if (loading) {
     return (
-      <View style={{ flex: 1, backgroundColor: BG, padding: 20, paddingTop: 80 }}>
+      <View style={{ flex: 1, backgroundColor: tokens.BG, padding: 20, paddingTop: 80 }}>
         <Skeleton height={28} width="40%" />
         <View style={{ height: 16 }} />
         <Skeleton height={90} radius={18} />

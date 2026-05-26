@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Linking,
@@ -21,19 +21,11 @@ import {
   LOCK_GRACE_OPTIONS,
   useAppLock,
 } from "../../src/context/AppLockContext";
+import { ThemeMode, useTheme } from "../../src/context/ThemeContext";
 import { api, isDemoMode } from "../../src/services/api";
 import { haptic } from "../../src/utils/haptics";
-import {
-  BG,
-  CARD,
-  CARD_BORDER,
-  DANGER,
-  DANGER_DIM,
-  GOLD,
-  TEXT,
-  TEXT_DIM,
-  SCREEN_PADDING,
-} from "../../src/theme/tokens";
+import { ThemeTokens } from "../../src/theme/tokens";
+import { SCREEN_PADDING } from "../../src/theme/tokens";
 import { ScreenHeader } from "../../src/components/ScreenHeader";
 import { OfflineNotice } from "../../src/components/OfflineNotice";
 
@@ -85,24 +77,46 @@ type RowProps = {
   right?: React.ReactNode;
   onPress?: () => void;
   destructive?: boolean;
+  tokens: ThemeTokens;
+  styles: ReturnType<typeof makeStyles>;
 };
 
-function Row({ icon, iconColor = GOLD, label, hint, right, onPress, destructive }: RowProps) {
+function Row({
+  icon,
+  iconColor,
+  label,
+  hint,
+  right,
+  onPress,
+  destructive,
+  tokens,
+  styles,
+}: RowProps) {
+  const resolvedIconColor = iconColor ?? tokens.GOLD;
   const content = (
     <View style={styles.row}>
       <View
         style={[
           styles.rowIcon,
-          { backgroundColor: destructive ? DANGER_DIM : "rgba(212,175,55,0.12)" },
+          { backgroundColor: destructive ? tokens.DANGER_DIM : tokens.GOLD_DIM },
         ]}
       >
-        <Ionicons name={icon} size={16} color={destructive ? DANGER : iconColor} />
+        <Ionicons
+          name={icon}
+          size={16}
+          color={destructive ? tokens.DANGER : resolvedIconColor}
+        />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={[styles.rowLabel, destructive && { color: DANGER }]}>{label}</Text>
+        <Text style={[styles.rowLabel, destructive && { color: tokens.DANGER }]}>
+          {label}
+        </Text>
         {hint ? <Text style={styles.rowHint}>{hint}</Text> : null}
       </View>
-      {right ?? (onPress ? <Ionicons name="chevron-forward" size={16} color={TEXT_DIM} /> : null)}
+      {right ??
+        (onPress ? (
+          <Ionicons name="chevron-forward" size={16} color={tokens.TEXT_DIM} />
+        ) : null)}
     </View>
   );
 
@@ -125,6 +139,8 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const { signOut } = useAuth();
   const { language, languageLabel, setLanguage, t } = useI18n();
+  const { mode: themeMode, tokens, setMode: setThemeMode } = useTheme();
+  const styles = useMemo(() => makeStyles(tokens), [tokens]);
   const {
     enabled: biometric,
     supported: biometricSupported,
@@ -287,6 +303,34 @@ export default function SettingsScreen() {
     );
   };
 
+  const themeLabel = (m: ThemeMode) => {
+    switch (m) {
+      case "light":
+        return t("settings_theme_light");
+      case "dark":
+      default:
+        return t("settings_theme_dark");
+    }
+  };
+
+  const selectAppearance = () => {
+    haptic.selection();
+    const options: ThemeMode[] = ["dark", "light"];
+    Alert.alert(
+      t("settings_appearance"),
+      t("settings_choose_appearance"),
+      [
+        ...options.map((opt) => ({
+          text: opt === themeMode ? `${themeLabel(opt)} ✓` : themeLabel(opt),
+          onPress: () => {
+            void setThemeMode(opt);
+          },
+        })),
+        { text: t("common_cancel"), style: "cancel" as const },
+      ]
+    );
+  };
+
   const version =
     (Constants.expoConfig?.version as string | undefined) ??
     (Constants as any).manifest?.version ??
@@ -324,6 +368,8 @@ export default function SettingsScreen() {
         <Text style={styles.sectionLabel}>{t("settings_security")}</Text>
         <View style={styles.group}>
           <Row
+            tokens={tokens}
+            styles={styles}
             icon="finger-print-outline"
             label={t("settings_biometric_lock")}
             hint={
@@ -338,8 +384,8 @@ export default function SettingsScreen() {
                 value={!isDemo && biometric}
                 onValueChange={toggleBiometric}
                 disabled={isDemo || !biometricSupported}
-                trackColor={{ false: "rgba(255,255,255,0.1)", true: "rgba(212,175,55,0.5)" }}
-                thumbColor={!isDemo && biometric ? GOLD : "#f4f4f5"}
+                trackColor={{ false: tokens.CARD_BORDER, true: tokens.GOLD_DIM }}
+                thumbColor={!isDemo && biometric ? tokens.GOLD : "#f4f4f5"}
               />
             }
           />
@@ -347,6 +393,8 @@ export default function SettingsScreen() {
             <>
               <View style={styles.divider} />
               <Row
+                tokens={tokens}
+                styles={styles}
                 icon="time-outline"
                 label={t("settings_lock_grace")}
                 hint={graceLabel}
@@ -354,6 +402,8 @@ export default function SettingsScreen() {
               />
               <View style={styles.divider} />
               <Row
+                tokens={tokens}
+                styles={styles}
                 icon="lock-closed-outline"
                 label={t("settings_lock_now")}
                 hint={t("settings_lock_now_hint")}
@@ -367,6 +417,8 @@ export default function SettingsScreen() {
         <Text style={styles.sectionLabel}>{t("settings_preferences")}</Text>
         <View style={styles.group}>
           <Row
+            tokens={tokens}
+            styles={styles}
             icon="notifications-outline"
             label={t("settings_notifications")}
             hint={t("settings_push_alerts")}
@@ -374,20 +426,24 @@ export default function SettingsScreen() {
               <Switch
                 value={notifications}
                 onValueChange={toggleNotifications}
-                trackColor={{ false: "rgba(255,255,255,0.1)", true: "rgba(212,175,55,0.5)" }}
-                thumbColor={notifications ? GOLD : "#f4f4f5"}
+                trackColor={{ false: tokens.CARD_BORDER, true: tokens.GOLD_DIM }}
+                thumbColor={notifications ? tokens.GOLD : "#f4f4f5"}
               />
             }
           />
           <View style={styles.divider} />
           <Row
+            tokens={tokens}
+            styles={styles}
             icon="moon-outline"
             label={t("settings_appearance")}
-            hint={t("settings_dark_default")}
-            onPress={() => Alert.alert(t("settings_appearance"), t("settings_dark_only"))}
+            hint={themeLabel(themeMode)}
+            onPress={selectAppearance}
           />
           <View style={styles.divider} />
           <Row
+            tokens={tokens}
+            styles={styles}
             icon="language-outline"
             label={t("settings_language")}
             hint={languageLabel()}
@@ -398,9 +454,17 @@ export default function SettingsScreen() {
         {/* About */}
         <Text style={styles.sectionLabel}>{t("settings_about")}</Text>
         <View style={styles.group}>
-          <Row icon="git-branch-outline" label={t("settings_version")} hint={version} />
+          <Row
+            tokens={tokens}
+            styles={styles}
+            icon="git-branch-outline"
+            label={t("settings_version")}
+            hint={version}
+          />
           <View style={styles.divider} />
           <Row
+            tokens={tokens}
+            styles={styles}
             icon="help-circle-outline"
             label={t("settings_help_support")}
             onPress={() => Linking.openURL("mailto:accounts@vend88.com").catch(() => {})}
@@ -410,6 +474,8 @@ export default function SettingsScreen() {
         {/* Danger zone */}
         <View style={styles.group}>
           <Row
+            tokens={tokens}
+            styles={styles}
             icon="log-out-outline"
             label={t("settings_sign_out")}
             destructive
@@ -421,77 +487,82 @@ export default function SettingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeContainer: { flex: 1, backgroundColor: BG },
-  content: { padding: SCREEN_PADDING, paddingBottom: 120, gap: 12 },
+const makeStyles = (t: ThemeTokens) =>
+  StyleSheet.create({
+    safeContainer: { flex: 1, backgroundColor: t.BG },
+    content: { padding: SCREEN_PADDING, paddingBottom: 120, gap: 12 },
 
-  profileCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: CARD,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    padding: 14,
-    marginTop: 4,
-  },
-  avatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: "rgba(212,175,55,0.15)",
-    borderWidth: 1,
-    borderColor: "rgba(212,175,55,0.35)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarText: { color: GOLD, fontWeight: "800", fontSize: 14 },
-  profileName: { color: TEXT, fontWeight: "800", fontSize: 15 },
-  profileEmail: { color: TEXT_DIM, fontSize: 12, marginTop: 2 },
+    profileCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      backgroundColor: t.CARD,
+      borderRadius: 18,
+      borderWidth: 1,
+      borderColor: t.CARD_BORDER,
+      padding: 14,
+      marginTop: 4,
+    },
+    avatar: {
+      width: 46,
+      height: 46,
+      borderRadius: 23,
+      backgroundColor: t.GOLD_DIM,
+      borderWidth: 1,
+      borderColor: t.GOLD_DIM,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    avatarText: { color: t.GOLD, fontWeight: "800", fontSize: 14 },
+    profileName: { color: t.TEXT, fontWeight: "800", fontSize: 15 },
+    profileEmail: { color: t.TEXT_DIM, fontSize: 12, marginTop: 2 },
 
-  sectionLabel: {
-    color: TEXT_DIM,
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 1.5,
-    textTransform: "uppercase",
-    marginTop: 12,
-    marginBottom: 2,
-    marginLeft: 4,
-  },
+    sectionLabel: {
+      color: t.TEXT_DIM,
+      fontSize: 11,
+      fontWeight: "800",
+      letterSpacing: 1.5,
+      textTransform: "uppercase",
+      marginTop: 12,
+      marginBottom: 2,
+      marginLeft: 4,
+    },
 
-  group: {
-    backgroundColor: CARD,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    borderRadius: 16,
-    overflow: "hidden",
-  },
-  rowWrap: { paddingHorizontal: 14 },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingVertical: 12,
-    minHeight: 54,
-  },
-  rowIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  rowLabel: { color: TEXT, fontWeight: "700", fontSize: 14 },
-  rowHint: { color: TEXT_DIM, fontSize: 11, marginTop: 2 },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: CARD_BORDER, marginLeft: 58 },
+    group: {
+      backgroundColor: t.CARD,
+      borderWidth: 1,
+      borderColor: t.CARD_BORDER,
+      borderRadius: 16,
+      overflow: "hidden",
+    },
+    rowWrap: { paddingHorizontal: 14 },
+    row: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      paddingVertical: 12,
+      minHeight: 54,
+    },
+    rowIcon: {
+      width: 32,
+      height: 32,
+      borderRadius: 10,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    rowLabel: { color: t.TEXT, fontWeight: "700", fontSize: 14 },
+    rowHint: { color: t.TEXT_DIM, fontSize: 11, marginTop: 2 },
+    divider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: t.CARD_BORDER,
+      marginLeft: 58,
+    },
 
-  footer: {
-    textAlign: "center",
-    color: TEXT_DIM,
-    fontSize: 11,
-    marginTop: 12,
-    fontWeight: "600",
-  },
-});
+    footer: {
+      textAlign: "center",
+      color: t.TEXT_DIM,
+      fontSize: 11,
+      marginTop: 12,
+      fontWeight: "600",
+    },
+  });
