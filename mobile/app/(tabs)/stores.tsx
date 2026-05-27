@@ -26,6 +26,7 @@ import { SectionLabel } from "../../src/components/SectionLabel";
 import { TopProgressBar } from "../../src/components/TopProgressBar";
 import { OfflineNotice } from "../../src/components/OfflineNotice";
 import { Skeleton } from "../../src/components/Skeleton";
+import { SingleDatePickerModal } from "../../src/components/SingleDatePickerModal";
 import { haptic } from "../../src/utils/haptics";
 import {
   fetchOfficialShopDetail,
@@ -115,6 +116,18 @@ function padTime(value: string): string {
   const m = /^(\d{1,2}):(\d{2})$/.exec(value);
   if (!m) return value;
   return `${m[1].padStart(2, "0")}:${m[2]}`;
+}
+
+// Normalize a date string coming from the API/storage. Some legacy records
+// may contain the string "null"/"undefined" or whitespace; coerce those to an
+// empty string so the rest of the UI can treat them uniformly.
+function normalizeStoredDate(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const lower = trimmed.toLowerCase();
+  if (lower === "null" || lower === "undefined" || lower === "none") return "";
+  return trimmed;
 }
 
 // Auto-format YYYY-MM-DD as the user types digits.
@@ -302,7 +315,9 @@ function SectionCard({
         <Text style={styles.cardTitle}>{title}</Text>
         {action ? <View style={styles.cardHeaderAction}>{action}</View> : null}
       </View>
-      {hint ? <Text style={styles.cardHint}>{hint}</Text> : null}
+      {hint ? (
+        <Text style={styles.cardHint}>{hint}</Text>
+      ) : null}
       <View style={styles.cardBody}>{children}</View>
     </View>
   );
@@ -651,6 +666,10 @@ function EditSurchargesModal({
   const { t } = useI18n();
   const [specificDraft, setSpecificDraft] = useState<SpecificDraft[]>([]);
   const [namedDraft, setNamedDraft] = useState<NamedDraft[]>([]);
+  // Identifier of the row whose date picker is currently open. Encodes which
+  // list the row belongs to so we can route the apply back to the right state.
+  // Format: "specific:<id>" or "named:<id>".
+  const [datePickerTarget, setDatePickerTarget] = useState<string | null>(null);
 
   useEffect(() => {
     if (!visible) return;
@@ -659,7 +678,7 @@ function EditSurchargesModal({
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([date, pct]) => ({
           id: makeId(),
-          date,
+          date: normalizeStoredDate(date),
           percentInput: percentToInput(pct),
         }))
     );
@@ -668,7 +687,7 @@ function EditSurchargesModal({
         id: makeId(),
         originalKey: key,
         name: item.name || key,
-        date: item.date,
+        date: normalizeStoredDate(item.date),
         percentInput: percentToInput(item.percentage),
         enabled: item.enabled,
       }))
@@ -779,7 +798,10 @@ function EditSurchargesModal({
         );
         return;
       }
-      if (!isValidDate(row.date)) {
+      // Named surcharges don't require a date — some legacy/API entries are
+      // recurring or undated. Only validate when the user actually entered
+      // something so typos still surface.
+      if (row.date && !isValidDate(row.date)) {
         Alert.alert(
           t("stores_modal_alert_invalid_date"),
           t("stores_modal_alert_invalid_date_named", { name })
@@ -825,15 +847,50 @@ function EditSurchargesModal({
           behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
           <View style={styles.modalHeader}>
-            <Pressable onPress={onCancel} hitSlop={10}>
-              <Text style={styles.modalCancel}>{t("common_cancel")}</Text>
+            <Pressable
+              onPress={onCancel}
+              hitSlop={10}
+              accessibilityLabel={t("common_cancel")}
+              style={({ pressed }) => [
+                styles.modalHeaderIconBtn,
+                pressed && { opacity: 0.6 },
+              ]}
+            >
+              <Ionicons name="close" size={18} color={tokens.TEXT} />
             </Pressable>
-            <Text style={styles.modalTitle}>{t("stores_modal_edit_surcharges")}</Text>
-            <Pressable onPress={handleSave} disabled={saving} hitSlop={10}>
+            <View style={styles.modalHeaderTitleWrap} pointerEvents="none">
+              <Text style={styles.modalTitle} numberOfLines={1}>
+                {t("stores_modal_edit_surcharges")}
+              </Text>
+              <Text style={styles.modalHeaderSubtitle} numberOfLines={1}>
+                {specificDraft.length + namedDraft.length === 0
+                  ? t("stores_modal_header_empty")
+                  : t("stores_modal_header_count", {
+                      count: String(
+                        specificDraft.length + namedDraft.length
+                      ),
+                    })}
+              </Text>
+            </View>
+            <Pressable
+              onPress={handleSave}
+              disabled={saving}
+              hitSlop={10}
+              style={({ pressed }) => [
+                styles.modalSavePill,
+                saving && styles.modalSavePillSaving,
+                pressed && !saving && { opacity: 0.85 },
+              ]}
+            >
               {saving ? (
-                <ActivityIndicator color={tokens.GOLD} />
+                <ActivityIndicator color="#181e38" size="small" />
               ) : (
-                <Text style={styles.modalSave}>{t("stores_modal_save")}</Text>
+                <>
+                  <Ionicons name="checkmark" size={15} color="#181e38" />
+                  <Text style={styles.modalSavePillText}>
+                    {t("stores_modal_save")}
+                  </Text>
+                </>
               )}
             </Pressable>
           </View>
@@ -843,61 +900,112 @@ function EditSurchargesModal({
             keyboardShouldPersistTaps="handled"
           >
             {/* Specific Date Surcharges */}
-            <View style={styles.editDayGroup}>
-              <View style={styles.editDayHeader}>
-                <Text style={styles.editDayLabel}>{t("stores_modal_specific_dates")}</Text>
+            <View style={styles.editSection}>
+              <View style={styles.editSectionHeader}>
+                <View style={styles.editSectionTitleWrap}>
+                  <View style={styles.editSectionIcon}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={14}
+                      color={tokens.ACCENT}
+                    />
+                  </View>
+                  <Text style={styles.editSectionTitle}>
+                    {t("stores_modal_specific_dates")}
+                  </Text>
+                </View>
                 <Pressable
                   style={({ pressed }) => [
-                    styles.addSlotBtn,
+                    styles.addPillBtn,
                     pressed && { opacity: 0.6 },
                   ]}
                   onPress={addSpecific}
                   hitSlop={6}
                 >
-                  <Ionicons name="add" size={13} color={tokens.ACCENT} />
-                  <Text style={styles.addSlotLabel}>{t("stores_modal_add")}</Text>
+                  <Ionicons name="add" size={14} color={tokens.ACCENT} />
+                  <Text style={styles.addPillLabel}>
+                    {t("stores_modal_add")}
+                  </Text>
                 </Pressable>
               </View>
               {specificDraft.length === 0 ? (
-                <Text style={styles.editClosedHint}>
-                  {t("stores_modal_no_specific_surcharges_hint")}
-                </Text>
+                <View style={styles.editEmptyState}>
+                  <Text style={styles.editEmptyText}>
+                    {t("stores_modal_no_specific_surcharges_hint")}
+                  </Text>
+                </View>
               ) : (
-                <View style={styles.editSlotList}>
+                <View style={styles.editCardList}>
                   {specificDraft.map((row) => (
-                    <View key={row.id} style={styles.editSlotRow}>
-                      <TextInput
-                        value={row.date}
-                        onChangeText={(v) => updateSpecific(row.id, "date", v)}
-                        placeholder="YYYY-MM-DD"
-                        placeholderTextColor={tokens.TEXT_FAINT}
-                        keyboardType="number-pad"
-                        maxLength={10}
-                        style={[styles.editInput, styles.dateInput]}
-                      />
-                      <View style={styles.percentField}>
-                        <TextInput
-                          value={row.percentInput}
-                          onChangeText={(v) =>
-                            updateSpecific(row.id, "percentInput", v)
-                          }
-                          placeholder="0"
-                          placeholderTextColor={tokens.TEXT_FAINT}
-                          keyboardType="decimal-pad"
-                          maxLength={6}
-                          style={styles.percentInput}
-                        />
-                        <Text style={styles.percentSuffix}>%</Text>
+                    <View key={row.id} style={styles.editFieldCard}>
+                      <View style={styles.editFieldRow}>
+                        <Text style={styles.editFieldLabel}>
+                          {t("stores_modal_date_label")}
+                        </Text>
+                        <Pressable
+                          onPress={() => {
+                            haptic.light();
+                            setDatePickerTarget(`specific:${row.id}`);
+                          }}
+                          style={({ pressed }) => [
+                            styles.datePickerBtn,
+                            !row.date && styles.datePickerBtnEmpty,
+                            pressed && { opacity: 0.7 },
+                          ]}
+                        >
+                          <Ionicons
+                            name="calendar-outline"
+                            size={14}
+                            color={
+                              row.date ? tokens.TEXT : tokens.TEXT_FAINT
+                            }
+                          />
+                          <Text
+                            style={[
+                              styles.datePickerBtnText,
+                              !row.date && styles.datePickerBtnTextEmpty,
+                            ]}
+                          >
+                            {row.date
+                              ? formatSurchargeDate(row.date)
+                              : t("stores_modal_select_date")}
+                          </Text>
+                        </Pressable>
+                      </View>
+                      <View style={styles.editFieldDivider} />
+                      <View style={styles.editFieldRow}>
+                        <Text style={styles.editFieldLabel}>
+                          {t("stores_modal_percent_label")}
+                        </Text>
+                        <View style={styles.percentField}>
+                          <TextInput
+                            value={row.percentInput}
+                            onChangeText={(v) =>
+                              updateSpecific(row.id, "percentInput", v)
+                            }
+                            placeholder="0"
+                            placeholderTextColor={tokens.TEXT_FAINT}
+                            keyboardType="decimal-pad"
+                            maxLength={6}
+                            style={styles.percentInput}
+                          />
+                          <Text style={styles.percentSuffix}>%</Text>
+                        </View>
                       </View>
                       <Pressable
                         onPress={() => removeSpecific(row.id)}
                         hitSlop={10}
                         style={({ pressed }) => [
-                          styles.removeSlotBtn,
+                          styles.cardRemoveBtn,
                           pressed && { opacity: 0.5 },
                         ]}
+                        accessibilityLabel={t("common_cancel")}
                       >
-                        <Ionicons name="close" size={16} color={tokens.TEXT_FAINT} />
+                        <Ionicons
+                          name="trash-outline"
+                          size={14}
+                          color={tokens.DANGER}
+                        />
                       </Pressable>
                     </View>
                   ))}
@@ -906,43 +1014,61 @@ function EditSurchargesModal({
             </View>
 
             {/* Named Surcharges */}
-            <View style={styles.editDayGroup}>
-              <View style={styles.editDayHeader}>
-                <Text style={styles.editDayLabel}>{t("stores_modal_holiday_named")}</Text>
+            <View style={styles.editSection}>
+              <View style={styles.editSectionHeader}>
+                <View style={styles.editSectionTitleWrap}>
+                  <View style={styles.editSectionIcon}>
+                    <Ionicons
+                      name="sparkles-outline"
+                      size={14}
+                      color={tokens.GOLD}
+                    />
+                  </View>
+                  <Text style={styles.editSectionTitle}>
+                    {t("stores_modal_holiday_named")}
+                  </Text>
+                </View>
                 <Pressable
                   style={({ pressed }) => [
-                    styles.addSlotBtn,
+                    styles.addPillBtn,
                     pressed && { opacity: 0.6 },
                   ]}
                   onPress={addNamed}
                   hitSlop={6}
                 >
-                  <Ionicons name="add" size={13} color={tokens.ACCENT} />
-                  <Text style={styles.addSlotLabel}>{t("stores_modal_add")}</Text>
+                  <Ionicons name="add" size={14} color={tokens.ACCENT} />
+                  <Text style={styles.addPillLabel}>
+                    {t("stores_modal_add")}
+                  </Text>
                 </Pressable>
               </View>
               {namedDraft.length === 0 ? (
-                <Text style={styles.editClosedHint}>
-                  {t("stores_modal_no_named_surcharges_hint")}
-                </Text>
+                <View style={styles.editEmptyState}>
+                  <Text style={styles.editEmptyText}>
+                    {t("stores_modal_no_named_surcharges_hint")}
+                  </Text>
+                </View>
               ) : (
-                <View style={styles.namedList}>
+                <View style={styles.editCardList}>
                   {namedDraft.map((row) => (
-                    <View key={row.id} style={styles.namedRow}>
-                      <View style={styles.namedTopRow}>
+                    <View key={row.id} style={styles.editFieldCard}>
+                      <View style={styles.namedHeaderRow}>
                         <TextInput
                           value={row.name}
                           onChangeText={(v) =>
                             updateNamed(row.id, { name: v })
                           }
-                          placeholder={t("stores_modal_holiday_name_placeholder")}
+                          placeholder={t(
+                            "stores_modal_holiday_name_placeholder"
+                          )}
                           placeholderTextColor={tokens.TEXT_FAINT}
-                          style={[styles.editInput, styles.namedNameInput]}
+                          style={styles.namedNameInputV2}
                         />
                         <Pressable
-                          onPress={() =>
-                            updateNamed(row.id, { enabled: !row.enabled })
-                          }
+                          onPress={() => {
+                            haptic.light();
+                            updateNamed(row.id, { enabled: !row.enabled });
+                          }}
                           hitSlop={6}
                           style={[
                             styles.surchargeToggle,
@@ -967,33 +1093,47 @@ function EditSurchargesModal({
                             ]}
                           />
                         </Pressable>
+                      </View>
+                      <View style={styles.editFieldDivider} />
+                      <View style={styles.editFieldRow}>
+                        <Text style={styles.editFieldLabel}>
+                          {t("stores_modal_date_label")}
+                        </Text>
                         <Pressable
-                          onPress={() => removeNamed(row.id)}
-                          hitSlop={10}
+                          onPress={() => {
+                            haptic.light();
+                            setDatePickerTarget(`named:${row.id}`);
+                          }}
                           style={({ pressed }) => [
-                            styles.removeSlotBtn,
-                            pressed && { opacity: 0.5 },
+                            styles.datePickerBtn,
+                            !row.date && styles.datePickerBtnEmpty,
+                            pressed && { opacity: 0.7 },
                           ]}
                         >
                           <Ionicons
-                            name="close"
-                            size={16}
-                            color={tokens.TEXT_FAINT}
+                            name="calendar-outline"
+                            size={14}
+                            color={
+                              row.date ? tokens.TEXT : tokens.TEXT_FAINT
+                            }
                           />
+                          <Text
+                            style={[
+                              styles.datePickerBtnText,
+                              !row.date && styles.datePickerBtnTextEmpty,
+                            ]}
+                          >
+                            {row.date
+                              ? formatSurchargeDate(row.date)
+                              : t("stores_modal_select_date")}
+                          </Text>
                         </Pressable>
                       </View>
-                      <View style={styles.editSlotRow}>
-                        <TextInput
-                          value={row.date}
-                          onChangeText={(v) =>
-                            updateNamed(row.id, { date: v })
-                          }
-                          placeholder="YYYY-MM-DD"
-                          placeholderTextColor={tokens.TEXT_FAINT}
-                          keyboardType="number-pad"
-                          maxLength={10}
-                          style={[styles.editInput, styles.dateInput]}
-                        />
+                      <View style={styles.editFieldDivider} />
+                      <View style={styles.editFieldRow}>
+                        <Text style={styles.editFieldLabel}>
+                          {t("stores_modal_percent_label")}
+                        </Text>
                         <View style={styles.percentField}>
                           <TextInput
                             value={row.percentInput}
@@ -1008,8 +1148,22 @@ function EditSurchargesModal({
                           />
                           <Text style={styles.percentSuffix}>%</Text>
                         </View>
-                        <View style={styles.removeSlotBtn} />
                       </View>
+                      <Pressable
+                        onPress={() => removeNamed(row.id)}
+                        hitSlop={10}
+                        style={({ pressed }) => [
+                          styles.cardRemoveBtn,
+                          pressed && { opacity: 0.5 },
+                        ]}
+                        accessibilityLabel={t("common_cancel")}
+                      >
+                        <Ionicons
+                          name="trash-outline"
+                          size={14}
+                          color={tokens.DANGER}
+                        />
+                      </Pressable>
                     </View>
                   ))}
                 </View>
@@ -1018,6 +1172,31 @@ function EditSurchargesModal({
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
+      <SingleDatePickerModal
+        visible={!!datePickerTarget}
+        initialDate={(() => {
+          if (!datePickerTarget) return null;
+          const [kind, id] = datePickerTarget.split(":");
+          if (kind === "specific") {
+            return specificDraft.find((r) => r.id === id)?.date || null;
+          }
+          return namedDraft.find((r) => r.id === id)?.date || null;
+        })()}
+        onClose={() => setDatePickerTarget(null)}
+        onApply={(iso) => {
+          if (!datePickerTarget) return;
+          const [kind, id] = datePickerTarget.split(":");
+          if (kind === "specific") {
+            updateSpecific(id, "date", iso);
+          } else {
+            updateNamed(id, { date: iso });
+          }
+          setDatePickerTarget(null);
+        }}
+        title={t("stores_modal_select_date")}
+        applyLabel={t("stores_modal_save")}
+        clearLabel={t("common_cancel")}
+      />
     </Modal>
   );
 }
@@ -1142,8 +1321,19 @@ export default function StoresScreen() {
             ? { ...prev, named_surcharges: nextNamed, surcharge: nextSpecific }
             : prev
         );
-        setSurchargeEditOpen(false);
         haptic.light();
+        Alert.alert(
+          t("stores_surcharges_saved_title"),
+          t("stores_surcharges_saved_msg"),
+          [
+            {
+              text: t("stores_surcharges_saved_ok"),
+              style: "default",
+              onPress: () => setSurchargeEditOpen(false),
+            },
+          ],
+          { cancelable: false }
+        );
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Failed to update surcharges.";
@@ -1774,7 +1964,11 @@ const makeStyles = (t: ThemeTokens) => StyleSheet.create({
   },
   cardHeaderAction: { marginLeft: 8 },
   cardTitle: { color: t.TEXT, fontSize: 14, fontWeight: "700" },
-  cardHint: { color: t.TEXT_DIM, fontSize: 12, lineHeight: 17 },
+  cardHint: {
+    color: t.TEXT_DIM,
+    fontSize: 12,
+    lineHeight: 17,
+  },
   cardBody: { gap: 4 },
 
   detailRow: {
@@ -2171,6 +2365,53 @@ const makeStyles = (t: ThemeTokens) => StyleSheet.create({
   modalTitle: { color: t.TEXT, fontSize: 16, fontWeight: "700" },
   modalCancel: { color: t.TEXT_DIM, fontSize: 14, fontWeight: "600" },
   modalSave: { color: t.GOLD, fontSize: 14, fontWeight: "700" },
+  // Redesigned surcharge modal header (round close + centered title + gold pill).
+  modalHeaderIconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: t.CARD_BORDER,
+  },
+  modalHeaderTitleWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 76, // reserve space for side controls
+  },
+  modalHeaderSubtitle: {
+    color: t.TEXT_FAINT,
+    fontSize: 10.5,
+    fontWeight: "600",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    marginTop: 2,
+  },
+  modalSavePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: t.GOLD,
+    minWidth: 76,
+    justifyContent: "center",
+  },
+  modalSavePillSaving: { opacity: 0.7 },
+  modalSavePillText: {
+    color: "#181e38",
+    fontSize: 13,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
   modalContent: {
     paddingHorizontal: SCREEN_PADDING,
     paddingTop: 8,
@@ -2264,5 +2505,151 @@ const makeStyles = (t: ThemeTokens) => StyleSheet.create({
     height: 32,
     alignItems: "center",
     justifyContent: "center",
+  },
+
+  // ─── Surcharge edit modal v2 ──────────────────────────────────────────
+  editSection: {
+    marginTop: 18,
+    gap: 12,
+  },
+  editSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  editSectionTitleWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+  },
+  editSectionIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: t.CARD_BORDER,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  editSectionTitle: {
+    color: t.TEXT,
+    fontSize: 15,
+    fontWeight: "700",
+    letterSpacing: -0.1,
+  },
+  addPillBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: "rgba(64,100,220,0.10)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(64,100,220,0.32)",
+  },
+  addPillLabel: {
+    color: t.ACCENT,
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  editEmptyState: {
+    paddingVertical: 18,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.03)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: t.CARD_BORDER,
+    borderStyle: "dashed",
+    alignItems: "center",
+  },
+  editEmptyText: {
+    color: t.TEXT_FAINT,
+    fontSize: 12,
+    textAlign: "center",
+    lineHeight: 17,
+  },
+  editCardList: { gap: 12 },
+  editFieldCard: {
+    position: "relative",
+    backgroundColor: "rgba(255,255,255,0.035)",
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: t.CARD_BORDER,
+    paddingHorizontal: 14,
+    paddingTop: 4,
+    paddingBottom: 4,
+    paddingRight: 38,
+  },
+  editFieldRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 44,
+    gap: 12,
+  },
+  editFieldLabel: {
+    color: t.TEXT_DIM,
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  editFieldDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: t.CARD_BORDER,
+    opacity: 0.6,
+  },
+  datePickerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    minWidth: 140,
+    justifyContent: "flex-end",
+  },
+  datePickerBtnEmpty: {
+    backgroundColor: "rgba(255,255,255,0.025)",
+  },
+  datePickerBtnText: {
+    color: t.TEXT,
+    fontSize: 13,
+    fontWeight: "600",
+    fontVariant: ["tabular-nums"],
+  },
+  datePickerBtnTextEmpty: {
+    color: t.TEXT_FAINT,
+    fontWeight: "500",
+  },
+  namedHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 8,
+  },
+  namedNameInputV2: {
+    flex: 1,
+    color: t.TEXT,
+    fontSize: 15,
+    fontWeight: "700",
+    paddingVertical: 4,
+  },
+  cardRemoveBtn: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: t.CARD_BORDER,
   },
 });

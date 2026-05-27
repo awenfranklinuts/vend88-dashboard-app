@@ -1,8 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
-  AppState,
-  AppStateStatus,
   Easing,
   Pressable,
   StyleSheet,
@@ -33,148 +31,137 @@ try {
 type BiometricKind = "face" | "fingerprint" | "biometric";
 
 /**
- * Animated lock mark — no bubble background. Renders three concentric,
- * pulsing accent rings behind a subtle "breathing" lock glyph. The rings
- * stagger their phase so the effect reads as a calm radar pulse rather
- * than a heartbeat. Pure RN Animated (no extra deps).
+ * Animated lock mark — CommBank-inspired flipping diamond.
+ *
+ * Architecture: one flipping "card" container that owns the Y-axis rotation
+ * and edge-on foreshortening. Inside the card, a rotated-45° gold square
+ * forms the diamond shape, and an upright lock glyph sits centered on top
+ * of it. Because the glyph lives INSIDE the flipping card, it always rides
+ * the face (no sibling z-order issues, no clipping against the page bg).
+ *
+ * Behind the card a soft halo pulses each time a face comes square-on.
+ * Pure RN Animated, native driver.
  */
 function AnimatedLockMark({ tint, bg }: { tint: string; bg: string }) {
-  const ring1 = useRef(new Animated.Value(0)).current;
-  const ring2 = useRef(new Animated.Value(0)).current;
-  const ring3 = useRef(new Animated.Value(0)).current;
-  const breathe = useRef(new Animated.Value(0)).current;
+  const spin = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const loopRing = (val: Animated.Value, delay: number) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(val, {
-            toValue: 1,
-            duration: 2400,
-            easing: Easing.out(Easing.quad),
-            useNativeDriver: true,
-          }),
-        ])
-      );
-    const r1 = loopRing(ring1, 0);
-    const r2 = loopRing(ring2, 800);
-    const r3 = loopRing(ring3, 1600);
-    const b = Animated.loop(
-      Animated.sequence([
-        Animated.timing(breathe, {
-          toValue: 1,
-          duration: 1600,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(breathe, {
-          toValue: 0,
-          duration: 1600,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
+    const loop = Animated.loop(
+      Animated.timing(spin, {
+        toValue: 1,
+        duration: 2800,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: true,
+      })
     );
-    r1.start();
-    r2.start();
-    r3.start();
-    b.start();
-    return () => {
-      r1.stop();
-      r2.stop();
-      r3.stop();
-      b.stop();
-    };
-  }, [ring1, ring2, ring3, breathe]);
+    loop.start();
+    return () => loop.stop();
+  }, [spin]);
 
-  const ringStyle = (val: Animated.Value): any => ({
-    position: "absolute",
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    borderWidth: 1.2,
-    borderColor: tint,
-    opacity: val.interpolate({ inputRange: [0, 0.15, 1], outputRange: [0, 0.55, 0] }),
-    transform: [
-      {
-        scale: val.interpolate({ inputRange: [0, 1], outputRange: [0.7, 2.2] }),
-      },
-    ],
+  const rotateY = spin.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
   });
 
-  const lockScale = breathe.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 1.06],
+  // Perspective foreshortening: scaleX narrows toward 0 at every 90°.
+  const scaleX = spin.interpolate({
+    inputRange: [0, 0.25, 0.5, 0.75, 1],
+    outputRange: [1, 0.08, 1, 0.08, 1],
   });
-  const shackleY = breathe.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, -1.5],
+
+  // Halo pulses on each face-on moment (twice per loop).
+  const haloOpacity = spin.interpolate({
+    inputRange: [0, 0.12, 0.25, 0.38, 0.5, 0.62, 0.75, 0.88, 1],
+    outputRange: [0.55, 0.15, 0, 0.15, 0.55, 0.15, 0, 0.15, 0.55],
+  });
+  const haloScale = spin.interpolate({
+    inputRange: [0, 0.25, 0.5, 0.75, 1],
+    outputRange: [1, 1.35, 1, 1.35, 1],
+  });
+
+  // Subtle shading dip mid-flip.
+  const faceOpacity = spin.interpolate({
+    inputRange: [0, 0.25, 0.5, 0.75, 1],
+    outputRange: [1, 0.85, 0.78, 0.85, 1],
   });
 
   return (
     <View style={lockMarkStyles.wrap} pointerEvents="none">
-      <Animated.View style={ringStyle(ring1)} />
-      <Animated.View style={ringStyle(ring2)} />
-      <Animated.View style={ringStyle(ring3)} />
+      {/* Soft halo behind the card */}
+      <Animated.View
+        style={[
+          lockMarkStyles.halo,
+          {
+            backgroundColor: tint,
+            opacity: haloOpacity,
+            transform: [{ scale: haloScale }],
+          },
+        ]}
+      />
 
-      {/* Custom lock built from primitives — shackle (arc) + body (rounded
-          rect) + keyhole dot. Avoids the round icon bubble entirely. */}
-      <Animated.View style={[lockMarkStyles.lock, { transform: [{ scale: lockScale }] }]}>
-        <Animated.View
+      {/* Flipping card — owns the rotation and scale for both the diamond
+          background and the lock glyph inside it. */}
+      <Animated.View
+        style={[
+          lockMarkStyles.card,
+          {
+            opacity: faceOpacity,
+            transform: [
+              { perspective: 700 },
+              { rotateY },
+              { scaleX },
+            ],
+          },
+        ]}
+      >
+        {/* Diamond background: a square rotated 45°. */}
+        <View
           style={[
-            lockMarkStyles.shackle,
-            { borderColor: tint, transform: [{ translateY: shackleY }] },
+            lockMarkStyles.diamond,
+            { backgroundColor: tint },
           ]}
         />
-        <View style={[lockMarkStyles.body, { backgroundColor: tint }]}>
-          <View style={[lockMarkStyles.keyhole, { backgroundColor: bg }]} />
-          <View style={[lockMarkStyles.keyholeStem, { backgroundColor: bg }]} />
+        {/* Upright lock glyph centered on the face. */}
+        <View style={lockMarkStyles.glyph}>
+          <Ionicons name="lock-closed" size={44} color={bg} />
         </View>
       </Animated.View>
     </View>
   );
 }
 
+const CARD = 108; // bounding box of the flipping card
+const DIAMOND = 76; // edge length of the (un-rotated) square that forms the diamond
+
 const lockMarkStyles = StyleSheet.create({
   wrap: {
-    width: 96,
-    height: 96,
+    width: 160,
+    height: 160,
     alignItems: "center",
     justifyContent: "center",
   },
-  lock: {
-    width: 56,
-    height: 64,
-    alignItems: "center",
-    justifyContent: "flex-end",
+  halo: {
+    position: "absolute",
+    width: CARD * 1.5,
+    height: CARD * 1.5,
+    borderRadius: (CARD * 1.5) / 2,
   },
-  shackle: {
-    width: 30,
-    height: 28,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    borderWidth: 4,
-    borderBottomWidth: 0,
-    marginBottom: -2,
-  },
-  body: {
-    width: 44,
-    height: 36,
-    borderRadius: 8,
+  card: {
+    width: CARD,
+    height: CARD,
     alignItems: "center",
     justifyContent: "center",
   },
-  keyhole: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
+  diamond: {
+    position: "absolute",
+    width: DIAMOND,
+    height: DIAMOND,
+    borderRadius: 12,
+    transform: [{ rotate: "45deg" }],
   },
-  keyholeStem: {
-    width: 3,
-    height: 7,
-    marginTop: -1,
-    borderRadius: 1,
+  glyph: {
+    alignItems: "center",
+    justifyContent: "center",
   },
 });
 
@@ -187,7 +174,6 @@ export function LockScreen() {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [kind, setKind] = useState<BiometricKind>("biometric");
-  const promptedRef = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -220,25 +206,6 @@ export function LockScreen() {
     }
     setBusy(false);
   }, [busy, unlock, t]);
-
-  // Auto-prompt once when the lock screen mounts.
-  useEffect(() => {
-    if (promptedRef.current) return;
-    promptedRef.current = true;
-    void tryUnlock();
-  }, [tryUnlock]);
-
-  // Re-prompt automatically when the app comes back to the foreground while locked.
-  useEffect(() => {
-    let lastState: AppStateStatus = AppState.currentState;
-    const sub = AppState.addEventListener("change", (next) => {
-      if (lastState !== "active" && next === "active" && !busy) {
-        void tryUnlock();
-      }
-      lastState = next;
-    });
-    return () => sub.remove();
-  }, [busy, tryUnlock]);
 
   const handleSignOut = useCallback(async () => {
     haptic.warning();
