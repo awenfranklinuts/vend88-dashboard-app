@@ -23,6 +23,10 @@
     "production": {
       "distribution": "store",
       "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_API_TARGET": "official",
+        "EXPO_PUBLIC_OFFICIAL_API_BASE_URL": "https://prod.vend88.com"
+      },
       "ios": {
         "autoIncrement": true
       },

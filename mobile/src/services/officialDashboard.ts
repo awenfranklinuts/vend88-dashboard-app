@@ -1856,7 +1856,6 @@ export async function fetchOfficialMonthRevenueDataForAuth(
   const todayRange = getTodayRange();
   const previousDayRange = getPreviousDayRange(now);
   const [
-    weekChart,
     monthBusinessSales,
     weekBusinessSales,
     todayBusinessSales,
@@ -1867,9 +1866,6 @@ export async function fetchOfficialMonthRevenueDataForAuth(
     previousDayStats,
     previousMonthStats,
   ] = await Promise.all([
-    // Reuse the same hero-series cache/in-flight path the dashboard screen
-    // uses so the first page load doesn't race a duplicate week-series fetch.
-    fetchOfficialHeroRevenuePeriod("week", auth),
     fetchBusinessSalesSnapshot(businessId, token, startDate, endDate),
     fetchBusinessSalesSnapshot(
       businessId,
@@ -1915,7 +1911,9 @@ export async function fetchOfficialMonthRevenueDataForAuth(
       previousMonthRange.endDate
     ),
   ]);
-  const chart = weekChart;
+  // Keep the summary request focused on KPI data only; week/month/today chart
+  // series are loaded lazily by the dashboard screen for the active period.
+  const chart: DashboardChartPoint[] = [];
 
   const monthOrders = Math.round(monthStats.ordersTotal);
   const weekOrders = Math.round(weekStats.ordersTotal);

@@ -38,6 +38,7 @@ import Svg, {
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 import { CARD_BORDER, GOLD, SUCCESS, TEXT, TEXT_DIM, TEXT_FAINT } from "../theme/tokens";
+import { useThemeTokens } from "../context/ThemeContext";
 import { haptic } from "../utils/haptics";
 
 export type LinePoint = { day: string; revenue: number };
@@ -136,6 +137,7 @@ export const TodayLineChart = forwardRef<TodayLineChartHandle, Props>(function T
   },
   ref
 ) {
+  const tk = useThemeTokens();
   const [outerW, setOuterW] = useState(0);
   const [spacing, setSpacing] = useState(minPointSpacing);
   const [scrollEnabled, setScrollEnabled] = useState(true);
@@ -424,7 +426,7 @@ export const TodayLineChart = forwardRef<TodayLineChartHandle, Props>(function T
             (ticks.length > 1 ? (i / (ticks.length - 1)) * innerH : 0) -
             6;
           return (
-            <Text key={i} style={[styles.yLabel, { top }]}>
+            <Text key={i} style={[styles.yLabel, { top, color: tk.TEXT_FAINT }]}>
               {formatMoney(v)}
             </Text>
           );
@@ -465,7 +467,7 @@ export const TodayLineChart = forwardRef<TodayLineChartHandle, Props>(function T
                     y1={y}
                     x2={intrinsicPlotW - PADDING_RIGHT}
                     y2={y}
-                    stroke={CARD_BORDER}
+                    stroke={tk.CARD_BORDER}
                     strokeWidth={i === ticks.length - 1 ? 1 : StyleSheet.hairlineWidth}
                   />
                 );
@@ -514,8 +516,8 @@ export const TodayLineChart = forwardRef<TodayLineChartHandle, Props>(function T
                     cx={p.x}
                     cy={p.y}
                     r={r}
-                    fill={isZero ? "#0F1427" : GOLD}
-                    stroke={isZero ? TEXT_FAINT : GOLD}
+                    fill={isZero ? tk.BG : GOLD}
+                    stroke={isZero ? tk.TEXT_FAINT : GOLD}
                     strokeWidth={isSelected ? 2 : 1}
                     opacity={isZero && !isSelected ? 0.4 : 1}
                   />
@@ -627,7 +629,8 @@ export const TodayLineChart = forwardRef<TodayLineChartHandle, Props>(function T
                 <Text
                   style={[
                     styles.xLabel,
-                    isCurrent && styles.xLabelActive,
+                    { color: tk.TEXT_DIM },
+                    isCurrent && [styles.xLabelActive, { color: tk.TEXT }],
                     isSelected && styles.xLabelSelected,
                   ]}
                   numberOfLines={1}

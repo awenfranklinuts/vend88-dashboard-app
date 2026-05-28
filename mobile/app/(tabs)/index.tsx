@@ -2018,7 +2018,7 @@ export default function DashboardScreen() {
           ]}
         >
         <SafeAreaView style={styles.modalPage} edges={["top", "bottom"]}>
-          <StatusBar barStyle="light-content" />
+          <StatusBar barStyle={tokens.STATUS_BAR === "light" ? "light-content" : "dark-content"} />
           {/* Sticky header (title + period tabs) — slides up first */}
           <Animated.View
             style={{
@@ -2832,7 +2832,7 @@ const makeStyles = (t: ThemeTokens) => StyleSheet.create({
     borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: t.CARD_HOVER,
   },
   inspectorHint: {
     color: t.TEXT_FAINT,

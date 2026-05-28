@@ -1,7 +1,7 @@
 import axios from "axios";
 import Constants from "expo-constants";
 
-const DEFAULT_OFFICIAL_API_BASE_URL = "https://dev.vend88.com";
+const DEFAULT_OFFICIAL_API_BASE_URL = "https://prod.vend88.com";
 const FALLBACK_API_BASE_URL = "http://127.0.0.1:8000/api/v1";
 export const API_TARGET = (process.env.EXPO_PUBLIC_API_TARGET ?? "custom").toLowerCase();
 
