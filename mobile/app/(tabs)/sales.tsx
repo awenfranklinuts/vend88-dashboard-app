@@ -260,7 +260,10 @@ function formatCurrency(n: number, fractionDigits = 2): string {
   return `${sign}$${value}`;
 }
 
-function getTransactionStatusMeta(rawStatus?: string): {
+function getTransactionStatusMeta(
+  rawStatus?: string,
+  fallbackColor: string = TEXT_DIM
+): {
   label: string;
   color: string;
 } {
@@ -286,7 +289,7 @@ function getTransactionStatusMeta(rawStatus?: string): {
   if (/active|open|pending|progress/.test(normalized)) {
     return { label, color: WARNING };
   }
-  return { label, color: TEXT_DIM };
+  return { label, color: fallbackColor };
 }
 
 function transactionNoun(
@@ -3221,8 +3224,12 @@ export default function SalesScreen() {
       const d = parseDate(item.date);
       const payIcon = PAYMENT_ICONS[item.payment] ?? "card-outline";
       const payColor = getPaymentColor(item.payment);
+      const isFirstInSection = index === 0;
       const isLastInSection = index === section.data.length - 1;
-      const statusMeta = getTransactionStatusMeta(item.rawStatus ?? item.status);
+      const statusMeta = getTransactionStatusMeta(
+        item.rawStatus ?? item.status,
+        tokens.TEXT_DIM
+      );
       const statusLabel = statusMeta.label;
       const txnTotal = parseMoney(item.total);
       return (
@@ -3234,6 +3241,8 @@ export default function SalesScreen() {
           }}
           style={({ pressed }) => [
             styles.txnRow,
+            isFirstInSection && styles.txnRowFirst,
+            isLastInSection && styles.txnRowLast,
             !isLastInSection && styles.txnRowDivider,
             pressed && styles.pressed,
           ]}
@@ -3293,7 +3302,7 @@ export default function SalesScreen() {
         </Pressable>
       );
     },
-    [openOrderDetail, t]
+    [openOrderDetail, t, tokens.TEXT_DIM]
   );
 
   const renderTxnHeader = useCallback(
@@ -6082,11 +6091,10 @@ const makeStyles = (t: ThemeTokens) => StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingTop: 12,
+    paddingTop: 18,
     paddingBottom: 8,
+    paddingHorizontal: 4,
     backgroundColor: t.BG,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: t.CARD_BORDER,
   },
   sectionHeaderText: {
     fontSize: 11,
@@ -6103,6 +6111,21 @@ const makeStyles = (t: ThemeTokens) => StyleSheet.create({
     alignItems: "center",
     gap: 12,
     paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: t.CARD,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderColor: t.CARD_BORDER,
+  },
+  txnRowFirst: {
+    borderTopLeftRadius: 14,
+    borderTopRightRadius: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  txnRowLast: {
+    borderBottomLeftRadius: 14,
+    borderBottomRightRadius: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   txnRowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
