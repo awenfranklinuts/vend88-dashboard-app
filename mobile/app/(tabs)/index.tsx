@@ -611,16 +611,11 @@ export default function DashboardScreen() {
   ]);
 
   // Sparkline fade-cross when heroPeriod changes (number of bars differs per period).
+  // Only fires once the spark is actually visible (skeleton dismissed) and at most
+  // once per period — otherwise the native-driven value can get stuck at 0 if the
+  // Animated.View is unmounted (skeleton swap) before the animation reattaches.
   const sparkAnim = useRef(new Animated.Value(1)).current;
-  useEffect(() => {
-    sparkAnim.setValue(0);
-    Animated.timing(sparkAnim, {
-      toValue: 1,
-      duration: 220,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
-  }, [heroPeriod, sparkAnim]);
+  const lastSparkAnimPeriodRef = useRef<typeof heroPeriod | null>(null);
 
   // Detail-chart bar grow-in animation (replays on period change or modal open).
   const barAnim = useRef(new Animated.Value(0)).current;
@@ -1212,6 +1207,18 @@ export default function DashboardScreen() {
     heroChartLoading[heroPeriod] &&
     displayChart.length === 0 &&
     !hasCachedForPeriod;
+  useEffect(() => {
+    if (showHeroSparkSkeleton) return;
+    if (lastSparkAnimPeriodRef.current === heroPeriod) return;
+    lastSparkAnimPeriodRef.current = heroPeriod;
+    sparkAnim.setValue(0);
+    Animated.timing(sparkAnim, {
+      toValue: 1,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [heroPeriod, showHeroSparkSkeleton, sparkAnim]);
   const currentHeroBucketLabel = (() => {
     void nowTick;
     if (heroPeriod === "month") {
@@ -2548,7 +2555,7 @@ const makeStyles = (t: ThemeTokens) => StyleSheet.create({
   },
   sparkBar: {
     width: 5,
-    backgroundColor: "rgba(212,175,55,0.5)",
+    backgroundColor: t.GOLD + "B3",
     borderRadius: 2,
     minHeight: 6,
   },
@@ -2740,13 +2747,13 @@ const makeStyles = (t: ThemeTokens) => StyleSheet.create({
   },
   detailBarFill: {
     width: "100%",
-    backgroundColor: "rgba(212,175,55,0.22)",
+    backgroundColor: t.GOLD + "66",
     borderTopLeftRadius: 6,
     borderTopRightRadius: 6,
     minHeight: 3,
   },
   detailBarFillActive: {
-    backgroundColor: "rgba(212,175,55,0.55)",
+    backgroundColor: t.GOLD + "B3",
   },
   detailBarFillPeak: {
     backgroundColor: t.GOLD,
